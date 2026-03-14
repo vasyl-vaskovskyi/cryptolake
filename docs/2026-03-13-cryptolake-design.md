@@ -45,6 +45,7 @@ These rules are architectural invariants. If an implementation detail conflicts 
 - **Durability ordering is strict**: the writer may commit Kafka offsets only after the corresponding records are durably flushed to disk.
 - **Known data loss is explicit**: every recoverable or irrecoverable gap that is observed by the system is surfaced as a metric, alert, and archived gap record when applicable.
 - **Recovery favors replay over reconstruction**: the system prefers replaying from Redpanda or re-syncing from exchange-native cursors instead of inventing inferred state.
+- **Zero-GIL JSON handling**: All JSON parsing and serialization must use a fast C/Rust-backed library (`orjson`) to prevent the Python GIL from blocking the async event loop at high throughput.
 
 ### 1.5 Acceptance Criteria
 
@@ -184,10 +185,10 @@ Redpanda specifics:
 1. **Collector** connects to Binance USD-M Futures WebSocket streams utilizing **Combined Streams (multiplexing)** to reduce total network connections. Multiple stream types (trades, depth, liquidations) flow over the same physical WebSocket.
 2. The Collector **demultiplexes** the incoming frames based on the exchange routing key (e.g., the `stream` field).
 3. Each incoming message is wrapped in a **message envelope** with `received_at` nanosecond timestamp, session sequence, and collector session ID
-3. Wrapped messages are produced to **Redpanda topics** (one topic per stream type)
-4. **Writer** consumes from all topics, buffers messages, compresses with zstd, and writes hourly-rotated `.jsonl.zst` files
-5. SHA-256 checksums are written as sidecar files for integrity verification
-6. All services expose `/metrics` for Prometheus scraping
+4. Wrapped messages are produced to **Redpanda topics** (one topic per stream type)
+5. **Writer** consumes from all topics, buffers messages, compresses with zstd, and writes hourly-rotated `.jsonl.zst` files
+6. SHA-256 checksums are written as sidecar files for integrity verification
+7. All services expose `/metrics` for Prometheus scraping
 
 ### 2.5 Future Trading Bot Integration
 
@@ -356,7 +357,7 @@ Every message — regardless of stream type — is wrapped in a common envelope 
 | `symbol` | string | Trading pair (lowercase): `"btcusdt"` |
 | `stream` | string | Stream type: `"trades"`, `"depth"`, `"depth_snapshot"`, `"bookticker"`, `"funding_rate"`, `"liquidations"`, `"open_interest"`. Always plural where applicable. Must match the Redpanda topic suffix and file directory name exactly (e.g., `stream="trades"` → topic `binance.trades` → directory `trades/`). |
 | `received_at` | int64 | Local nanosecond timestamp (`time.time_ns()`). Server must run NTP (chrony). |
-| `exchange_ts` | int64 | Exchange-provided timestamp (milliseconds for Binance). Extracted from the raw text via lightweight parsing. To prevent Python Global Interpreter Lock (GIL) contention and event loop blocking at high throughput, all JSON parsing and serialization MUST use a high-performance C/Rust-backed library like `orjson` instead of the standard `json` module. |
+| `exchange_ts` | int64 | Exchange-provided timestamp (milliseconds for Binance). Extracted from the raw text via lightweight parsing. |
 | `collector_session_id` | string | Unique identifier for this collector lifetime: `{collector_id}_{startup_timestamp_ISO}`. A new session starts on every collector restart. Used to scope `session_seq` — sequences are only meaningful within the same session. |
 | `session_seq` | int64 | Monotonically increasing counter per (exchange, symbol, stream) tuple within a single collector session. Resets to 0 on collector restart. **Debugging-only** — useful for spotting in-session drops or reordering, but not a durable identity. Do not use for cross-session deduplication or gap detection in the archive. |
 | `raw_text` | string | The original exchange payload as received from the WebSocket frame or HTTP response body, captured as a string **before** any JSON parsing. This is the authoritative raw data. Consumers who need structured access should parse this field themselves. |
@@ -387,7 +388,7 @@ The writer appends broker coordinates to each envelope line before writing to di
 | `_partition` | int | Partition number within the topic. |
 | `_offset` | int64 | Kafka offset within the partition. Globally unique per (topic, partition). |
 
-The tuple `(_topic, _partition, _offset)` is the **durable identity** of each message. It is:
+The tuple `(_topic, _partition, _offset)` is the **durable identity** of each message. It guarantees **intra-file ordering**: messages within a single archived file are strictly ordered by `_offset` (Kafka's partition guarantee). It is:
 - **Globally unique**: Kafka guarantees exactly one message per (topic, partition, offset)
 - **Stable**: Offsets do not change after write, regardless of collector restarts, session resets, or reprocessing
 - **The basis for deduplication**: On writer restart with at-least-once semantics, duplicate records are detected by checking for repeated `(_topic, _partition, _offset)` tuples in the active file
@@ -519,7 +520,7 @@ The project includes a CLI tool for verifying archive integrity:
 cryptolake verify --date 2026-03-11
 
 # Verify a specific symbol
-cryptolake verify --exchange binance --symbol btcusdt --date 2026-03-11
+cryptolake verify --exchange binance --symbol btcusdt --stream depth --date 2026-03-11
 
 # Full verification: checksums + broker offset analysis across file boundaries
 cryptolake verify --full --date 2026-03-11
@@ -592,6 +593,8 @@ writer:
   compression: "zstd"
   compression_level: 3
   checksum: "sha256"
+  flush_messages: 10000
+  flush_interval_seconds: 30
 
 monitoring:
   prometheus_port: 8000
@@ -707,7 +710,7 @@ release buffered diffs -> resume steady-state processing
 - Key: symbol (bytes) — enables future partition-by-symbol
 - Acks: `acks=all` for durability. Note: with single-node Redpanda (development/small deployment), `acks=all` is equivalent to `acks=1` — true replication durability requires a multi-node Redpanda cluster. For single-node, data durability relies on Redpanda's fsync behavior.
 - On Redpanda unavailability: buffers in bounded in-memory queue (configurable max, default 100,000 messages). Alerts if buffer exceeds 80% capacity.
-- **Buffer overflow policy**: If the buffer fills completely, the collector drops the **newest** incoming messages to preserve chronological sequence. To prevent high-volume streams (`depth`) from starving low-volume irreplaceable streams (`liquidations`, `funding_rate`), the in-memory buffer must allocate guaranteed sub-buffer capacities per stream type.
+- **Buffer overflow policy**: If the buffer fills completely, the collector drops the **newest** incoming messages to preserve chronological sequence. To prevent high-volume streams (`depth`) from starving low-volume irreplaceable streams (`liquidations`, `funding_rate`), the total in-memory buffer must be partitioned. E.g., for a 100,000 global max: `depth` gets max 80k, `trades` gets max 10k, and others share the remaining 10k.
 - Linger: 5ms batch window for throughput optimization
 
 Producer outage / overflow timeline:
@@ -747,16 +750,17 @@ resume normal publish path
 ### 8.2 Consumer
 
 - Uses `aiokafka.AIOKafkaConsumer`
-- Consumer group: `cryptolake-writer`
+- Consumer group: `cryptolake-writer` (This group, combined with 1 partition per topic, enforces **Writer Exclusivity** — if two writers run accidentally, only one will receive messages. The writer should log a warning on startup if the group already has an active member).
 - Subscribes to all `binance.*` topics
+- **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time. If catching up, the writer will open, append to, and correctly seal files belonging to past hours.
 - Manual offset commit after successful flush to disk (not auto-commit). If a commit batch spans multiple buffered files, the writer flushes all currently buffered records before committing that batch.
 - On restart: resumes from last committed offset
 
 **At-least-once delivery with writer-side deduplication**: If the writer crashes after flushing to disk but before committing the Kafka offset, it will re-consume some messages on restart. The writer guarantees duplicate-free archives:
 - Every archived line carries broker coordinates `(_topic, _partition, _offset)` — the durable identity of the message (see Section 4.1.1)
-- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (SQLite in WAL mode) tracking the highest flushed `_offset` per (topic, partition). This state file **must** live on the same volume as the archive data (`/data`). On startup, the writer loads this state and skips any re-consumed records with offsets less than or equal to the recorded high-water mark. If the state file is lost, the writer must reconstruct it by scanning the tail of the latest sealed file for each topic/partition before resuming.
+- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (SQLite in WAL mode) tracking the highest flushed `_offset` per (topic, partition). This state file **must** live on the same volume as the archive data (`/data`). On startup, the writer must **first** scan for any unsealed files (missing `.sha256`), verify/seal them, and **then** load its state file. If the state file is lost, the writer must reconstruct it by scanning the tails of the newly-sealed/latest files for each topic/partition before consuming from Redpanda.
 - **The archive is the contract**: downstream consumers (backtesting, analytics) can trust that archived files contain no duplicate broker records. Deduplication is the writer's responsibility, not pushed to consumers.
-- `cryptolake verify` validates this guarantee by checking for duplicate `(_topic, _partition, _offset)` tuples (see Section 5.6)
+- `cryptolake verify` validates this guarantee by checking for duplicate `(_topic, _partition, _offset)` tuples (see Section 5.7)
 
 Writer crash between flush and commit timeline:
 
@@ -871,7 +875,7 @@ All metrics with `symbol` label provide per-symbol granularity for dashboard fil
 | `GapDetected` | `collector_gaps_detected_total` increases | critical |
 | `ConnectionLost` | `collector_ws_connections_active == 0` for 30s | critical |
 | `WriterLagging` | `writer_consumer_lag > 1000` for 2min | warning |
-| `WriterLagCritical` | `writer_consumer_lag > 3600` (1h) | critical |
+| `WriterLagCritical` | `writer_consumer_lag > 100000` (approx 5min) | critical |
 | `SnapshotsFailing` | `collector_snapshots_failed_total` increases 3x in 15min | warning |
 | `DiskAlmostFull` | `writer_disk_usage_pct > 85` | warning |
 | `DiskCritical` | `writer_disk_usage_pct > 95` | critical |
@@ -923,6 +927,7 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
     restart: unless-stopped
+    stop_grace_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -942,6 +947,7 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/health', timeout=5).status == 200 else 1)"]
     restart: unless-stopped
+    stop_grace_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -977,6 +983,11 @@ services:
     networks: [cryptolake_internal, alertmanager_egress]
     volumes:
       - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+
+volumes:
+  redpanda_data:
+  prom_data:
+  data_volume:
 
 networks:
   cryptolake_internal:
@@ -1069,6 +1080,7 @@ For Docker: the container inherits the host clock. Ensure the Docker host runs c
 - **Collector update:** Stop collector → connection drops, gap window opens → deploy new image → collector reconnects, re-syncs depth, and automatically emits a gap record.
 - Zero-downtime collection is not a v1 goal; brief planned gaps (~30s) during restarts are acceptable and self-documenting.
 - **Rollback:** Revert to the previous image tag and restart. No schema migrations to undo.
+- **Schema Compatibility:** If an update adds fields to the envelope, writers and consumers are protected by the forward-compatibility rule (Section 4.1.2: ignore unknown fields).
 
 ---
 
@@ -1106,7 +1118,7 @@ The collector joins both `cryptolake_internal` (for Redpanda) and `collector_egr
 **v1 posture**: No exchange API keys are needed — Binance USD-M Futures public streams and REST endpoints are unauthenticated. No secrets are stored in config files.
 
 Credentials that do exist:
-- **Grafana admin password**: Set via `GF_SECURITY_ADMIN_PASSWORD` environment variable. Default `admin` must be changed before any network-accessible deployment. The docker-compose template sets this via a `.env` file (git-ignored) or Docker/K8s secrets.
+- **Grafana admin password**: Set via `GF_SECURITY_ADMIN_PASSWORD` environment variable. Default `admin` must be changed before any network-accessible deployment. The docker-compose template sets this via a `.env` file (git-ignored) for local development. **Note: For production, `.env` files must be replaced with strict secret managers like Docker Secrets or K8s Secrets.**
 - **Alertmanager webhook URL**: The Slack/Discord/PagerDuty webhook URL in `alertmanager.yml` is a secret. Store it via environment variable substitution (`$WEBHOOK_URL`), not hardcoded in the config file. The `.env` file is git-ignored.
 - When running Alertmanager in Docker Compose, start it with config env expansion enabled (for example `--config.expand-env`) and pass `WEBHOOK_URL` into the container environment; otherwise the placeholder remains literal at runtime.
 
