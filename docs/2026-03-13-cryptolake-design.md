@@ -425,6 +425,8 @@ Topic naming convention: `{exchange}.{stream}` where `{stream}` matches the enve
 | `binance.liquidations` | symbol | 1 | 48h |
 | `binance.open_interest` | symbol | 1 | 48h |
 
+*Note on Topic Creation:* Relying on Kafka auto-creation is an anti-pattern as it uses cluster defaults (e.g., 7 days retention). The deployment must include a bootstrap script or init-container that uses the `rpk` CLI to explicitly create these topics with the configured 48h retention policy (`retention.ms=172800000`) before the Collector is allowed to start.
+
 ---
 
 ## 5. Storage
@@ -506,7 +508,7 @@ At ~1 GB/day compressed, a 1TB volume provides ~2.5 years of storage for 5 symbo
 While the system is designed to "never silently lose data" and explicitly marks missed messages with `type: "gap"` records, these gaps present problems for future backtesting and downstream DB loading.
 - **Future Auto-Healing Worker:** A separate asynchronous worker should be implemented to scan the archive for `"type": "gap"` records.
 - **Trades / AggTrades:** For missing trades, the worker automatically queries the exchange's REST API (e.g., Binance's `GET /fapi/v1/aggTrades` using `startTime` and `endTime` derived from the `gap_start_ts` and `gap_end_ts`), wraps the historical data in standard envelopes, and writes them to a specific backfill topic or file.
-- **Order Book Depth:** Binance's REST API *does not* provide historical A2-level depth (100ms diffs). Therefore, auto-healing order book depth via REST is impossible. Gaps in depth must either be tolerated (relying on the next `depth_snapshot` as a reset point) or manually/programmatically patched later by downloading daily/monthly historical CSV dumps (`depthUpdate` files) from the Binance Public Data portal (`data.binance.vision`). The presence of the `gap` record is sufficient to inform downstream processes that the order book sequence was broken during that window and requires patching from the historical archive.
+- **Order Book Depth (Out of Scope for v1):** Binance's REST API *does not* provide historical A2-level depth (100ms diffs). While Binance does publish daily CSV files of `depthUpdate` to their public data portal (`data.binance.vision`), automating this extraction is complex due to T+1 upload delays, CSV-to-JSON format translation, and massive file sizes. Therefore, **automatic order book gap backfilling is out of scope for v1**. Downstream DB loaders and backtesting engines must be designed to gracefully handle depth gaps by halting book updates and waiting for the next archived `depth_snapshot` record to reset their state. All recorded gaps, whether backfilled or not, must be prominently visualized on the Grafana dashboard so operators and analysts are immediately aware of data discontinuities.
 
 ### 5.7 Data Verification CLI
 
@@ -1246,6 +1248,7 @@ Recorded real Binance WebSocket messages stored in `tests/fixtures/`. These prov
 | Component | Technology | Version | Purpose |
 |-----------|-----------|---------|---------|
 | Language | Python | 3.12 | Core application (pinned in Dockerfile) |
+| Package Manager | uv (by Astral) | latest | Fast, deterministic dependency resolution and Docker builds |
 | Event loop | uvloop | latest | High-performance asyncio replacement |
 | JSON Parser | orjson | latest | C/Rust-backed JSON parsing to prevent GIL blocking |
 | WebSocket | websockets | latest | Exchange WebSocket connections |
@@ -1254,7 +1257,7 @@ Recorded real Binance WebSocket messages stored in `tests/fixtures/`. These prov
 | Compression | zstandard | latest | zstd compression (C binding) |
 | Validation | pydantic | v2 | Config and envelope schema validation |
 | Metrics | prometheus-client | latest | Prometheus metric exposition |
-| Logging | structlog | latest | Structured JSON logging |
+| Logging | structlog | latest | Structured JSON logging. All loggers must bind `collector_session_id`, `symbol`, and `stream` to the context so every log line is easily filterable. |
 | Config | pyyaml | latest | YAML config parsing |
 | Message broker | Redpanda | ≥24.1 | Durable message buffer (Kafka-compatible). Pin to specific minor in docker-compose. |
 | Metrics DB | Prometheus | ≥2.51 | Time-series metrics storage. Pin to specific minor in docker-compose. |
