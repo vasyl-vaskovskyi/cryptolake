@@ -540,7 +540,7 @@ Verification checks:
 
 - **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
 - **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will recreate topics. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
-- **Recommended backup cadence:** Daily `rsync` or object-storage sync of sealed files (`.sha256` present).
+- **Recommended backup cadence:** Daily `rsync` or object-storage sync of sealed files (`.sha256` present). *Note: Operators should avoid running backups while the writer is experiencing high consumer lag and catching up on past hours, as this may temporarily unseal and mutate files mid-backup.*
 
 ---
 
@@ -913,7 +913,8 @@ services:
     ports:
       - "127.0.0.1:9092:9092"   # host-only for local debugging
     healthcheck:
-      test: ["CMD", "rpk", "cluster", "health"]
+      # Note: rpk path is stable in >= v24.x, but verify this healthcheck if pinning to major future versions.
+      test: ["CMD-SHELL", "rpk cluster health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
