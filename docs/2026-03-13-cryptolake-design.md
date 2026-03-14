@@ -181,8 +181,9 @@ Redpanda specifics:
 
 ### 2.4 Data Flow
 
-1. **Collector** connects to Binance USD-M Futures WebSocket streams and REST API
-2. Each incoming message is wrapped in a **message envelope** with `received_at` nanosecond timestamp, session sequence, and collector session ID
+1. **Collector** connects to Binance USD-M Futures WebSocket streams utilizing **Combined Streams (multiplexing)** to reduce total network connections. Multiple stream types (trades, depth, liquidations) flow over the same physical WebSocket.
+2. The Collector **demultiplexes** the incoming frames based on the exchange routing key (e.g., the `stream` field).
+3. Each incoming message is wrapped in a **message envelope** with `received_at` nanosecond timestamp, session sequence, and collector session ID
 3. Wrapped messages are produced to **Redpanda topics** (one topic per stream type)
 4. **Writer** consumes from all topics, buffers messages, compresses with zstd, and writes hourly-rotated `.jsonl.zst` files
 5. SHA-256 checksums are written as sidecar files for integrity verification
@@ -355,7 +356,7 @@ Every message — regardless of stream type — is wrapped in a common envelope 
 | `symbol` | string | Trading pair (lowercase): `"btcusdt"` |
 | `stream` | string | Stream type: `"trades"`, `"depth"`, `"depth_snapshot"`, `"bookticker"`, `"funding_rate"`, `"liquidations"`, `"open_interest"`. Always plural where applicable. Must match the Redpanda topic suffix and file directory name exactly (e.g., `stream="trades"` → topic `binance.trades` → directory `trades/`). |
 | `received_at` | int64 | Local nanosecond timestamp (`time.time_ns()`). Server must run NTP (chrony). |
-| `exchange_ts` | int64 | Exchange-provided timestamp (milliseconds for Binance). Extracted from the raw text via lightweight parsing (e.g., regex or `json.loads` on a copy) — the `raw_text` itself is never modified. |
+| `exchange_ts` | int64 | Exchange-provided timestamp (milliseconds for Binance). Extracted from the raw text via lightweight parsing. To prevent Python Global Interpreter Lock (GIL) contention and event loop blocking at high throughput, all JSON parsing and serialization MUST use a high-performance C/Rust-backed library like `orjson` instead of the standard `json` module. |
 | `collector_session_id` | string | Unique identifier for this collector lifetime: `{collector_id}_{startup_timestamp_ISO}`. A new session starts on every collector restart. Used to scope `session_seq` — sequences are only meaningful within the same session. |
 | `session_seq` | int64 | Monotonically increasing counter per (exchange, symbol, stream) tuple within a single collector session. Resets to 0 on collector restart. **Debugging-only** — useful for spotting in-session drops or reordering, but not a durable identity. Do not use for cross-session deduplication or gap detection in the archive. |
 | `raw_text` | string | The original exchange payload as received from the WebSocket frame or HTTP response body, captured as a string **before** any JSON parsing. This is the authoritative raw data. Consumers who need structured access should parse this field themselves. |
@@ -498,15 +499,16 @@ At ~1 GB/day compressed, a 1TB volume provides ~2.5 years of storage for 5 symbo
 - **Default policy**: Keep all archived data indefinitely. Raw data is the irreplaceable source of truth.
 - **When disk reaches 85% (warning threshold)**: Operator must provision additional storage or migrate older data to cold/object storage (e.g., S3, GCS).
 - **No automatic deletion**: The system never deletes archived files automatically. All cleanup is manual or via an external policy.
-- **Future path — Archiver component**: A lightweight cron job or sidecar service (`archiver`) that automatically copies sealed hourly files (those with a `.sha256` sidecar) to object storage (S3, GCS, or MinIO). Architectural sketch:
-  1. Runs on a schedule (e.g., every hour, 15 minutes after the hour boundary to ensure files are sealed)
-  2. Scans the archive directory for sealed files not yet marked as uploaded
-  3. Uploads the `.jsonl.zst` and `.sha256` pair to the configured bucket, preserving the same directory structure
-  4. After successful upload + checksum verification in the bucket, writes a `.uploaded` marker file locally
-  5. A separate retention policy can then safely delete local files that have an `.uploaded` marker and are older than N days
-  6. This component is out of scope for v1 but the file layout and sealing protocol are designed to support it without changes.
+- **Future path — Archiver component**: A lightweight cron job or sidecar service (`archiver`) that automatically copies sealed hourly files (those with a `.sha256` sidecar) to object storage (S3, GCS, or MinIO).
 
-### 5.6 Data Verification CLI
+### 5.6 Gap Auto-Healing (Backfilling)
+
+While the system is designed to "never silently lose data" and explicitly marks missed messages with `type: "gap"` records, these gaps present problems for future backtesting and downstream DB loading.
+- **Future Auto-Healing Worker:** A separate asynchronous worker should be implemented to scan the archive for `"type": "gap"` records.
+- **Trades / AggTrades:** For missing trades, the worker automatically queries the exchange's REST API (e.g., Binance's `GET /fapi/v1/aggTrades` using `startTime` and `endTime` derived from the `gap_start_ts` and `gap_end_ts`), wraps the historical data in standard envelopes, and writes them to a specific backfill topic or file.
+- **Order Book Depth:** Binance's REST API *does not* provide historical A2-level depth (100ms diffs). Therefore, auto-healing order book depth via REST is impossible. Gaps in depth must either be tolerated (relying on the next `depth_snapshot` as a reset point) or manually/programmatically patched later by downloading daily/monthly historical CSV dumps (`depthUpdate` files) from the Binance Public Data portal (`data.binance.vision`). The presence of the `gap` record is sufficient to inform downstream processes that the order book sequence was broken during that window and requires patching from the historical archive.
+
+### 5.7 Data Verification CLI
 
 The project includes a CLI tool for verifying archive integrity:
 
@@ -640,6 +642,7 @@ MONITORING__ALERTING__WEBHOOK_URL=https://hooks.slack.com/...
 - Handles Binance's mandatory 24-hour disconnect: proactively reconnects before the 24h mark
 - Exponential backoff on disconnect: 1s, 2s, 4s, 8s, 16s, 32s, max 60s
 - **Depth resync flow on reconnect or gap detection**:
+  - *Pre-condition*: The system must not attempt a depth resync if the Redpanda producer is offline or actively dropping messages due to buffer overflow. It must wait for broker connectivity to be restored and the buffer to drain; otherwise, the resync snapshot will just fill the buffer or be immediately dropped.
   1. Reopen the depth WebSocket stream immediately
   2. Buffer all incoming depth diffs (do not discard — live updates arrive during the snapshot round-trip)
   3. Fetch a full REST snapshot concurrently (`GET /fapi/v1/depth?symbol=<SYMBOL>&limit=1000`)
@@ -743,7 +746,7 @@ resume normal publish path
 
 **At-least-once delivery with writer-side deduplication**: If the writer crashes after flushing to disk but before committing the Kafka offset, it will re-consume some messages on restart. The writer guarantees duplicate-free archives:
 - Every archived line carries broker coordinates `(_topic, _partition, _offset)` — the durable identity of the message (see Section 4.1.1)
-- On startup, the writer scans the tail of the current active file (if unsealed) to find the highest `_offset` per (topic, partition), and skips any re-consumed records with offsets already on disk. **Hour-boundary edge case**: If the writer crashes after sealing an hourly file but before committing the Kafka offset, there is no unsealed file to scan. In this case, the writer scans the most recently sealed file for the same (topic, partition) to recover the high-water offset. If the crash occurred after both sealing and offset commit, there is no re-delivery and no dedup is needed.
+- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (e.g., SQLite or write-ahead JSON) tracking the highest flushed `_offset` per (topic, partition). On startup, the writer loads this state and skips any re-consumed records with offsets less than or equal to the recorded high-water mark.
 - **The archive is the contract**: downstream consumers (backtesting, analytics) can trust that archived files contain no duplicate broker records. Deduplication is the writer's responsibility, not pushed to consumers.
 - `cryptolake verify` validates this guarantee by checking for duplicate `(_topic, _partition, _offset)` tuples (see Section 5.6)
 
@@ -782,13 +785,15 @@ steady state                                |
 
 ### 8.4 File Rotator
 
-- At each hour boundary (UTC), the current file is sealed:
-  1. Final flush of buffered data
-  2. Close the zstd compression stream
-  3. Compute SHA-256 of the completed `.jsonl.zst` file
-  4. Write `<filename>.sha256` sidecar
-  5. Increment `writer_files_rotated_total` metric
-- New file opened for the next hour
+- File rotation is strictly synchronized with Kafka offset commits to prevent boundary edge cases. At each hour boundary (UTC), the current file is sealed:
+  1. Stop consuming new messages temporarily
+  2. Final flush of buffered data to disk
+  3. Close the zstd compression stream
+  4. Compute SHA-256 of the completed `.jsonl.zst` file
+  5. Write `<filename>.sha256` sidecar
+  6. Commit Kafka offsets for all flushed records and update local offset state file
+  7. Increment `writer_files_rotated_total` metric
+- New file opened for the next hour, and consumption resumes
 - If no data arrived during an hour, no file is created (no empty files)
 
 ### 8.5 Compressor
@@ -829,7 +834,7 @@ Key principle: **never silently lose data**. Every failure, gap, and anomaly is 
 | `collector_ws_connections_active` | gauge | exchange | Current open WebSocket connections |
 | `collector_ws_reconnects_total` | counter | exchange | Reconnection count |
 | `collector_gaps_detected_total` | counter | exchange, symbol, stream | Sequence gaps found |
-| `collector_exchange_latency_ms` | histogram | exchange, symbol, stream | `received_at - exchange_ts` distribution |
+| `collector_exchange_latency_ms` | histogram | exchange, symbol, stream | `received_at - exchange_ts` distribution (Network Transit Time). Used to prove data represents reality vs lagged reality (latency arbitrage metric). |
 | `collector_snapshots_taken_total` | counter | exchange, symbol | Successful REST snapshots |
 | `collector_snapshots_failed_total` | counter | exchange, symbol | Failed snapshot attempts |
 | `collector_ntp_drift_ms` | gauge | — | Estimated NTP clock drift |
@@ -1242,6 +1247,7 @@ Recorded real Binance WebSocket messages stored in `tests/fixtures/`. These prov
 |-----------|-----------|---------|---------|
 | Language | Python | 3.12 | Core application (pinned in Dockerfile) |
 | Event loop | uvloop | latest | High-performance asyncio replacement |
+| JSON Parser | orjson | latest | C/Rust-backed JSON parsing to prevent GIL blocking |
 | WebSocket | websockets | latest | Exchange WebSocket connections |
 | HTTP client | aiohttp | latest | REST API calls (snapshots, open interest) |
 | Kafka client | aiokafka | latest | Redpanda producer/consumer |
@@ -1264,7 +1270,7 @@ Recorded real Binance WebSocket messages stored in `tests/fixtures/`. These prov
 ### 16.1 External Dependencies
 
 - **Binance USD-M Futures API**: Subject to rate limits, maintenance windows, and API changes. The collector must handle all gracefully.
-- **Network connectivity**: Stable, low-latency connection to Binance servers. Consider co-location or cloud regions close to Binance infrastructure (AWS ap-northeast-1 / Tokyo).
+- **Network connectivity**: Stable, low-latency connection to Binance servers. To minimize Network Transit Time (`collector_exchange_latency_ms`) and remain competitive for future algorithmic trading layers, the deployment infrastructure should prioritize co-location or cloud regions geographically closest to Binance's matching engines (e.g., AWS `ap-northeast-1` / Tokyo).
 - **NTP servers**: Reliable NTP sources for chrony. Use multiple sources for redundancy.
 
 ### 16.2 Binance API Limits
