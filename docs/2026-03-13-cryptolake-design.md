@@ -497,21 +497,32 @@ Rough estimates for 5 symbols (BTC, ETH, SOL + 2 others), USD-M Futures:
 
 At ~1 GB/day compressed, a 1TB volume provides ~2.5 years of storage for 5 symbols.
 
-### 5.5 Data Retention & Cleanup
+### 5.5 Writer Sharding Boundary
+
+The single-writer process is designed for ~5-10 symbols. Beyond this, streaming zstd compression across hundreds of files on a single Python thread becomes a CPU bottleneck. The architecture is explicitly designed to shard at the **Consumer Group level**: deploy a dedicated `depth-writer` container consuming only `binance.depth*` topics, and a `trades-writer` consuming the rest. No code changes are required, only isolated `config.yaml` stream toggles per writer.
+
+### 5.6 Data Retention & Cleanup
 
 - **Default policy**: Keep all archived data indefinitely. Raw data is the irreplaceable source of truth.
 - **When disk reaches 85% (warning threshold)**: Operator must provision additional storage or migrate older data to cold/object storage (e.g., S3, GCS).
 - **No automatic deletion**: The system never deletes archived files automatically. All cleanup is manual or via an external policy.
 - **Future path — Archiver component**: A lightweight cron job or sidecar service (`archiver`) that automatically copies sealed hourly files (those with a `.sha256` sidecar) to object storage (S3, GCS, or MinIO).
 
-### 5.6 Gap Auto-Healing (Backfilling)
+### 5.7 Gap Auto-Healing (Backfilling)
 
 While the system is designed to "never silently lose data" and explicitly marks missed messages with `type: "gap"` records, these gaps present problems for future backtesting and downstream DB loading.
 - **Future Auto-Healing Worker:** A separate asynchronous worker should be implemented to scan the archive for `"type": "gap"` records.
 - **Trades / AggTrades:** For missing trades, the worker automatically queries the exchange's REST API (e.g., Binance's `GET /fapi/v1/aggTrades` using `startTime` and `endTime` derived from the `gap_start_ts` and `gap_end_ts`), wraps the historical data in standard envelopes, and writes them to a specific backfill topic or file.
 - **Order Book Depth (Out of Scope for v1):** Binance's REST API *does not* provide historical A2-level depth (100ms diffs). While Binance does publish daily CSV files of `depthUpdate` to their public data portal (`data.binance.vision`), automating this extraction is complex due to T+1 upload delays, CSV-to-JSON format translation, and massive file sizes. Therefore, **automatic order book gap backfilling is out of scope for v1**. Downstream DB loaders and backtesting engines must be designed to gracefully handle depth gaps by halting book updates and waiting for the next archived `depth_snapshot` record to reset their state. All recorded gaps, whether backfilled or not, must be prominently visualized on the Grafana dashboard so operators and analysts are immediately aware of data discontinuities.
 
-### 5.7 Data Verification CLI
+### 5.8 Daily Manifest File
+
+To prevent downstream consumers from blindly scanning or decompressing the entire archive to discover what data exists, the system must generate a lightweight `manifest.json` per date directory.
+- **Trigger:** Written/updated by a cron job (or the verification CLI) after the UTC day closes.
+- **Content:** Contains the date, exchange, symbol, a list of available hours per stream, total record counts, and a summary of all explicitly recorded `gap` windows.
+- **Purpose:** Allows backtesters and DB loaders to query the dataset structure instantly without reading `.zst` files.
+
+### 5.9 Data Verification CLI
 
 The project includes a CLI tool for verifying archive integrity:
 
@@ -536,11 +547,11 @@ Verification checks:
 - **Persisted gap events**: Scan for `"type": "gap"` records in the archive. Report each gap with its `reason`, `symbol`, `stream`, and time window. No gap record should overlap with data records claiming to cover the same time range (i.e., a gap means data is genuinely missing, not just flagged).
 - No missing hours (where data was expected based on stream activity and no gap record explains the absence)
 
-### 5.8 Disaster Recovery
+### 5.10 Disaster Recovery
 
 - **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
 - **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will recreate topics. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
-- **Recommended backup cadence:** Daily `rsync` or object-storage sync of sealed files (`.sha256` present). *Note: Operators should avoid running backups while the writer is experiencing high consumer lag and catching up on past hours, as this may temporarily unseal and mutate files mid-backup.*
+- **Automated Backup:** A daily automated cron job or sidecar container must execute an `rsync` or object-storage upload (`aws s3 sync`) of all sealed files (those with a `.sha256` sidecar) to cold storage. Because sealed files are immutable, backups can run safely at any time.
 
 ---
 
@@ -706,7 +717,7 @@ release buffered diffs -> resume steady-state processing
 
 ### 7.5 Producer
 
-- Uses `aiokafka.AIOKafkaProducer`
+- Uses `confluent_kafka.Producer` (C-backed, extremely fast)
 - Serialization: JSON bytes (the envelope)
 - Key: symbol (bytes) — enables future partition-by-symbol
 - Acks: `acks=all` for durability. Note: with single-node Redpanda (development/small deployment), `acks=all` is equivalent to `acks=1` — true replication durability requires a multi-node Redpanda cluster. For single-node, data durability relies on Redpanda's fsync behavior.
@@ -750,10 +761,11 @@ resume normal publish path
 
 ### 8.2 Consumer
 
-- Uses `aiokafka.AIOKafkaConsumer`
+- Uses `confluent_kafka.Consumer` (Run in a dedicated thread or `run_in_executor` to avoid blocking uvloop)
 - Consumer group: `cryptolake-writer` (This group, combined with 1 partition per topic, enforces **Writer Exclusivity** — if two writers run accidentally, only one will receive messages. The writer should log a warning on startup if the group already has an active member).
 - Subscribes to all `binance.*` topics
-- **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time. If catching up on a past hour that has *already been sealed*, the writer will delete the old `.sha256` sidecar, reopen the `.jsonl.zst` file in append mode, stream the new data, and reseal with a new checksum when the buffer flushes.
+- **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time.
+- **Immutable Sealed Files:** Once a file has a `.sha256` sidecar, it is never reopened or mutated. If late-arriving messages belong to an already-sealed hour (e.g., during catch-up), the writer creates a spillover file (e.g., `hour-14.late-1.jsonl.zst`). Downstream consumers are responsible for merging these at read time.
 - Manual offset commit after successful flush to disk (not auto-commit). If a commit batch spans multiple buffered files, the writer flushes all currently buffered records before committing that batch.
 - On restart: resumes from last committed offset
 
@@ -1300,7 +1312,7 @@ Recorded real Binance WebSocket messages stored in `tests/fixtures/`. These prov
 | JSON Parser | orjson | latest | C/Rust-backed JSON parsing to prevent GIL blocking |
 | WebSocket | websockets | latest | Exchange WebSocket connections |
 | HTTP client | aiohttp | latest | REST API calls (snapshots, open interest) |
-| Kafka client | aiokafka | latest | Redpanda producer/consumer |
+| Kafka client | confluent-kafka-python | latest | C-backed librdkafka wrapper. Required over `aiokafka` for high-throughput I/O. |
 | Compression | zstandard | latest | zstd compression (C binding) |
 | Validation | pydantic | v2 | Config and envelope schema validation |
 | Metrics | prometheus-client | latest | Prometheus metric exposition |
@@ -1351,6 +1363,8 @@ For 5 symbols, all streams enabled:
 | **Total** | **~3 cores** | **~2 GB** | **~1 GB/day growing** |
 
 A single 4-core VPS with 4-8 GB RAM and a 500 GB volume handles this comfortably for months.
+
+**The Python Scaling Ceiling:** The Collector's single-threaded event loop is bounded by CPU time spent hashing (SHA-256) and enveloping payloads. The V1 Python architecture is capped at ~20-50 symbols depending on volatility (approx. 5,000 msgs/sec). Beyond this threshold, the Collector must be split into multiple per-socket processes, or the hot-path (extraction/hashing) must be rewritten in Rust/Go.
 
 ### 16.4 Capacity Planning Triggers
 
