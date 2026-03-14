@@ -584,6 +584,7 @@ redpanda:
   brokers:
     - "redpanda:9092"
   retention_hours: 48
+  # Config validator MUST reject retention_hours < 12 to ensure sufficient buffer for writer downtime.
   # topics_prefix is NOT used — topic names are derived from the envelope's
   # exchange and stream fields: f"{exchange}.{stream}" (see Section 4.3).
 
@@ -613,7 +614,7 @@ monitoring:
 - **Per-symbol snapshot overrides**: High-volume symbols can have more frequent snapshots.
 - **Streams individually toggleable**: Add or disable stream types without code changes. Disabled streams are not subscribed, polled, archived, or assigned gap records. The `depth` toggle controls both depth diffs and depth snapshots as a unit — they are meaningless without each other.
 - **Alert rules are declarative**: Thresholds, not logic.
-- **Validated on startup**: Pydantic model validates the config before any connections are opened. Fail fast on misconfiguration.
+- **Validated on startup**: Pydantic model validates the config before any connections are opened. Fail fast on misconfiguration. This includes validating that Redpanda `retention_hours` is safely above a minimum threshold (e.g., >= 12h) to prevent operator error from causing silent data expiry during writer maintenance.
 - **Config changes require restart**: Adding/removing symbols or changing stream toggles requires a collector and/or writer restart. Hot-reload is not supported in v1. This is an intentional simplification — the system reconnects and re-syncs quickly on restart.
 
 ### 6.3 Environment Variable Overrides
@@ -710,7 +711,7 @@ release buffered diffs -> resume steady-state processing
 - Key: symbol (bytes) — enables future partition-by-symbol
 - Acks: `acks=all` for durability. Note: with single-node Redpanda (development/small deployment), `acks=all` is equivalent to `acks=1` — true replication durability requires a multi-node Redpanda cluster. For single-node, data durability relies on Redpanda's fsync behavior.
 - On Redpanda unavailability: buffers in bounded in-memory queue (configurable max, default 100,000 messages). Alerts if buffer exceeds 80% capacity.
-- **Buffer overflow policy**: If the buffer fills completely, the collector drops the **newest** incoming messages to preserve chronological sequence. To prevent high-volume streams (`depth`) from starving low-volume irreplaceable streams (`liquidations`, `funding_rate`), the total in-memory buffer must be partitioned. E.g., for a 100,000 global max: `depth` gets max 80k, `trades` gets max 10k, and others share the remaining 10k.
+- **Buffer overflow policy**: If the buffer fills completely, the collector drops the **newest** incoming messages to preserve chronological sequence. To prevent high-volume streams (`depth`) from starving low-volume irreplaceable streams (`liquidations`, `funding_rate`), the total in-memory buffer must be partitioned. E.g., for a 100,000 global max: `depth` gets max 80k, `trades` gets max 10k, and others share the remaining 10k (Note: these capacities should be tuned based on observed stream volumes).
 - Linger: 5ms batch window for throughput optimization
 
 Producer outage / overflow timeline:
@@ -752,7 +753,7 @@ resume normal publish path
 - Uses `aiokafka.AIOKafkaConsumer`
 - Consumer group: `cryptolake-writer` (This group, combined with 1 partition per topic, enforces **Writer Exclusivity** — if two writers run accidentally, only one will receive messages. The writer should log a warning on startup if the group already has an active member).
 - Subscribes to all `binance.*` topics
-- **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time. If catching up, the writer will open, append to, and correctly seal files belonging to past hours.
+- **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time. If catching up on a past hour that has *already been sealed*, the writer will delete the old `.sha256` sidecar, reopen the `.jsonl.zst` file in append mode, stream the new data, and reseal with a new checksum when the buffer flushes.
 - Manual offset commit after successful flush to disk (not auto-commit). If a commit batch spans multiple buffered files, the writer flushes all currently buffered records before committing that batch.
 - On restart: resumes from last committed offset
 
@@ -875,7 +876,7 @@ All metrics with `symbol` label provide per-symbol granularity for dashboard fil
 | `GapDetected` | `collector_gaps_detected_total` increases | critical |
 | `ConnectionLost` | `collector_ws_connections_active == 0` for 30s | critical |
 | `WriterLagging` | `writer_consumer_lag > 1000` for 2min | warning |
-| `WriterLagCritical` | `writer_consumer_lag > 100000` (approx 5min) | critical |
+| `WriterLagCritical` | `writer_consumer_lag > 100000` (approx 5min, throughput-dependent) | critical |
 | `SnapshotsFailing` | `collector_snapshots_failed_total` increases 3x in 15min | warning |
 | `DiskAlmostFull` | `writer_disk_usage_pct > 85` | warning |
 | `DiskCritical` | `writer_disk_usage_pct > 95` | critical |
@@ -911,6 +912,11 @@ services:
     # Kafka API on 9092 (internal), admin on 9644 (internal only)
     ports:
       - "127.0.0.1:9092:9092"   # host-only for local debugging
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks: [cryptolake_internal]
     volumes:
       - redpanda_data:/var/lib/redpanda/data
@@ -918,7 +924,9 @@ services:
   collector:
     build:
       dockerfile: Dockerfile.collector
-    depends_on: [redpanda]
+    depends_on:
+      redpanda:
+        condition: service_healthy
     networks: [cryptolake_internal, collector_egress]
     volumes:
       - ./config:/app/config:ro
@@ -937,7 +945,9 @@ services:
   writer:
     build:
       dockerfile: Dockerfile.writer
-    depends_on: [redpanda]
+    depends_on:
+      redpanda:
+        condition: service_healthy
     networks: [cryptolake_internal]
     volumes:
       - ./config:/app/config:ro
@@ -986,7 +996,7 @@ services:
 
 volumes:
   redpanda_data:
-  prom_data:
+  prometheus_data:
   data_volume:
 
 networks:
