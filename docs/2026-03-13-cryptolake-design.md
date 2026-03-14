@@ -362,7 +362,7 @@ Every message — regardless of stream type — is wrapped in a common envelope 
 | `raw_text` | string | The original exchange payload as received from the WebSocket frame or HTTP response body, captured as a string **before** any JSON parsing. This is the authoritative raw data. Consumers who need structured access should parse this field themselves. |
 | `raw_sha256` | string | SHA-256 hex digest of `raw_text`. Enables per-message integrity verification without parsing the payload. Can be used to detect corruption at any layer (Redpanda, compression, disk). |
 
-When Binance combined streams are used, `raw_text` is the exact substring of the outer frame's `data` field, extracted via structural scanning of the original frame. The collector may parse a copy of the outer frame to read routing metadata such as `stream`, but it must never reconstruct `raw_text` by re-serializing a parsed inner object.
+When Binance combined streams are used, `raw_text` is the exact substring of the outer frame's `data` field. To ensure zero loss of fidelity (e.g. unicode escapes, nested keys), the extraction algorithm must parse the outer frame for routing, but extract the `data` value's raw byte range from the original frame string using string slicing (or an equivalent strict zero-copy mechanism), avoiding re-serialization entirely.
 
 **Gap record fields** (present only when `type: "gap"`, replacing `raw_text` and `raw_sha256`):
 
@@ -535,6 +535,12 @@ Verification checks:
 - **Persisted gap events**: Scan for `"type": "gap"` records in the archive. Report each gap with its `reason`, `symbol`, `stream`, and time window. No gap record should overlap with data records claiming to cover the same time range (i.e., a gap means data is genuinely missing, not just flagged).
 - No missing hours (where data was expected based on stream activity and no gap record explains the absence)
 
+### 5.8 Disaster Recovery
+
+- **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
+- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will recreate topics. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
+- **Recommended backup cadence:** Daily `rsync` or object-storage sync of sealed files (`.sha256` present).
+
 ---
 
 ## 6. Configuration
@@ -651,7 +657,7 @@ MONITORING__ALERTING__WEBHOOK_URL=https://hooks.slack.com/...
   4. Once the snapshot arrives, drop all buffered diffs where `u < snapshot.lastUpdateId` (stale events)
   5. Find the first buffered diff where `U <= snapshot.lastUpdateId+1` AND `u >= snapshot.lastUpdateId+1` — this is the sync point
   6. Apply that diff and all subsequent diffs; from this point forward require `pu == previous u` for every event (the previous-update chain)
-  7. If no buffered diff satisfies step 5, the buffer was too small or diffs arrived too late — re-fetch the snapshot and retry (log + alert)
+  7. If no buffered diff satisfies step 5, the buffer was too small or diffs arrived too late — retry the snapshot fetch up to 3 times with exponential backoff. If all retries fail (livelock prevention), emit a gap record, resume collecting unsynchronized diffs, and wait for the next scheduled periodic snapshot to act as the new anchor.
 
 Reconnect / re-sync timeline:
 
@@ -701,7 +707,7 @@ release buffered diffs -> resume steady-state processing
 - Key: symbol (bytes) — enables future partition-by-symbol
 - Acks: `acks=all` for durability. Note: with single-node Redpanda (development/small deployment), `acks=all` is equivalent to `acks=1` — true replication durability requires a multi-node Redpanda cluster. For single-node, data durability relies on Redpanda's fsync behavior.
 - On Redpanda unavailability: buffers in bounded in-memory queue (configurable max, default 100,000 messages). Alerts if buffer exceeds 80% capacity.
-- **Buffer overflow policy**: If the buffer fills completely, the collector continues to accept exchange messages but drops the **newest** incoming messages (not oldest), preserving the already-buffered chronological sequence. Every dropped message is counted in `collector_messages_dropped_total` metric and triggers an alert. This is a known limitation: bounded memory is prioritized over completeness to prevent OOM kills. The dropped messages are logged with enough detail (symbol, stream, timestamp range) to identify the gap in the archive.
+- **Buffer overflow policy**: If the buffer fills completely, the collector drops the **newest** incoming messages to preserve chronological sequence. To prevent high-volume streams (`depth`) from starving low-volume irreplaceable streams (`liquidations`, `funding_rate`), the in-memory buffer must allocate guaranteed sub-buffer capacities per stream type.
 - Linger: 5ms batch window for throughput optimization
 
 Producer outage / overflow timeline:
@@ -748,7 +754,7 @@ resume normal publish path
 
 **At-least-once delivery with writer-side deduplication**: If the writer crashes after flushing to disk but before committing the Kafka offset, it will re-consume some messages on restart. The writer guarantees duplicate-free archives:
 - Every archived line carries broker coordinates `(_topic, _partition, _offset)` — the durable identity of the message (see Section 4.1.1)
-- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (e.g., SQLite or write-ahead JSON) tracking the highest flushed `_offset` per (topic, partition). On startup, the writer loads this state and skips any re-consumed records with offsets less than or equal to the recorded high-water mark.
+- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (SQLite in WAL mode) tracking the highest flushed `_offset` per (topic, partition). This state file **must** live on the same volume as the archive data (`/data`). On startup, the writer loads this state and skips any re-consumed records with offsets less than or equal to the recorded high-water mark. If the state file is lost, the writer must reconstruct it by scanning the tail of the latest sealed file for each topic/partition before resuming.
 - **The archive is the contract**: downstream consumers (backtesting, analytics) can trust that archived files contain no duplicate broker records. Deduplication is the writer's responsibility, not pushed to consumers.
 - `cryptolake verify` validates this guarantee by checking for duplicate `(_topic, _partition, _offset)` tuples (see Section 5.6)
 
@@ -865,6 +871,7 @@ All metrics with `symbol` label provide per-symbol granularity for dashboard fil
 | `GapDetected` | `collector_gaps_detected_total` increases | critical |
 | `ConnectionLost` | `collector_ws_connections_active == 0` for 30s | critical |
 | `WriterLagging` | `writer_consumer_lag > 1000` for 2min | warning |
+| `WriterLagCritical` | `writer_consumer_lag > 3600` (1h) | critical |
 | `SnapshotsFailing` | `collector_snapshots_failed_total` increases 3x in 15min | warning |
 | `DiskAlmostFull` | `writer_disk_usage_pct > 85` | warning |
 | `DiskCritical` | `writer_disk_usage_pct > 95` | critical |
@@ -914,8 +921,13 @@ services:
     environment:
       - CONFIG_PATH=/app/config/config.yaml
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health').status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   writer:
     build:
@@ -928,8 +940,13 @@ services:
     environment:
       - CONFIG_PATH=/app/config/config.yaml
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/health').status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/health', timeout=5).status == 200 else 1)"]
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   prometheus:
     image: prom/prometheus
@@ -1045,6 +1062,13 @@ chronyc tracking
 ```
 
 For Docker: the container inherits the host clock. Ensure the Docker host runs chrony/ntpd.
+
+### 11.7 Deployment Rollout
+
+- **Writer update:** Stop writer → Redpanda buffers traffic → deploy new image → writer catches up from last committed offset. Zero data loss (within 48h retention).
+- **Collector update:** Stop collector → connection drops, gap window opens → deploy new image → collector reconnects, re-syncs depth, and automatically emits a gap record.
+- Zero-downtime collection is not a v1 goal; brief planned gaps (~30s) during restarts are acceptable and self-documenting.
+- **Rollback:** Revert to the previous image tag and restart. No schema migrations to undo.
 
 ---
 
@@ -1266,6 +1290,13 @@ Recorded real Binance WebSocket messages stored in `tests/fixtures/`. These prov
 | Testing | pytest | latest | Test framework |
 | Test containers | testcontainers-python | latest | Containerized integration test dependencies |
 
+### 15.1 Dependency Pinning
+
+- All Python dependencies MUST be pinned via `uv.lock` (committed to repo).
+- Docker base images MUST be pinned to a specific Python patch version (e.g., `python:3.12.7-slim`).
+- Infrastructure components (Redpanda, Prometheus, Grafana, Alertmanager) MUST be pinned to specific minor versions in `docker-compose.yml`.
+- Monthly dependency update cadence with full test suite validation.
+
 ---
 
 ## 16. Dependencies & Constraints
@@ -1297,6 +1328,17 @@ For 5 symbols, all streams enabled:
 | **Total** | **~3 cores** | **~2 GB** | **~1 GB/day growing** |
 
 A single 4-core VPS with 4-8 GB RAM and a 500 GB volume handles this comfortably for months.
+
+### 16.4 Capacity Planning Triggers
+
+| Signal | Threshold | Action |
+|---|---|---|
+| Symbols count | > 50 | Add second `/ws/market` connection |
+| Symbols count | > 300 | Add second `/ws/public` connection |
+| REST rate weight | > 1500/min sustained | Implement shared token-bucket rate limiter |
+| Compressed data/day | > 10 GB | Prioritize building external Archiver |
+| Writer consumer lag | > 10 min sustained | Profile I/O, consider faster disk or parallel flushing |
+| Redpanda disk | > 70% of retention window | Increase volume size or reduce retention hours |
 
 ---
 
@@ -1389,3 +1431,4 @@ For v1, the relevant secrets are `GF_SECURITY_ADMIN_PASSWORD` and `WEBHOOK_URL`.
    - Grafana password change: `docker compose up -d --force-recreate grafana`
    - Alertmanager webhook change: `docker compose up -d --force-recreate alertmanager`
 3. Confirm the rendered config and service logs show the new value was accepted without exposing the secret in plaintext output
+
