@@ -175,7 +175,7 @@ The system consists of 6 Docker services:
 
 Redpanda specifics:
 - Single C++ binary, no JVM, no ZooKeeper
-- Kafka API compatible — uses standard `aiokafka` Python library
+- Kafka API compatible — uses `confluent-kafka-python` library
 - Sub-millisecond latency
 - Single Docker container, ~256MB RAM at this scale
 - Built-in admin console and schema registry
@@ -543,7 +543,7 @@ Verification checks:
 - Each line is valid JSON matching the envelope schema
 - Each `raw_sha256` matches `SHA-256(raw_text)` (per-message payload integrity)
 - **Duplicate broker records**: No duplicate `(_topic, _partition, _offset)` tuples within or across hourly files. Duplicates indicate a writer dedup failure.
-- **Depth bootstrap/replay**: For each symbol, verify that every depth diff sequence is anchored by a preceding `depth_snapshot` whose `lastUpdateId` satisfies the sync-point condition (`U <= lastUpdateId+1 && u >= lastUpdateId+1`). Replay the `pu` chain from that anchor and flag any break. This proves the archived depth data can reconstruct a valid order book. **Note**: This check requires parsing `raw_text` for `depth` and `depth_snapshot` records to extract `U`, `u`, `pu`, and `lastUpdateId`. This is the one place the verify CLI must parse `raw_text`, which is an exception to the general "consumers parse it themselves" guidance.
+- **Depth bootstrap/replay**: For each symbol, verify that every depth diff sequence is anchored by a preceding `depth_snapshot` whose `lastUpdateId` satisfies the sync-point condition (`U <= lastUpdateId+1 && u >= lastUpdateId+1`). Replay the `pu` chain from that anchor and flag any break. **Exception:** If a sequence break is bounded by a documented `type: "gap"` record, the verify CLI treats the break as *expected* (reporting it as a known gap, not a validation failure) and resets its validation state at the subsequent snapshot. **Note**: This check requires parsing `raw_text` for `depth` and `depth_snapshot` records to extract `U`, `u`, `pu`, and `lastUpdateId`. This is the one place the verify CLI must parse `raw_text`, which is an exception to the general "consumers parse it themselves" guidance.
 - **Persisted gap events**: Scan for `"type": "gap"` records in the archive. Report each gap with its `reason`, `symbol`, `stream`, and time window. No gap record should overlap with data records claiming to cover the same time range (i.e., a gap means data is genuinely missing, not just flagged).
 - No missing hours (where data was expected based on stream activity and no gap record explains the absence)
 
@@ -805,8 +805,7 @@ steady state                                |
   - Buffer reaches size threshold (e.g., 10,000 messages or 10MB)
   - Flush timer expires (e.g., every 30 seconds)
   - Hour boundary triggers rotation
-- Flushing is sequential per file to prevent interleaved writes
-- Kafka offsets are committed only after successful disk flush
+- **Global Atomic Flush:** Because Kafka consumer offsets are global per topic/partition, the Writer cannot flush files individually. It must flush *all* active buffers across all files concurrently, perform an `fsync`, record the high-water offsets to the local SQLite DB, and *then* commit Kafka offsets. This ensures a mid-flush crash cannot result in torn/non-contiguous state.
 
 ### 8.4 File Rotator
 
@@ -863,7 +862,7 @@ Key principle: **never silently lose data**. Every failure, gap, and anomaly is 
 | `collector_snapshots_taken_total` | counter | exchange, symbol | Successful REST snapshots |
 | `collector_snapshots_failed_total` | counter | exchange, symbol | Failed snapshot attempts |
 | `collector_ntp_drift_ms` | gauge | — | Estimated NTP clock drift |
-| `collector_producer_buffer_size` | gauge | exchange | In-memory buffer size (messages) when Redpanda unavailable. The buffer is global per exchange (single `aiokafka` producer), so per-symbol breakdown is not available on this gauge — use `collector_messages_dropped_total` (which has symbol/stream labels) to identify which streams are affected during overflow. |
+| `collector_producer_buffer_size` | gauge | exchange | In-memory buffer size (messages) when Redpanda unavailable. The buffer is global per exchange (single `confluent_kafka` producer), so per-symbol breakdown is not available on this gauge — use `collector_messages_dropped_total` (which has symbol/stream labels) to identify which streams are affected during overflow. |
 | `collector_messages_dropped_total` | counter | exchange, symbol, stream | Messages dropped due to buffer overflow |
 
 ### 10.2 Writer Metrics
@@ -886,7 +885,7 @@ All metrics with `symbol` label provide per-symbol granularity for dashboard fil
 | Alert | Condition | Severity |
 |-------|-----------|----------|
 | `GapDetected` | `collector_gaps_detected_total` increases | critical |
-| `ConnectionLost` | `collector_ws_connections_active == 0` for 30s | critical |
+| `ConnectionLost` | `collector_ws_connections_active < 2` (expected number of sockets) for 30s | critical |
 | `WriterLagging` | `writer_consumer_lag > 1000` for 2min | warning |
 | `WriterLagCritical` | `writer_consumer_lag > 100000` (approx 5min, throughput-dependent) | critical |
 | `SnapshotsFailing` | `collector_snapshots_failed_total` increases 3x in 15min | warning |
@@ -919,7 +918,7 @@ Pre-built dashboard (`infra/grafana/dashboards/cryptolake.json`) with panels:
 ```yaml
 services:
   redpanda:
-    image: redpandadata/redpanda
+    image: redpandadata/redpanda:v24.1.2
     # Single-node, developer mode
     # Kafka API on 9092 (internal), admin on 9644 (internal only)
     ports:
@@ -934,12 +933,23 @@ services:
     volumes:
       - redpanda_data:/var/lib/redpanda/data
 
+  redpanda-init:
+    image: redpandadata/redpanda:v24.1.2:v24.1.2
+    networks: [cryptolake_internal]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    command: >
+      bash -c "
+      rpk topic create binance.trades binance.depth binance.depth_snapshot binance.bookticker binance.funding_rate binance.liquidations binance.open_interest -c retention.ms=172800000 --brokers redpanda:9092
+      "
+
   collector:
     build:
       dockerfile: Dockerfile.collector
     depends_on:
-      redpanda:
-        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
     networks: [cryptolake_internal, collector_egress]
     volumes:
       - ./config:/app/config:ro
@@ -959,8 +969,8 @@ services:
     build:
       dockerfile: Dockerfile.writer
     depends_on:
-      redpanda:
-        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
     networks: [cryptolake_internal]
     volumes:
       - ./config:/app/config:ro
@@ -978,14 +988,14 @@ services:
         max-file: "5"
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:v2.51.0
     networks: [cryptolake_internal]
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:11.0.0
     ports:
       - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
     networks: [cryptolake_internal]
@@ -997,7 +1007,7 @@ services:
     depends_on: [prometheus]
 
   alertmanager:
-    image: prom/alertmanager
+    image: prom/alertmanager:v0.27.0
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --config.expand-env
@@ -1028,7 +1038,7 @@ All custom services (collector, writer) are designed for Kubernetes:
 
 - **Externalized config**: YAML file + environment variable overrides
 - **Stateless collector**: No local state beyond in-memory buffers. Restartable at any time.
-- **Writer state**: Consumer offset stored in Redpanda. File writes go to external volume. Restartable.
+- **Writer state**: Highly stateful. Depends on the external volume (`/data`) not just for archive files, but for the SQLite dedup state DB. Pod failover must attach the same PersistentVolumeClaim (PVC).
 - **Resource limits**: Configurable CPU/memory limits per service
 - **Logging**: Structured JSON to stdout. Docker/K8s log drivers handle collection.
 
@@ -1370,8 +1380,8 @@ A single 4-core VPS with 4-8 GB RAM and a 500 GB volume handles this comfortably
 
 | Signal | Threshold | Action |
 |---|---|---|
-| Symbols count | > 50 | Add second `/ws/market` connection |
-| Symbols count | > 300 | Add second `/ws/public` connection |
+| Symbols count | > 50 | CPU bottleneck reached. Split Collector into multiple containers (e.g., `collector-1` handles A-M, `collector-2` handles N-Z). |
+| Symbols count | > 300 | Add second `/ws/public` connection per container (Binance connection limit) |
 | REST rate weight | > 1500/min sustained | Implement shared token-bucket rate limiter |
 | Compressed data/day | > 10 GB | Prioritize building external Archiver |
 | Writer consumer lag | > 10 min sustained | Profile I/O, consider faster disk or parallel flushing |
@@ -1379,25 +1389,7 @@ A single 4-core VPS with 4-8 GB RAM and a 500 GB volume handles this comfortably
 
 ---
 
-## Appendix A. Acceptance Traceability
-
-This table links the acceptance criteria to the implementation plan tasks and primary validation points so reviewers can audit coverage quickly.
-
-| Acceptance Criterion | Primary Build Tasks in Plan | Primary Verification |
-|----------------------|-----------------------------|----------------------|
-| `AC-1` End-to-end data collection | Tasks 4, 10, 15, 21, 23, 25, 29 | E2E compose run, archive file existence, envelope schema validation |
-| `AC-2` Data integrity verification | Tasks 18, 19, 21, 22, 31 | `cryptolake verify`, checksum sidecars, duplicate broker-coordinate scan |
-| `AC-3` Order book reconstruction | Tasks 12, 13, 15, 22 | Depth bootstrap/replay check in verify CLI, depth chaos scenario |
-| `AC-4` Automatic reconnection and recovery | Tasks 11, 12, 14, 15, 30 | WebSocket disconnect drill, gap records, reconnect metrics |
-| `AC-5` Writer crash resilience | Tasks 19, 21, 27, 30 | Writer restart drill, lag catch-up, archive offset comparison |
-| `AC-6` Observability operational | Tasks 8, 16, 23, 24, 29 | Prometheus scrape success, Grafana dashboard load, Alertmanager webhook firing |
-| `AC-7` Storage organization | Tasks 18, 21, 28 | File path assertions, lowercase naming checks, no empty archive files |
-| `AC-8` Configuration-driven behavior | Tasks 3, 6, 13, 15, 25 | Config unit tests, disabled-stream behavior, per-symbol snapshot overrides |
-| `AC-9` Rate limit compliance | Tasks 13, 15, 24 | Staggered poll scheduling, 429 backoff behavior, metrics/alert review |
-| `AC-10` Graceful shutdown | Tasks 14, 15, 21, 23, 29 | SIGTERM shutdown drill, final flush and offset commit verification |
-| `AC-11` Writer deduplication guarantee | Tasks 19, 21, 22, 30 | Crash-after-flush chaos test, duplicate offset check in verify CLI |
-
-## Appendix B. Architectural Decision Log
+## Appendix A. Architectural Decision Log
 
 | ID | Decision | Alternatives Considered | Why This Decision Stands |
 |----|----------|-------------------------|--------------------------|
@@ -1408,11 +1400,11 @@ This table links the acceptance criteria to the implementation plan tasks and pr
 | `ADR-005` | Make the writer responsible for broker-coordinate stamping and deduplication | collector-stamped broker metadata, consumer-side dedup downstream | Broker offsets are only authoritative at consume time; centralizing dedup in the writer keeps the archive contract clean for all downstream consumers. |
 | `ADR-006` | Use periodic REST polling for `depth_snapshot` and `open_interest` | WebSocket-only collection, derived snapshots | Binance exposes these data shapes naturally via REST; polling keeps implementation simple and verification explicit. |
 
-## Appendix C. Operator Runbook
+## Appendix B. Operator Runbook
 
 This appendix is a v1 operator quick-reference, not a full production SRE runbook.
 
-### C.1 Startup Checks
+### B.1 Startup Checks
 
 1. Confirm the stack renders cleanly: `docker compose config`
 2. Start services: `docker compose up -d`
@@ -1420,7 +1412,7 @@ This appendix is a v1 operator quick-reference, not a full production SRE runboo
 4. Tail startup logs for the custom services: `docker compose logs collector writer --tail=100`
 5. Confirm archives are being created after traffic arrives: `docker compose exec writer find /data -type f | head`
 
-### C.2 Expected Shutdown Behavior
+### B.2 Expected Shutdown Behavior
 
 When `docker compose down` is issued, expect:
 - collector to stop accepting new exchange messages and drain its producer buffer
@@ -1435,7 +1427,7 @@ docker compose logs writer --tail=100
 docker compose exec writer python -m cli.verify --date "$(date -u +%Y-%m-%d)" --base-dir /data --full
 ```
 
-### C.3 Disk-Full Response
+### B.3 Disk-Full Response
 
 1. Check current usage in Grafana or via `docker compose exec writer df -h /data`
 2. If usage exceeds 95%, expect the writer to pause consumption while Redpanda retains backlog
@@ -1443,14 +1435,14 @@ docker compose exec writer python -m cli.verify --date "$(date -u +%Y-%m-%d)" --
 4. Confirm lag begins decreasing after remediation
 5. Run `cryptolake verify` for the affected date to confirm archive integrity after recovery
 
-### C.4 Validate a Gap Record
+### B.4 Validate a Gap Record
 
 1. Run `docker compose exec writer python -m cli.verify --date <YYYY-MM-DD> --base-dir /data --full`
 2. Confirm the reported gap includes `symbol`, `stream`, `reason`, `gap_start_ts`, and `gap_end_ts`
 3. If needed, decompress the affected hourly file and inspect the `type: "gap"` line directly
 4. Correlate the gap window with Prometheus/Grafana metrics and container logs
 
-### C.5 Recover Unsealed Files
+### B.5 Recover Unsealed Files
 
 On startup, the writer automatically scans for `.jsonl.zst` files without `.sha256` sidecars, re-reads them, restores dedup state, and seals them. If an operator suspects this path failed:
 
@@ -1459,7 +1451,7 @@ On startup, the writer automatically scans for `.jsonl.zst` files without `.sha2
 3. Restart the writer and watch for scan/seal log entries
 4. Re-run `cryptolake verify` after sealing completes
 
-### C.6 Rotate Secrets
+### B.6 Rotate Secrets
 
 For v1, the relevant secrets are `GF_SECURITY_ADMIN_PASSWORD` and `WEBHOOK_URL`.
 
