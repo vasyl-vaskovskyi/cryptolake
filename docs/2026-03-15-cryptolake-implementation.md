@@ -200,7 +200,6 @@ dist/
 .coverage
 htmlcov/
 .pytest_cache/
-uv.lock
 /data/
 ```
 
@@ -2091,22 +2090,6 @@ class TestDepthHandler:
         producer.produce.assert_not_called()
 
 
-class TestParseIntervalSeconds:
-    def test_minutes(self):
-        from src.collector.snapshot import parse_interval_seconds
-        assert parse_interval_seconds("5m") == 300
-        assert parse_interval_seconds("1m") == 60
-
-    def test_seconds(self):
-        from src.collector.snapshot import parse_interval_seconds
-        assert parse_interval_seconds("30s") == 30
-
-    def test_invalid(self):
-        from src.collector.snapshot import parse_interval_seconds
-        with pytest.raises(ValueError):
-            parse_interval_seconds("5h")
-
-
 class TestProducerOverflow:
     def test_buffer_error_increments_dropped(self):
         """When confluent_kafka raises BufferError, produce returns False."""
@@ -2706,8 +2689,37 @@ git commit -m "feat: stream handlers for trades, depth, bookticker, funding_rate
 
 **Files:**
 - Create: `src/collector/snapshot.py`
+- Create: `tests/unit/test_snapshot.py`
 
-- [ ] **Step 1: Implement snapshot scheduler**
+- [ ] **Step 1: Write failing tests for snapshot scheduler**
+
+`tests/unit/test_snapshot.py`:
+```python
+import pytest
+
+
+class TestParseIntervalSeconds:
+    def test_minutes(self):
+        from src.collector.snapshot import parse_interval_seconds
+        assert parse_interval_seconds("5m") == 300
+        assert parse_interval_seconds("1m") == 60
+
+    def test_seconds(self):
+        from src.collector.snapshot import parse_interval_seconds
+        assert parse_interval_seconds("30s") == 30
+
+    def test_invalid(self):
+        from src.collector.snapshot import parse_interval_seconds
+        with pytest.raises(ValueError):
+            parse_interval_seconds("5h")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/unit/test_snapshot.py -v`
+Expected: FAIL — `ModuleNotFoundError`
+
+- [ ] **Step 3: Implement snapshot scheduler**
 
 `src/collector/snapshot.py`:
 ```python
@@ -2861,10 +2873,15 @@ class SnapshotScheduler:
         self.depth_handler.set_sync_point(symbol, last_update_id)
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `uv run pytest tests/unit/test_snapshot.py -v`
+Expected: All 3 tests PASS.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/collector/snapshot.py
+git add src/collector/snapshot.py tests/unit/test_snapshot.py
 git commit -m "feat: depth snapshot scheduler with staggered polling and retry"
 ```
 
@@ -2923,6 +2940,8 @@ class WebSocketManager:
         self._seq_counters: dict[tuple[str, str], int] = {}
         self._running = False
         self._last_received_at: dict[tuple[str, str], int] = {}
+        self._consecutive_drops = 0
+        self._backpressure_threshold = 10  # consecutive drops before pausing WS reads
 
     def _next_seq(self, symbol: str, stream: str) -> int:
         key = (symbol, stream)
@@ -2994,6 +3013,19 @@ class WebSocketManager:
                 logger.info("ws_proactive_reconnect", socket=socket_name)
                 await ws.close()
                 return
+
+            # Backpressure: if producer is overwhelmed, pause WS reads
+            # This creates a clean gap window instead of silently dropping thousands of msgs
+            if self._consecutive_drops >= self._backpressure_threshold:
+                logger.warning("ws_backpressure_active", socket=socket_name,
+                               consecutive_drops=self._consecutive_drops)
+                # Wait until producer drains, polling every 100ms
+                while self._consecutive_drops >= self._backpressure_threshold and self._running:
+                    self.producer.poll(0.1)
+                    # Try a no-op produce to see if buffer has space
+                    self._consecutive_drops = 0  # reset and re-evaluate on next produce
+                    await asyncio.sleep(0.1)
+                logger.info("ws_backpressure_released", socket=socket_name)
 
             try:
                 stream_type, symbol, raw_text = self.adapter.route_stream(raw_frame)
@@ -3207,6 +3239,11 @@ class Collector:
             symbols=self.symbols,
             enabled_streams=self.enabled_streams,
         )
+        # Wire producer overflow to WS backpressure
+        self.producer._on_overflow = lambda ex, sym, st: self._on_producer_overflow()
+
+    def _on_producer_overflow(self) -> None:
+        self.ws_manager._consecutive_drops += 1
         self.snapshot_scheduler = None
         self.oi_poller = None
         self._ws_connected = False
@@ -3837,19 +3874,50 @@ class StateManager:
                 states[state.state_key] = state
         return states
 
-    async def save_states(self, states: list[FileState]) -> None:
-        """Atomically save multiple file states in a single transaction."""
-        async with self._conn.transaction():
+    async def _ensure_connected(self) -> None:
+        """Reconnect to PostgreSQL if the connection is closed or broken."""
+        import psycopg
+        try:
+            # Lightweight check — execute a no-op
             async with self._conn.cursor() as cur:
-                for state in states:
-                    await cur.execute(self.UPSERT_SQL, {
-                        "topic": state.topic,
-                        "partition": state.partition,
-                        "high_water_offset": state.high_water_offset,
-                        "file_path": state.file_path,
-                        "file_byte_size": state.file_byte_size,
-                    })
-        logger.debug("state_saved", count=len(states))
+                await cur.execute("SELECT 1")
+        except (psycopg.OperationalError, psycopg.InterfaceError, Exception):
+            logger.warning("pg_reconnecting")
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+            self._conn = await psycopg.AsyncConnection.connect(self._db_url)
+
+    async def save_states(self, states: list[FileState]) -> None:
+        """Atomically save multiple file states in a single transaction.
+
+        Retries up to 3 times on connection errors. If all retries fail,
+        raises the exception — the writer will crash and resume from PG state on restart.
+        """
+        import asyncio
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self._ensure_connected()
+                async with self._conn.transaction():
+                    async with self._conn.cursor() as cur:
+                        for state in states:
+                            await cur.execute(self.UPSERT_SQL, {
+                                "topic": state.topic,
+                                "partition": state.partition,
+                                "high_water_offset": state.high_water_offset,
+                                "file_path": state.file_path,
+                                "file_byte_size": state.file_byte_size,
+                            })
+                logger.debug("state_saved", count=len(states))
+                return
+            except Exception as e:
+                logger.warning("pg_save_failed", attempt=attempt + 1, error=str(e))
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    raise
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -4832,23 +4900,199 @@ def cli():
     """CryptoLake data verification CLI."""
 
 @cli.command()
-@click.option("--date", required=True)
-@click.option("--base-dir", default="/data")
-@click.option("--exchange", default=None)
-@click.option("--symbol", default=None)
-@click.option("--stream", default=None)
-@click.option("--full", is_flag=True)
-@click.option("--repair-checksums", is_flag=True)
+@click.option("--date", required=True, help="Date to verify (YYYY-MM-DD)")
+@click.option("--base-dir", default="/data", help="Archive base directory")
+@click.option("--exchange", default=None, help="Filter by exchange")
+@click.option("--symbol", default=None, help="Filter by symbol")
+@click.option("--stream", default=None, help="Filter by stream")
+@click.option("--full", is_flag=True, help="Full verification including cross-file dedup")
+@click.option("--repair-checksums", is_flag=True, help="Generate missing .sha256 sidecars")
 def verify(date, base_dir, exchange, symbol, stream, full, repair_checksums):
     """Verify archive integrity for a date."""
-    # Walks base_dir/**/{date}/hour-*.jsonl.zst, runs all checks, reports errors/gaps
+    base = Path(base_dir)
+    all_errors: list[str] = []
+    all_gaps: list[dict] = []
+    all_envelopes: list[dict] = []
+
+    # Find all .jsonl.zst files for the date
+    files = sorted(base.rglob(f"*/{date}/hour-*.jsonl.zst"))
+    if not files:
+        click.echo(f"No archive files found for date {date} in {base_dir}")
+        return
+
+    for data_path in files:
+        parts = data_path.relative_to(base).parts
+        if len(parts) < 4:
+            continue
+        file_exchange, file_symbol, file_stream = parts[0], parts[1], parts[2]
+        if exchange and file_exchange != exchange:
+            continue
+        if symbol and file_symbol != symbol:
+            continue
+        if stream and file_stream != stream:
+            continue
+
+        click.echo(f"Verifying: {data_path.relative_to(base)}")
+
+        # 1. Checksum
+        sc = Path(str(data_path) + ".sha256")
+        if repair_checksums and not sc.exists():
+            from src.writer.file_rotator import write_sha256_sidecar
+            write_sha256_sidecar(data_path, sc)
+            click.echo(f"  Repaired: {sc.name}")
+        checksum_errors = verify_checksum(data_path, sc)
+        all_errors.extend(checksum_errors)
+
+        # 2. Decompress
+        try:
+            envelopes = decompress_and_parse(data_path)
+        except Exception as e:
+            all_errors.append(f"Decompression failed: {data_path} - {e}")
+            continue
+
+        # 3. Envelope validation
+        all_errors.extend(verify_envelopes(envelopes))
+
+        # 4. Intra-file duplicate offsets
+        all_errors.extend(check_duplicate_offsets(envelopes))
+
+        # 5. Gap reporting
+        all_gaps.extend(report_gaps(envelopes))
+
+        if full:
+            all_envelopes.extend(envelopes)
+
+    # Cross-file dedup check
+    if full and all_envelopes:
+        all_errors.extend(check_duplicate_offsets(all_envelopes))
+
+    # Depth replay verification (when --full)
+    if full and all_envelopes:
+        depth_envs = [e for e in all_envelopes if e.get("stream") == "depth" and e.get("type") == "data"]
+        snap_envs = [e for e in all_envelopes if e.get("stream") == "depth_snapshot" and e.get("type") == "data"]
+        gap_envs = [e for e in all_envelopes if e.get("type") == "gap"]
+        all_errors.extend(verify_depth_replay(depth_envs, snap_envs, gap_envs))
+
+    # Report
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Verification complete for {date}")
+    click.echo(f"Files checked: {len(files)}")
+    if all_errors:
+        click.echo(f"\nERRORS ({len(all_errors)}):")
+        for err in all_errors:
+            click.echo(f"  - {err}")
+    else:
+        click.echo("Errors: 0")
+    if all_gaps:
+        click.echo(f"\nGAPS ({len(all_gaps)}):")
+        for gap in all_gaps:
+            click.echo(f"  - {gap.get('symbol')}/{gap.get('stream')}: "
+                       f"{gap.get('reason')} ({gap.get('detail', '')})")
+    else:
+        click.echo("Gaps: 0")
+    if all_errors:
+        raise SystemExit(1)
+
 
 @cli.command()
-@click.option("--date", required=True)
-@click.option("--base-dir", default="/data")
-@click.option("--exchange", default="binance")
+@click.option("--date", required=True, help="Date (YYYY-MM-DD)")
+@click.option("--base-dir", default="/data", help="Archive base directory")
+@click.option("--exchange", default="binance", help="Exchange name")
 def manifest(date, base_dir, exchange):
-    """Generate manifest.json for a date."""
+    """Generate manifest.json for a date directory."""
+    base = Path(base_dir)
+    m = generate_manifest(base, exchange, date)
+    # Write to each date directory that has data
+    exchange_dir = base / exchange
+    if exchange_dir.exists():
+        for symbol_dir in exchange_dir.iterdir():
+            if not symbol_dir.is_dir():
+                continue
+            for stream_dir in symbol_dir.iterdir():
+                date_dir = stream_dir / date
+                if date_dir.exists():
+                    manifest_path = date_dir / "manifest.json"
+                    manifest_path.write_text(json.dumps(m, indent=2) + "\n")
+                    click.echo(f"Written: {manifest_path}")
+    click.echo(json.dumps(m, indent=2))
+
+
+def generate_manifest(base_dir: Path, exchange: str, date: str) -> dict:
+    """Generate a manifest summarizing archive contents for a date."""
+    manifest = {"date": date, "exchange": exchange, "symbols": {}}
+    exchange_dir = base_dir / exchange
+    if not exchange_dir.exists():
+        return manifest
+    for symbol_dir in sorted(exchange_dir.iterdir()):
+        if not symbol_dir.is_dir():
+            continue
+        symbol = symbol_dir.name
+        manifest["symbols"][symbol] = {"streams": {}}
+        for stream_dir in sorted(symbol_dir.iterdir()):
+            if not stream_dir.is_dir():
+                continue
+            date_dir = stream_dir / date
+            if not date_dir.exists():
+                continue
+            hours, record_count, gaps_list = [], 0, []
+            for f in sorted(date_dir.glob("hour-*.jsonl.zst")):
+                hour_str = f.name.split(".")[0].replace("hour-", "").split(".")[0]
+                try:
+                    hours.append(int(hour_str))
+                except ValueError:
+                    pass
+                try:
+                    envs = decompress_and_parse(f)
+                    record_count += len(envs)
+                    for env in envs:
+                        if env.get("type") == "gap":
+                            gaps_list.append({"symbol": env.get("symbol"),
+                                "reason": env.get("reason"),
+                                "gap_start_ts": env.get("gap_start_ts"),
+                                "gap_end_ts": env.get("gap_end_ts")})
+                except Exception:
+                    pass
+            if hours:
+                manifest["symbols"][symbol]["streams"][stream_dir.name] = {
+                    "hours": sorted(set(hours)),
+                    "record_count": record_count,
+                    "gaps": gaps_list,
+                }
+    return manifest
+
+
+def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> list[str]:
+    """Verify depth diffs are anchored by snapshots with valid pu chains.
+    Gap records excuse breaks in the chain."""
+    errors = []
+    if not depth_envelopes:
+        return errors
+    gap_windows = [(g["gap_start_ts"], g["gap_end_ts"]) for g in gap_envelopes]
+    def _in_gap(received_at):
+        return any(s <= received_at <= e for s, e in gap_windows)
+    depth_sorted = sorted(depth_envelopes, key=lambda e: e["_offset"])
+    snap_sorted = sorted(snapshot_envelopes, key=lambda e: e["_offset"])
+    snap_idx, synced, last_u = 0, False, None
+    for env in depth_sorted:
+        raw = orjson.loads(env["raw_text"])
+        U, u, pu = raw.get("U", 0), raw.get("u", 0), raw.get("pu", 0)
+        while snap_idx < len(snap_sorted) and snap_sorted[snap_idx]["_offset"] < env["_offset"]:
+            synced, last_u = True, None
+            snap_idx += 1
+        if not synced:
+            if not _in_gap(env["received_at"]):
+                errors.append(f"Depth diff at offset {env['_offset']} has no preceding snapshot")
+            continue
+        if last_u is None:
+            last_u = u
+            continue
+        if pu != last_u:
+            if not _in_gap(env["received_at"]):
+                errors.append(f"pu chain break at offset {env['_offset']}: expected pu={last_u}, got pu={pu}")
+            last_u = u
+        else:
+            last_u = u
+    return errors
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
