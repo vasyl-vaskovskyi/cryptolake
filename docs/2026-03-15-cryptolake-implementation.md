@@ -174,6 +174,9 @@ cryptolake = "src.cli.verify:cli"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -2046,7 +2049,8 @@ class TestTradesHandler:
 
 class TestDepthHandler:
     @pytest.mark.asyncio
-    async def test_rejects_before_sync(self):
+    async def test_buffers_before_sync(self):
+        """Diffs arriving before sync point should be buffered, not dropped."""
         from src.collector.streams.depth import DepthHandler
         from src.exchanges.binance import BinanceAdapter
 
@@ -2058,6 +2062,8 @@ class TestDepthHandler:
         raw = '{"e":"depthUpdate","E":100,"s":"BTCUSDT","U":1,"u":2,"pu":0,"b":[],"a":[]}'
         await handler.handle("btcusdt", raw, 100, 0)
         producer.produce.assert_not_called()
+        # But the diff should be in the pending buffer
+        assert len(handler._pending_diffs["btcusdt"]) == 1
 
     @pytest.mark.asyncio
     async def test_accepts_after_sync(self):
@@ -2089,10 +2095,57 @@ class TestDepthHandler:
         await handler.handle("btcusdt", raw, 100, 0)
         producer.produce.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_pending_diffs_replayed_after_sync(self):
+        """Buffered diffs should be replayed when sync point is set."""
+        from src.collector.streams.depth import DepthHandler
+        from src.exchanges.binance import BinanceAdapter
+
+        producer = MagicMock()
+        producer.produce = MagicMock(return_value=True)
+        adapter = BinanceAdapter(ws_base="wss://x", rest_base="https://x")
+        handler = DepthHandler("binance", "session_1", producer, adapter, ["btcusdt"])
+
+        # Buffer diffs while unsynced
+        raw1 = '{"e":"depthUpdate","E":100,"s":"BTCUSDT","U":999,"u":1002,"pu":998,"b":[],"a":[]}'
+        raw2 = '{"e":"depthUpdate","E":101,"s":"BTCUSDT","U":1003,"u":1005,"pu":1002,"b":[],"a":[]}'
+        await handler.handle("btcusdt", raw1, 100, 0)
+        await handler.handle("btcusdt", raw2, 101, 1)
+        assert producer.produce.call_count == 0
+        assert len(handler._pending_diffs["btcusdt"]) == 2
+
+        # Sync point triggers replay
+        handler.set_sync_point("btcusdt", 1000)
+        # First diff syncs (U<=1001, u>=1001), second chains (pu==1002)
+        assert producer.produce.call_count == 2
+        assert len(handler._pending_diffs["btcusdt"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_pu_chain_break_calls_callback(self):
+        """pu_chain_break should trigger resync callback."""
+        from src.collector.streams.depth import DepthHandler
+        from src.exchanges.binance import BinanceAdapter
+
+        producer = MagicMock()
+        producer.produce = MagicMock(return_value=True)
+        adapter = BinanceAdapter(ws_base="wss://x", rest_base="https://x")
+        resync_called = []
+        handler = DepthHandler("binance", "session_1", producer, adapter, ["btcusdt"],
+                               on_pu_chain_break=lambda sym: resync_called.append(sym))
+        handler.set_sync_point("btcusdt", 1000)
+
+        # First valid diff
+        raw1 = '{"e":"depthUpdate","E":100,"s":"BTCUSDT","U":999,"u":1002,"pu":998,"b":[],"a":[]}'
+        await handler.handle("btcusdt", raw1, 100, 0)
+        # Broken chain
+        raw2 = '{"e":"depthUpdate","E":101,"s":"BTCUSDT","U":1010,"u":1015,"pu":1008,"b":[],"a":[]}'
+        await handler.handle("btcusdt", raw2, 101, 1)
+        assert resync_called == ["btcusdt"]
+
 
 class TestProducerOverflow:
     def test_buffer_error_increments_dropped(self):
-        """When confluent_kafka raises BufferError, produce returns False."""
+        """When confluent_kafka raises BufferError, produce returns False and tracks overflow window."""
         from unittest.mock import patch, MagicMock
         from src.collector.producer import CryptoLakeProducer
         from src.common.envelope import create_data_envelope
@@ -2104,8 +2157,11 @@ class TestProducerOverflow:
 
             producer = CryptoLakeProducer.__new__(CryptoLakeProducer)
             producer.exchange = "binance"
+            producer.collector_session_id = "s"
             producer._producer = mock_instance
             producer._on_overflow = None
+            producer._overflow_start = {}
+            producer._overflow_seq = 0
 
             env = create_data_envelope(
                 exchange="binance", symbol="btcusdt", stream="trades",
@@ -2114,6 +2170,8 @@ class TestProducerOverflow:
             )
             result = producer.produce(env)
             assert result is False
+            # Overflow window should be tracked
+            assert ("btcusdt", "trades") in producer._overflow_start
 ```
 
 - [ ] **Step 2: Run tests to verify they pass**
@@ -2243,17 +2301,24 @@ _DEFAULT_OTHER_CAP = 10_000
 
 
 class CryptoLakeProducer:
-    """Wraps confluent_kafka.Producer with envelope routing and overflow protection."""
+    """Wraps confluent_kafka.Producer with envelope routing and overflow protection.
+
+    Tracks overflow windows per (symbol, stream). When the first BufferError occurs,
+    records the start timestamp. When produce succeeds after an overflow period,
+    emits a buffer_overflow gap record covering the dropped interval.
+    """
 
     def __init__(
         self,
         brokers: list[str],
         exchange: str,
+        collector_session_id: str = "",
         max_buffer: int = 100_000,
         buffer_caps: dict[str, int] | None = None,
         on_overflow: Callable[[str, str, str], None] | None = None,
     ):
         self.exchange = exchange
+        self.collector_session_id = collector_session_id
         self.max_buffer = max_buffer
         self.buffer_caps = buffer_caps or _DEFAULT_BUFFER_CAPS
         self.other_cap = _DEFAULT_OTHER_CAP
@@ -2261,6 +2326,9 @@ class CryptoLakeProducer:
         self._buffer_counts: dict[str, int] = {}
         self._total_buffered = 0
         self._lock = threading.Lock()
+        # Overflow window tracking: {(symbol, stream): start_ts_ns}
+        self._overflow_start: dict[tuple[str, str], int] = {}
+        self._overflow_seq: int = 0
 
         from confluent_kafka import Producer as KafkaProducer
 
@@ -2276,7 +2344,9 @@ class CryptoLakeProducer:
         """Produce an envelope to the appropriate Redpanda topic.
 
         Returns True if produced, False if dropped due to overflow.
+        On recovery from overflow, emits a buffer_overflow gap record.
         """
+        import time as _time
         stream = envelope["stream"]
         symbol = envelope["symbol"]
         topic = f"{self.exchange}.{stream}"
@@ -2294,14 +2364,53 @@ class CryptoLakeProducer:
             collector_metrics.messages_produced_total.labels(
                 exchange=self.exchange, symbol=symbol, stream=stream,
             ).inc()
+
+            # Check if we're recovering from overflow for this (symbol, stream)
+            overflow_key = (symbol, stream)
+            if overflow_key in self._overflow_start:
+                self._emit_overflow_gap(symbol, stream, self._overflow_start.pop(overflow_key))
+
             return True
         except BufferError:
             collector_metrics.messages_dropped_total.labels(
                 exchange=self.exchange, symbol=symbol, stream=stream,
             ).inc()
+            # Track overflow window start
+            overflow_key = (symbol, stream)
+            if overflow_key not in self._overflow_start:
+                self._overflow_start[overflow_key] = _time.time_ns()
             if self._on_overflow:
                 self._on_overflow(self.exchange, symbol, stream)
             return False
+
+    def _emit_overflow_gap(self, symbol: str, stream: str, start_ts: int) -> None:
+        """Emit a buffer_overflow gap record when recovering from overflow."""
+        import time as _time
+        from src.common.envelope import create_gap_envelope
+        gap = create_gap_envelope(
+            exchange=self.exchange,
+            symbol=symbol,
+            stream=stream,
+            collector_session_id=self.collector_session_id,
+            session_seq=self._overflow_seq,
+            gap_start_ts=start_ts,
+            gap_end_ts=_time.time_ns(),
+            reason="buffer_overflow",
+            detail=f"Producer buffer was full; messages dropped for {stream}/{symbol}",
+        )
+        self._overflow_seq += 1
+        # Produce the gap record itself (best-effort — buffer just recovered so should succeed)
+        topic = f"{self.exchange}.{stream}"
+        try:
+            self._producer.produce(
+                topic=topic,
+                key=symbol.encode(),
+                value=serialize_envelope(gap),
+                on_delivery=self._on_delivery,
+            )
+            logger.info("buffer_overflow_gap_emitted", symbol=symbol, stream=stream)
+        except BufferError:
+            logger.error("buffer_overflow_gap_emit_failed", symbol=symbol, stream=stream)
 
     def flush(self, timeout: float = 10.0) -> int:
         return self._producer.flush(timeout)
@@ -2395,6 +2504,8 @@ class TradesHandler(StreamHandler):
 ```python
 from __future__ import annotations
 
+from typing import Callable
+
 import structlog
 
 from src.collector.gap_detector import DepthGapDetector
@@ -2407,6 +2518,9 @@ from src.exchanges.binance import BinanceAdapter
 logger = structlog.get_logger()
 
 
+_MAX_PENDING_DIFFS = 5000  # max buffered diffs per symbol during resync
+
+
 class DepthHandler(StreamHandler):
     def __init__(
         self,
@@ -2415,6 +2529,7 @@ class DepthHandler(StreamHandler):
         producer: CryptoLakeProducer,
         adapter: BinanceAdapter,
         symbols: list[str],
+        on_pu_chain_break: Callable[[str], None] | None = None,
     ):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
@@ -2423,7 +2538,10 @@ class DepthHandler(StreamHandler):
         self.detectors: dict[str, DepthGapDetector] = {
             s: DepthGapDetector(symbol=s) for s in symbols
         }
-        self._gap_seq_counter: dict[str, int] = {}
+        self._pending_diffs: dict[str, list[tuple[str, int | None, int]]] = {
+            s: [] for s in symbols
+        }
+        self._on_pu_chain_break = on_pu_chain_break
 
     async def handle(self, symbol: str, raw_text: str, exchange_ts: int | None, session_seq: int) -> None:
         detector = self.detectors.get(symbol)
@@ -2443,11 +2561,18 @@ class DepthHandler(StreamHandler):
             collector_metrics.gaps_detected_total.labels(
                 exchange=self.exchange, symbol=symbol, stream="depth",
             ).inc()
-            # Gap record will be emitted by the connection manager during resync
+            # Trigger resync via callback (wired by Collector to WebSocketManager._depth_resync)
+            if self._on_pu_chain_break:
+                self._on_pu_chain_break(symbol)
             return
 
         if not result.valid:
-            # Not synced yet or no sync diff found — buffer for resync
+            # Not synced yet — buffer live diffs for replay after snapshot arrives (spec 7.2 step 2)
+            pending = self._pending_diffs.get(symbol)
+            if pending is not None and len(pending) < _MAX_PENDING_DIFFS:
+                pending.append((raw_text, exchange_ts, session_seq))
+            else:
+                logger.warning("depth_pending_buffer_full", symbol=symbol)
             return
 
         envelope = create_data_envelope(
@@ -2462,14 +2587,43 @@ class DepthHandler(StreamHandler):
         self.producer.produce(envelope)
 
     def set_sync_point(self, symbol: str, last_update_id: int) -> None:
+        """Set sync point from snapshot and replay buffered diffs (spec 7.2 steps 4-6)."""
         detector = self.detectors.get(symbol)
-        if detector:
-            detector.set_sync_point(last_update_id)
+        if detector is None:
+            return
+        detector.set_sync_point(last_update_id)
+
+        # Replay buffered diffs
+        pending = self._pending_diffs.get(symbol, [])
+        self._pending_diffs[symbol] = []
+        replayed = 0
+        for raw_text, exchange_ts, session_seq in pending:
+            U, u, pu = self.adapter.parse_depth_update_ids(raw_text)
+            result = detector.validate_diff(U=U, u=u, pu=pu)
+            if result.stale:
+                continue
+            if not result.valid:
+                continue
+            envelope = create_data_envelope(
+                exchange=self.exchange,
+                symbol=symbol,
+                stream="depth",
+                raw_text=raw_text,
+                exchange_ts=exchange_ts or 0,
+                collector_session_id=self.collector_session_id,
+                session_seq=session_seq,
+            )
+            self.producer.produce(envelope)
+            replayed += 1
+        if replayed > 0:
+            logger.info("depth_pending_replayed", symbol=symbol, replayed=replayed,
+                        total_buffered=len(pending))
 
     def reset(self, symbol: str) -> None:
         detector = self.detectors.get(symbol)
         if detector:
             detector.reset()
+        # Keep pending diffs — they will be replayed after next sync point
 ```
 
 - [ ] **Step 4: Implement remaining handlers (bookticker, funding_rate, liquidations)**
@@ -3212,6 +3366,7 @@ class Collector:
         self.producer = CryptoLakeProducer(
             brokers=self.config.redpanda.brokers,
             exchange="binance",
+            collector_session_id=self.session_id,
         )
         self.enabled_streams = self.exchange_cfg.get_enabled_streams()
         self.symbols = self.exchange_cfg.symbols
@@ -3222,7 +3377,8 @@ class Collector:
             self.handlers["trades"] = TradesHandler("binance", self.session_id, self.producer)
         if "depth" in self.enabled_streams:
             self.handlers["depth"] = DepthHandler(
-                "binance", self.session_id, self.producer, self.adapter, self.symbols)
+                "binance", self.session_id, self.producer, self.adapter, self.symbols,
+                on_pu_chain_break=self._on_pu_chain_break)
         if "bookticker" in self.enabled_streams:
             self.handlers["bookticker"] = BookTickerHandler("binance", self.session_id, self.producer)
         if "funding_rate" in self.enabled_streams:
@@ -3244,10 +3400,12 @@ class Collector:
 
     def _on_producer_overflow(self) -> None:
         self.ws_manager._consecutive_drops += 1
-        self.snapshot_scheduler = None
-        self.oi_poller = None
-        self._ws_connected = False
-        self._producer_connected = False
+
+    def _on_pu_chain_break(self, symbol: str) -> None:
+        """Callback from DepthHandler when pu chain breaks — triggers depth resync."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.ws_manager._depth_resync(symbol))
 
     async def start(self) -> None:
         logger.info("collector_starting", session_id=self.session_id,
@@ -3751,9 +3909,22 @@ class TestWriterState:
         state = FileState(
             topic="binance.trades", partition=0,
             high_water_offset=100,
-            file_path="/data/x", file_byte_size=0,
+            file_path="/data/binance/btcusdt/trades/2026-03-11/hour-14.jsonl.zst",
+            file_byte_size=0,
         )
-        assert state.state_key == ("binance.trades", 0)
+        assert state.state_key == ("binance.trades", 0, "/data/binance/btcusdt/trades/2026-03-11/hour-14.jsonl.zst")
+
+    def test_multiple_files_same_topic_partition(self):
+        """Multiple files for same (topic, partition) must have distinct state keys."""
+        from src.writer.state_manager import FileState
+
+        s1 = FileState(topic="binance.trades", partition=0, high_water_offset=100,
+                       file_path="/data/binance/btcusdt/trades/2026-03-11/hour-14.jsonl.zst",
+                       file_byte_size=1000)
+        s2 = FileState(topic="binance.trades", partition=0, high_water_offset=200,
+                       file_path="/data/binance/ethusdt/trades/2026-03-11/hour-14.jsonl.zst",
+                       file_byte_size=2000)
+        assert s1.state_key != s2.state_key
 
 
 class TestStateManagerSQL:
@@ -3766,14 +3937,17 @@ class TestStateManagerSQL:
         assert "writer_file_state" in sql
         assert "topic" in sql
         assert "partition" in sql
+        assert "file_path" in sql
         assert "high_water_offset" in sql
         assert "file_byte_size" in sql
 
-    def test_upsert_sql(self):
+    def test_upsert_sql_file_path_in_pk(self):
         from src.writer.state_manager import StateManager
 
         sql = StateManager.UPSERT_SQL
-        assert "INSERT" in sql or "ON CONFLICT" in sql
+        assert "INSERT" in sql
+        assert "ON CONFLICT" in sql
+        assert "file_path" in sql
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -3803,36 +3977,36 @@ class FileState:
     file_byte_size: int
 
     @property
-    def state_key(self) -> tuple[str, int]:
-        return (self.topic, self.partition)
+    def state_key(self) -> tuple[str, int, str]:
+        return (self.topic, self.partition, self.file_path)
 
 
 class StateManager:
     """Manages writer state in PostgreSQL for exactly-once archive semantics.
 
-    Tracks the highest flushed Kafka offset and file byte size per (topic, partition).
-    On startup, the writer uses this to truncate files and seek consumers.
+    Tracks the highest flushed Kafka offset and file byte size per (topic, partition, file_path).
+    PK includes file_path so that multiple files for the same (topic, partition) — e.g.,
+    different symbols or hours — each get independent state rows for correct truncation on restart.
     """
 
     CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS writer_file_state (
         topic TEXT NOT NULL,
         partition INTEGER NOT NULL,
-        high_water_offset BIGINT NOT NULL,
         file_path TEXT NOT NULL,
+        high_water_offset BIGINT NOT NULL,
         file_byte_size BIGINT NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (topic, partition)
+        PRIMARY KEY (topic, partition, file_path)
     );
     """
 
     UPSERT_SQL = """
-    INSERT INTO writer_file_state (topic, partition, high_water_offset, file_path, file_byte_size, updated_at)
-    VALUES (%(topic)s, %(partition)s, %(high_water_offset)s, %(file_path)s, %(file_byte_size)s, NOW())
-    ON CONFLICT (topic, partition)
+    INSERT INTO writer_file_state (topic, partition, file_path, high_water_offset, file_byte_size, updated_at)
+    VALUES (%(topic)s, %(partition)s, %(file_path)s, %(high_water_offset)s, %(file_byte_size)s, NOW())
+    ON CONFLICT (topic, partition, file_path)
     DO UPDATE SET
         high_water_offset = EXCLUDED.high_water_offset,
-        file_path = EXCLUDED.file_path,
         file_byte_size = EXCLUDED.file_byte_size,
         updated_at = NOW();
     """
@@ -3858,8 +4032,8 @@ class StateManager:
         if self._conn:
             await self._conn.close()
 
-    async def load_all_states(self) -> dict[tuple[str, int], FileState]:
-        states: dict[tuple[str, int], FileState] = {}
+    async def load_all_states(self) -> dict[tuple[str, int, str], FileState]:
+        states: dict[tuple[str, int, str], FileState] = {}
         async with self._conn.cursor() as cur:
             await cur.execute(self.LOAD_ALL_SQL)
             rows = await cur.fetchall()
@@ -3923,7 +4097,7 @@ class StateManager:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_state_manager.py -v`
-Expected: All 4 tests PASS.
+Expected: All 5 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -4040,6 +4214,7 @@ class FlushResult:
     file_path: Path
     lines: list[bytes]
     high_water_offset: int
+    partition: int
     count: int
 
 
@@ -4084,6 +4259,7 @@ class BufferManager:
 
         lines = [orjson.dumps(env) + b"\n" for env in messages]
         high_water = max(m["_offset"] for m in messages)
+        partition = messages[0]["_partition"]  # all messages in same buffer share partition
         file_path = build_file_path(
             self.base_dir, target.exchange, target.symbol,
             target.stream, target.date, target.hour,
@@ -4093,6 +4269,7 @@ class BufferManager:
             file_path=file_path,
             lines=lines,
             high_water_offset=high_water,
+            partition=partition,
             count=len(messages),
         )]
 
@@ -4275,10 +4452,12 @@ class WriterConsumer:
         self._consumer.subscribe(self.topics)
         self._running = True
 
-        self._pending_seeks = {
-            (s.topic, s.partition): s.high_water_offset + 1
-            for s in states.values()
-        }
+        # Collapse to max offset per (topic, partition) since state is now keyed per file
+        seek_map: dict[tuple[str, int], int] = {}
+        for s in states.values():
+            key = (s.topic, s.partition)
+            seek_map[key] = max(seek_map.get(key, 0), s.high_water_offset + 1)
+        self._pending_seeks = seek_map
 
     def _recover_files(self, states: dict) -> None:
         """Truncate files to PostgreSQL-recorded byte sizes on startup."""
@@ -4431,7 +4610,7 @@ class WriterConsumer:
 
             states_to_save.append(FileState(
                 topic=f"{result.target.exchange}.{result.target.stream}",
-                partition=0,
+                partition=result.partition,
                 high_water_offset=result.high_water_offset,
                 file_path=str(file_path),
                 file_byte_size=file_size,
@@ -4809,7 +4988,8 @@ class TestDepthReplay:
     def test_pu_break_with_gap_is_excused(self):
         from src.cli.verify import verify_depth_replay
         snap = self._make_snap_env(0, 1000)
-        gap = {"type": "gap", "gap_start_ts": 0, "gap_end_ts": 9999999999_000_000_000,
+        gap = {"type": "gap", "symbol": "btcusdt", "gap_start_ts": 0,
+               "gap_end_ts": 9999999999_000_000_000,
                "received_at": 1741689600_000_000_000}
         diffs = [
             self._make_depth_env(1, 999, 1002, 998),
@@ -4817,6 +4997,21 @@ class TestDepthReplay:
         ]
         errors = verify_depth_replay(diffs, [snap], [gap])
         assert errors == []
+
+    def test_multi_symbol_isolated(self):
+        """Each symbol's pu chain is validated independently."""
+        from src.cli.verify import verify_depth_replay
+        # btcusdt has valid chain
+        snap_btc = {**self._make_snap_env(0, 1000), "symbol": "btcusdt"}
+        diff_btc = {**self._make_depth_env(1, 999, 1002, 998), "symbol": "btcusdt"}
+        # ethusdt has broken chain (no snapshot)
+        diff_eth_raw = '{"e":"depthUpdate","E":100,"s":"ETHUSDT","U":500,"u":505,"pu":499,"b":[],"a":[]}'
+        diff_eth = {**_make_data_envelope(2, diff_eth_raw), "symbol": "ethusdt",
+                    "stream": "depth", "_topic": "binance.depth"}
+        errors = verify_depth_replay([diff_btc, diff_eth], [snap_btc], [])
+        # btcusdt should pass, ethusdt should fail
+        assert any("ethusdt" in e for e in errors)
+        assert not any("btcusdt" in e for e in errors)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -5063,42 +5258,63 @@ def generate_manifest(base_dir: Path, exchange: str, date: str) -> dict:
 
 def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> list[str]:
     """Verify depth diffs are anchored by snapshots with valid pu chains.
-    Gap records excuse breaks in the chain."""
+    Gap records excuse breaks in the chain.
+
+    Runs an independent pu-chain walk per symbol to avoid cross-symbol interference.
+    """
     errors = []
     if not depth_envelopes:
         return errors
-    gap_windows = [(g["gap_start_ts"], g["gap_end_ts"]) for g in gap_envelopes]
-    def _in_gap(received_at):
-        return any(s <= received_at <= e for s, e in gap_windows)
-    depth_sorted = sorted(depth_envelopes, key=lambda e: e["_offset"])
-    snap_sorted = sorted(snapshot_envelopes, key=lambda e: e["_offset"])
-    snap_idx, synced, last_u = 0, False, None
-    for env in depth_sorted:
-        raw = orjson.loads(env["raw_text"])
-        U, u, pu = raw.get("U", 0), raw.get("u", 0), raw.get("pu", 0)
-        while snap_idx < len(snap_sorted) and snap_sorted[snap_idx]["_offset"] < env["_offset"]:
-            synced, last_u = True, None
-            snap_idx += 1
-        if not synced:
-            if not _in_gap(env["received_at"]):
-                errors.append(f"Depth diff at offset {env['_offset']} has no preceding snapshot")
-            continue
-        if last_u is None:
-            last_u = u
-            continue
-        if pu != last_u:
-            if not _in_gap(env["received_at"]):
-                errors.append(f"pu chain break at offset {env['_offset']}: expected pu={last_u}, got pu={pu}")
-            last_u = u
-        else:
-            last_u = u
+
+    # Group by symbol
+    from collections import defaultdict
+    depth_by_sym: dict[str, list] = defaultdict(list)
+    snap_by_sym: dict[str, list] = defaultdict(list)
+    gap_by_sym: dict[str, list] = defaultdict(list)
+
+    for e in depth_envelopes:
+        depth_by_sym[e["symbol"]].append(e)
+    for e in snapshot_envelopes:
+        snap_by_sym[e["symbol"]].append(e)
+    for g in gap_envelopes:
+        gap_by_sym[g.get("symbol", "")].append(g)
+
+    for symbol in depth_by_sym:
+        sym_depths = sorted(depth_by_sym[symbol], key=lambda e: e["_offset"])
+        sym_snaps = sorted(snap_by_sym.get(symbol, []), key=lambda e: e["_offset"])
+        sym_gaps = gap_by_sym.get(symbol, [])
+        gap_windows = [(g["gap_start_ts"], g["gap_end_ts"]) for g in sym_gaps]
+
+        def _in_gap(received_at):
+            return any(s <= received_at <= e for s, e in gap_windows)
+
+        snap_idx, synced, last_u = 0, False, None
+        for env in sym_depths:
+            raw = orjson.loads(env["raw_text"])
+            U, u, pu = raw.get("U", 0), raw.get("u", 0), raw.get("pu", 0)
+            while snap_idx < len(sym_snaps) and sym_snaps[snap_idx]["_offset"] < env["_offset"]:
+                synced, last_u = True, None
+                snap_idx += 1
+            if not synced:
+                if not _in_gap(env["received_at"]):
+                    errors.append(f"[{symbol}] Depth diff at offset {env['_offset']} has no preceding snapshot")
+                continue
+            if last_u is None:
+                last_u = u
+                continue
+            if pu != last_u:
+                if not _in_gap(env["received_at"]):
+                    errors.append(f"[{symbol}] pu chain break at offset {env['_offset']}: expected pu={last_u}, got pu={pu}")
+                last_u = u
+            else:
+                last_u = u
     return errors
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_verify.py -v`
-Expected: All 9 tests PASS.
+Expected: All 14 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -5178,10 +5394,14 @@ FROM python:3.12.7-slim AS base
 WORKDIR /app
 RUN groupadd -r cryptolake && useradd -r -g cryptolake cryptolake
 
-COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv sync --frozen --no-dev
+# Install uv first (cacheable layer)
+RUN pip install uv
 
+# Copy dependency manifests and source (uv sync needs the project package)
+COPY pyproject.toml uv.lock ./
 COPY src/ src/
+RUN uv sync --frozen --no-dev
+
 RUN mkdir -p /data && chown cryptolake:cryptolake /data
 USER cryptolake
 EXPOSE 8000
@@ -5196,10 +5416,14 @@ FROM python:3.12.7-slim AS base
 WORKDIR /app
 RUN groupadd -r cryptolake && useradd -r -g cryptolake cryptolake
 
-COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv sync --frozen --no-dev
+# Install uv first (cacheable layer)
+RUN pip install uv
 
+# Copy dependency manifests and source (uv sync needs the project package)
+COPY pyproject.toml uv.lock ./
 COPY src/ src/
+RUN uv sync --frozen --no-dev
+
 RUN mkdir -p /data && chown cryptolake:cryptolake /data
 USER cryptolake
 EXPOSE 8001
