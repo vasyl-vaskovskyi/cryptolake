@@ -426,7 +426,7 @@ Topic naming convention: `{exchange}.{stream}` where `{stream}` matches the enve
 | `binance.liquidations` | symbol | 1 | 48h |
 | `binance.open_interest` | symbol | 1 | 48h |
 
-*Note on Topic Creation:* Relying on Kafka auto-creation is an anti-pattern as it uses cluster defaults (e.g., 7 days retention). The deployment must include a bootstrap script or init-container that uses the `rpk` CLI to explicitly create these topics with the configured 48h retention policy (`retention.ms=172800000`) before the Collector is allowed to start.
+*Note on Topic Creation:* While Kafka auto-creation is often discouraged because it uses cluster defaults (e.g., 7 days retention), we explicitly configure Redpanda's global default `log_retention_ms` to 48 hours at startup. This allows the Collector to safely auto-create topics without risking disk exhaustion, keeping the deployment architecture simple.
 
 ---
 
@@ -550,7 +550,7 @@ Verification checks:
 ### 5.10 Disaster Recovery
 
 - **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
-- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The `redpanda-init` bootstrap container MUST be re-run to recreate the topics with proper retention before the collector starts. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
+- **Redpanda volume loss:** No archive impact (data is already flushed to disk). Because Redpanda's global retention is configured via startup flags, the collector can safely auto-create topics on the next publish. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
 - **Automated Backup:** A daily automated cron job or sidecar container must execute an `rsync` or object-storage upload (`aws s3 sync`) of all sealed files (those with a `.sha256` sidecar) to cold storage. Because sealed files are immutable, backups can run safely at any time.
 
 ---
@@ -685,6 +685,8 @@ socket reconnect succeeds
     |
 emit ws_disconnect gap window
     |
+increment collector_gaps_detected_total
+    |
 reopen depth stream immediately -----> buffer live diffs
     |                                   |
     +---- fetch REST snapshot ----------+
@@ -767,11 +769,10 @@ resume normal publish path
 - **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time.
 - **Immutable Sealed Files:** Once a file has a `.sha256` sidecar, it is never reopened or mutated. If late-arriving messages belong to an already-sealed hour (e.g., during catch-up), the writer creates a spillover file (e.g., `hour-14.late-1.jsonl.zst`). Downstream consumers are responsible for merging these at read time.
 - Manual offset commit after successful flush to disk (not auto-commit). If a commit batch spans multiple buffered files, the writer flushes all currently buffered records before committing that batch.
-- On restart: resumes from last committed offset
 
 **At-least-once delivery with writer-side deduplication**: If the writer crashes after flushing to disk but before committing the Kafka offset, it will re-consume some messages on restart. The writer guarantees duplicate-free archives:
 - Every archived line carries broker coordinates `(_topic, _partition, _offset)` — the durable identity of the message (see Section 4.1.1)
-- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (SQLite in WAL mode) tracking the highest flushed `_offset` per (topic, partition). This state file **must** live on the same volume as the archive data (`/data`). On startup, the writer must **first** scan for any unsealed files (missing `.sha256`), verify/seal them, and **then** load its state file. If the state file is lost, the writer must reconstruct it by scanning the tails of the newly-sealed/latest files for each topic/partition before consuming from Redpanda.
+- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a lightweight local state file (SQLite in WAL mode) tracking the highest flushed `_offset` per (topic, partition). This state file **must** live on the same volume as the archive data (`/data`). On startup, the writer reads its SQLite state file to establish exactly where it left off, and seeks the Kafka consumer to those exact coordinates. (If the SQLite file is completely lost due to disk failure, see Disaster Recovery 5.10).
 - **The archive is the contract**: downstream consumers (backtesting, analytics) can trust that archived files contain no duplicate broker records. Deduplication is the writer's responsibility, not pushed to consumers.
 - `cryptolake verify` validates this guarantee by checking for duplicate `(_topic, _partition, _offset)` tuples (see Section 5.7)
 
@@ -789,9 +790,9 @@ CRASH HERE? -------- yes ----------------------+
     no                                         v
     |                                   restart writer
 commit Kafka offsets                           |
-    |                                   scan active/unsealed or latest sealed file
+    |                                   load high-water offsets from SQLite DB
 steady state                                |
-                                            re-consume from last committed offset
+                                            seek Kafka consumer to SQLite offset
                                             |
                                             skip already-archived broker offsets
                                             |
@@ -805,7 +806,8 @@ steady state                                |
   - Buffer reaches size threshold (e.g., 10,000 messages or 10MB)
   - Flush timer expires (e.g., every 30 seconds)
   - Hour boundary triggers rotation
-- **Flush Atomicity & Write-Ahead:** Plain multi-file writes are not atomic. Because offsets from one topic can land in different target files, a mid-flush crash can persist non-contiguous state. To guarantee exact at-least-once deduplication without data loss, the writer MUST use a **Write-Ahead Log (WAL)** or temporary staging files. The flush sequence is: 1) flush buffers to temporary `.tmp` files, 2) fsync, 3) record offsets to SQLite, 4) atomically rename `.tmp` to `.zst`, 5) commit Kafka offsets. If a crash occurs, any orphaned `.tmp` files are discarded on startup, and the system re-consumes cleanly from the last SQLite offset.
+- **Flush Atomicity & Write-Ahead:** Plain multi-file writes are not atomic. Because offsets from one topic can land in different target files, a mid-flush crash can persist non-contiguous state. To guarantee exact at-least-once deduplication without data loss, the writer MUST use a strict flush sequence: 1) flush buffers to target `.zst` files, 2) `fsync` the files, 3) record the new high-water offsets to the local SQLite DB (which uses WAL mode for atomic commits), and 4) asynchronously commit Kafka offsets. 
+- **The Single Source of Truth:** On restart, the writer ALWAYS resumes consumption from the `_offset` recorded in its **SQLite DB**, *not* the Kafka consumer group offset. The Kafka consumer offset is merely a loose bookmark to prevent massive replays if the group is entirely reset. Any messages received from Kafka with an offset less than or equal to the SQLite high-water mark are silently skipped.
 
 ### 8.4 File Rotator
 
@@ -857,7 +859,7 @@ Key principle: **never silently lose data**. Every failure, gap, and anomaly is 
 | `collector_messages_produced_total` | counter | exchange, symbol, stream | Messages sent to Redpanda |
 | `collector_ws_connections_active` | gauge | exchange | Current open WebSocket connections |
 | `collector_ws_reconnects_total` | counter | exchange | Reconnection count |
-| `collector_gaps_detected_total` | counter | exchange, symbol, stream | Sequence gaps found |
+| `collector_gaps_detected_total` | counter | exchange, symbol, stream | All gaps logged (sequence breaks, socket disconnects, dropped buffers) |
 | `collector_exchange_latency_ms` | histogram | exchange, symbol, stream | `received_at - exchange_ts` distribution (Network Transit Time). Used to prove data represents reality vs lagged reality (latency arbitrage metric). |
 | `collector_snapshots_taken_total` | counter | exchange, symbol | Successful REST snapshots |
 | `collector_snapshots_failed_total` | counter | exchange, symbol | Failed snapshot attempts |
@@ -921,6 +923,10 @@ services:
     image: redpandadata/redpanda:v24.1.2
     # Single-node, developer mode
     # Kafka API on 9092 (internal), admin on 9644 (internal only)
+    command:
+      - redpanda
+      - start
+      - --set redpanda.log_retention_ms=172800000  # Force global 48h retention
     ports:
       - "127.0.0.1:9092:9092"   # host-only for local debugging
     healthcheck:
@@ -933,23 +939,12 @@ services:
     volumes:
       - redpanda_data:/var/lib/redpanda/data
 
-  redpanda-init:
-    image: redpandadata/redpanda:v24.1.2
-    networks: [cryptolake_internal]
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    command: >
-      bash -c "
-      rpk topic create binance.trades binance.depth binance.depth_snapshot binance.bookticker binance.funding_rate binance.liquidations binance.open_interest -c retention.ms=172800000 --brokers redpanda:9092
-      "
-
   collector:
     build:
       dockerfile: Dockerfile.collector
     depends_on:
-      redpanda-init:
-        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
     networks: [cryptolake_internal, collector_egress]
     volumes:
       - ./config:/app/config:ro
@@ -969,8 +964,8 @@ services:
     build:
       dockerfile: Dockerfile.writer
     depends_on:
-      redpanda-init:
-        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
     networks: [cryptolake_internal]
     volumes:
       - ./config:/app/config:ro
@@ -1078,7 +1073,7 @@ On SIGTERM, services execute a clean shutdown sequence within 30 seconds (contro
 4. Close active zstd compression streams (files remain valid but unsealed)
 5. Exit
 
-**Timeout behavior**: If shutdown exceeds the configured timeout, the process logs a warning and exits. Any active file that was not properly sealed (no checksum sidecar) is detected on next startup — the writer re-opens the file, verifies its content, computes the checksum, and seals it before starting normal operation.
+**Timeout behavior**: If shutdown exceeds the configured timeout, the process logs a warning and exits. Because the writer commits to SQLite atomically after every block fsync, a killed process simply resumes on the next boot exactly where the SQLite database recorded the last successful write block.
 
 ### 11.5 Production Deployment
 
@@ -1171,6 +1166,7 @@ Credentials that do exist:
 ```
 cryptolake/
 ├── docker-compose.yml
+├── docker-compose.test.yml
 ├── Dockerfile.collector
 ├── Dockerfile.writer
 ├── config/
@@ -1224,15 +1220,17 @@ cryptolake/
 │   │   ├── test_binance_ws.py      # uses recorded fixtures in CI, live optional
 │   │   ├── test_redpanda_roundtrip.py  # testcontainers
 │   │   └── test_writer_rotation.py
+│   ├── chaos/
+│   │   ├── kill_writer.sh
+│   │   ├── kill_ws_connection.sh
+│   │   ├── fill_disk.sh
+│   │   ├── depth_reconnect_inflight.sh
+│   │   └── buffer_overflow_recovery.sh
 │   ├── fixtures/
 │   │   ├── binance_trade_sample.json
 │   │   ├── binance_depth_diff_sample.json
 │   │   ├── binance_depth_snapshot_sample.json
 │   │   └── ...
-│   ├── chaos/
-│   │   ├── kill_writer.sh
-│   │   ├── kill_ws_connection.sh
-│   │   └── fill_disk.sh
 │   └── conftest.py
 ├── infra/
 │   ├── prometheus/
@@ -1293,7 +1291,7 @@ cryptolake/
   - Kill WebSocket connection → verify auto-reconnect, snapshot re-sync, gap logged
   - Fill disk to 95% → verify writer pauses, alert fires, resumes after space freed
   - **Depth reconnect while snapshot is in flight**: Kill the `/ws/public` WebSocket while a periodic REST snapshot request is pending. Verify: (a) incoming diffs are buffered on the new connection, (b) the in-flight snapshot completes or is re-fetched, (c) the `pu` chain is re-established from the snapshot's `lastUpdateId`, (d) no diffs are silently dropped during the overlap, (e) a gap event record is written to the archive with `reason: "ws_disconnect"`.
-  - **Writer crash after flush before offset commit**: Kill the writer process (`docker kill`) immediately after a disk flush but before the Kafka offset commit. Verify: (a) on restart, the writer re-consumes from the last committed offset, (b) duplicate `(_topic, _partition, _offset)` records are detected and skipped via the active-file tail scan, (c) the resulting archive contains no duplicate broker records, (d) `cryptolake verify` passes clean.
+  - **Writer crash after flush before Kafka commit**: Kill the writer process (`docker kill`) immediately after a disk flush updates the SQLite DB, but before the Kafka offset commit. Verify: (a) on restart, the writer ignores the stale Kafka group offset and seeks perfectly using the SQLite high-water mark, (b) no duplicate records are written to the `.zst` files, (c) the resulting archive contains no duplicate broker records, (d) `cryptolake verify` passes clean.
   - **Gap event written for disconnect / missed poll**: Force a WebSocket disconnect and separately skip a scheduled open_interest REST poll. Verify: (a) a `"type": "gap"` record appears in the archive for each incident, (b) the gap record's `reason` field matches the cause (`"ws_disconnect"` / `"snapshot_poll_miss"`), (c) the gap time window is accurate (within 1s of actual downtime), (d) `cryptolake verify` reports the gaps in its output.
   - **Buffer overflow at Redpanda recovery boundary**: Stop Redpanda while the collector is receiving high-frequency data (e.g., during a BTC volatility spike). Wait until the in-memory buffer fills to 100% and messages are being dropped. Then restart Redpanda. Verify: (a) the gap occurs at the moment of buffer overflow, not at the moment of Redpanda recovery — i.e., the newest messages dropped during the overflow period are the gap, and the collector resumes producing to Redpanda immediately on recovery without a second gap, (b) a `"type": "gap"` record is written with `reason: "buffer_overflow"` covering the exact time window of dropped messages, (c) `collector_messages_dropped_total` matches the count of messages in the gap window, (d) no messages are silently lost outside the reported gap window, (e) gap-filling logic (if implemented later) can use the gap record's timestamps to back-fill from Binance's REST historical endpoints.
 - **Run**: Manual, against running docker-compose stack
@@ -1442,14 +1440,11 @@ docker compose exec writer python -m cli.verify --date "$(date -u +%Y-%m-%d)" --
 3. If needed, decompress the affected hourly file and inspect the `type: "gap"` line directly
 4. Correlate the gap window with Prometheus/Grafana metrics and container logs
 
-### B.5 Recover Unsealed Files
+### B.5 Recover Missing Checksums
 
-On startup, the writer automatically scans for `.jsonl.zst` files without `.sha256` sidecars, re-reads them, restores dedup state, and seals them. If an operator suspects this path failed:
-
-1. Stop the writer
-2. Inspect `/data` for `.jsonl.zst` files missing `.sha256`
-3. Restart the writer and watch for scan/seal log entries
-4. Re-run `cryptolake verify` after sealing completes
+Because file sealing (calculating `.sha256`) happens at the hour boundary, a hard crash right at the boundary might leave a completed `.zst` file without its sidecar.
+1. Run `cryptolake verify --date <YYYY-MM-DD>`. It will flag the missing sidecar.
+2. The verification CLI includes a `cryptolake verify --repair-checksums` flag which will read the valid `.zst` file and generate the missing `.sha256` sidecar.
 
 ### B.6 Rotate Secrets
 
