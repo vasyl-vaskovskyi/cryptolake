@@ -55,7 +55,7 @@ Each criterion is independently testable. The system is considered complete when
 Given the system is started with `docker-compose up` and a config containing 3 symbols (e.g., btcusdt, ethusdt, solusdt),
 when the system runs for 1 hour,
 then compressed `.jsonl.zst` files exist for all configured symbols across all enabled stream types (trades, depth, depth_snapshot, bookticker, funding_rate, liquidations, open_interest),
-and each file decompresses to valid JSON Lines where every line matches the envelope schema (v, type, exchange, symbol, stream, received_at, exchange_ts, collector_session_id, session_seq, raw_text, raw_sha256, _topic, _partition, _offset for data records; gap records carry gap_start_ts, gap_end_ts, reason, detail instead of raw_text/raw_sha256),
+and each file decompresses to valid JSON Lines where every line matches the envelope schema (v, type, exchange, symbol, stream, received_at, exchange_ts, collector_session_id, session_seq, raw_text, raw_sha256, _topic, _partition, _offset for data records; gap records carry gap_start_ts, gap_end_ts, reason, detail instead of raw_text/raw_sha256/exchange_ts),
 and every `raw_text` field contains the original exchange payload verifiable via its `raw_sha256` digest.
 
 **AC-2: Data integrity verification**
@@ -99,7 +99,7 @@ and when a simulated gap event occurs, Alertmanager fires a `GapDetected` alert 
 
 **AC-7: Storage organization**
 Given the system has been running for at least 2 hours,
-then files are organized as `/data/{exchange}/{symbol}/{stream}/{date}/hour-{HH}.jsonl.zst`,
+then files are organized as `/data/{exchange}/{symbol}/{stream}/{date}/hour-{HH}.jsonl.zst` (and optionally `hour-{HH}.late-{N}.jsonl.zst` for late arrivals),
 and all directory and file names are lowercase,
 and all timestamps within files use UTC,
 and no empty files exist (hours with no data produce no file).
@@ -550,7 +550,7 @@ Verification checks:
 ### 5.10 Disaster Recovery
 
 - **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
-- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will recreate topics. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
+- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The `redpanda-init` bootstrap container MUST be re-run to recreate the topics with proper retention before the collector starts. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
 - **Automated Backup:** A daily automated cron job or sidecar container must execute an `rsync` or object-storage upload (`aws s3 sync`) of all sealed files (those with a `.sha256` sidecar) to cold storage. Because sealed files are immutable, backups can run safely at any time.
 
 ---
@@ -762,7 +762,7 @@ resume normal publish path
 ### 8.2 Consumer
 
 - Uses `confluent_kafka.Consumer` (Run in a dedicated thread or `run_in_executor` to avoid blocking uvloop)
-- Consumer group: `cryptolake-writer` (This group, combined with 1 partition per topic, enforces **Writer Exclusivity** — if two writers run accidentally, only one will receive messages. The writer should log a warning on startup if the group already has an active member).
+- Consumer group: `cryptolake-writer` (Warning: A shared consumer group means topics will be *split* across accidental duplicate writers, violating the single-writer-per-topic assumption and breaking strict per-file chronological ordering. To enforce true **Writer Exclusivity** per topic, the writer must assert its sole ownership of the assigned partitions via the Kafka Consumer rebalance callback, and deliberately crash or alert if partitions are unexpectedly revoked).
 - Subscribes to all `binance.*` topics
 - **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time.
 - **Immutable Sealed Files:** Once a file has a `.sha256` sidecar, it is never reopened or mutated. If late-arriving messages belong to an already-sealed hour (e.g., during catch-up), the writer creates a spillover file (e.g., `hour-14.late-1.jsonl.zst`). Downstream consumers are responsible for merging these at read time.
@@ -805,7 +805,7 @@ steady state                                |
   - Buffer reaches size threshold (e.g., 10,000 messages or 10MB)
   - Flush timer expires (e.g., every 30 seconds)
   - Hour boundary triggers rotation
-- **Global Atomic Flush:** Because Kafka consumer offsets are global per topic/partition, the Writer cannot flush files individually. It must flush *all* active buffers across all files concurrently, perform an `fsync`, record the high-water offsets to the local SQLite DB, and *then* commit Kafka offsets. This ensures a mid-flush crash cannot result in torn/non-contiguous state.
+- **Flush Atomicity & Write-Ahead:** Plain multi-file writes are not atomic. Because offsets from one topic can land in different target files, a mid-flush crash can persist non-contiguous state. To guarantee exact at-least-once deduplication without data loss, the writer MUST use a **Write-Ahead Log (WAL)** or temporary staging files. The flush sequence is: 1) flush buffers to temporary `.tmp` files, 2) fsync, 3) record offsets to SQLite, 4) atomically rename `.tmp` to `.zst`, 5) commit Kafka offsets. If a crash occurs, any orphaned `.tmp` files are discarded on startup, and the system re-consumes cleanly from the last SQLite offset.
 
 ### 8.4 File Rotator
 
@@ -885,7 +885,7 @@ All metrics with `symbol` label provide per-symbol granularity for dashboard fil
 | Alert | Condition | Severity |
 |-------|-----------|----------|
 | `GapDetected` | `collector_gaps_detected_total` increases | critical |
-| `ConnectionLost` | `collector_ws_connections_active < 2` (expected number of sockets) for 30s | critical |
+| `ConnectionLost` | `collector_ws_connections_active < expected_sockets` (dynamically based on config toggles) for 30s | critical |
 | `WriterLagging` | `writer_consumer_lag > 1000` for 2min | warning |
 | `WriterLagCritical` | `writer_consumer_lag > 100000` (approx 5min, throughput-dependent) | critical |
 | `SnapshotsFailing` | `collector_snapshots_failed_total` increases 3x in 15min | warning |
@@ -934,7 +934,7 @@ services:
       - redpanda_data:/var/lib/redpanda/data
 
   redpanda-init:
-    image: redpandadata/redpanda:v24.1.2:v24.1.2
+    image: redpandadata/redpanda:v24.1.2
     networks: [cryptolake_internal]
     depends_on:
       redpanda:
@@ -1052,7 +1052,7 @@ Both collector and writer expose HTTP endpoints for orchestrator probes:
 - Used by Docker/K8s liveness probe — failure triggers container restart
 
 **`/ready` (readiness)**:
-- **Collector**: Returns `200` only if: (1) at least one WebSocket connection is established, AND (2) the Redpanda producer is connected
+- **Collector**: Returns `200` only if: (1) the required WebSocket connections *based on the active config* are established (or skipped if only REST streams are enabled), AND (2) the Redpanda producer is connected
 - **Writer**: Returns `200` only if: (1) the Redpanda consumer is connected and assigned partitions, AND (2) the storage volume is writable
 - Returns `503` with a JSON body describing which checks failed
 - Used by K8s readiness probe — failure removes the pod from service but does not restart
