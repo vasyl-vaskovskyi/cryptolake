@@ -550,7 +550,7 @@ Verification checks:
 ### 5.10 Disaster Recovery
 
 - **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
-- **Redpanda volume loss:** No archive impact (data is already flushed to disk). Because Redpanda's global retention is configured via startup flags, the collector can safely auto-create topics on the next publish. Consumer offsets are lost, forcing the writer to rebuild its state file by scanning the archive before resuming.
+- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will safely auto-create fresh topics on the next publish. However, fresh topics start at Kafka offset `0`. Because the writer's SQLite database expects high offsets, the operator MUST run `cryptolake reset-state` or manually delete the `offsets.db` file so the writer knows to begin tracking from the new epoch's offset 0.
 - **Automated Backup:** A daily automated cron job or sidecar container must execute an `rsync` or object-storage upload (`aws s3 sync`) of all sealed files (those with a `.sha256` sidecar) to cold storage. Because sealed files are immutable, backups can run safely at any time.
 
 ---
@@ -582,6 +582,11 @@ exchanges:
       funding_rate: true
       liquidations: true
       open_interest: true
+    # Optional: restricts which topics this specific writer instance consumes
+    # If omitted, writer consumes all enabled streams from the collector.
+    writer_streams_override:
+      - trades
+      - liquidations
     depth:
       update_speed: "100ms"
       snapshot_interval: "5m"
@@ -765,7 +770,7 @@ resume normal publish path
 
 - Uses `confluent_kafka.Consumer` (Run in a dedicated thread or `run_in_executor` to avoid blocking uvloop)
 - Consumer group: `cryptolake-writer` (Warning: A shared consumer group means topics will be *split* across accidental duplicate writers, violating the single-writer-per-topic assumption and breaking strict per-file chronological ordering. To enforce true **Writer Exclusivity** per topic, the writer must assert its sole ownership of the assigned partitions via the Kafka Consumer rebalance callback, and deliberately crash or alert if partitions are unexpectedly revoked).
-- Subscribes to all `binance.*` topics
+- Subscribes to topics defined by the `writer_streams_override` config list (or defaults to all enabled collector streams).
 - **File Routing:** The writer assigns messages to hourly files based strictly on the message's internal `received_at` timestamp, *not* the writer's wall-clock time.
 - **Immutable Sealed Files:** Once a file has a `.sha256` sidecar, it is never reopened or mutated. If late-arriving messages belong to an already-sealed hour (e.g., during catch-up), the writer creates a spillover file (e.g., `hour-14.late-1.jsonl.zst`). Downstream consumers are responsible for merging these at read time.
 - Manual offset commit after successful flush to disk (not auto-commit). If a commit batch spans multiple buffered files, the writer flushes all currently buffered records before committing that batch.
@@ -826,7 +831,7 @@ steady state                                |
 ### 8.5 Compressor
 
 - Uses `zstandard` Python library (C binding, fast)
-- Streaming compression: messages are incrementally compressed into the active file
+- **Crash-Safe Zstd Frame Concatenation:** The Writer does *not* keep a continuous zstd stream open for the entire hour. Instead, it generates a complete, mathematically closed zstd frame on *every flush*. Because the zstd specification inherently supports concatenating multiple frames into a single file, this design allows the Writer to safely truncate the file at a frame boundary on restart without corrupting the archive.
 - Level 3 default (configurable)
 - Each line in the compressed file is one JSON envelope, newline-terminated
 
@@ -927,7 +932,10 @@ services:
     command:
       - redpanda
       - start
-      - --set redpanda.log_retention_ms=172800000 --set redpanda.default_topic_partitions=1
+      - --set
+      - redpanda.log_retention_ms=172800000
+      - --set
+      - redpanda.default_topic_partitions=1
     ports:
       - "127.0.0.1:9092:9092"   # host-only for local debugging
     healthcheck:
@@ -1071,7 +1079,7 @@ On SIGTERM, services execute a clean shutdown sequence within 30 seconds (contro
 1. Stop consuming new messages from Redpanda
 2. Flush all in-memory buffers to disk
 3. Commit final Kafka offsets
-4. Close active zstd compression streams (files remain valid but unsealed)
+4. Exit cleanly (Files are left unsealed; they will be sealed later by cron/verify CLI)
 5. Exit
 
 **Timeout behavior**: If shutdown exceeds the configured timeout, the process logs a warning and exits. Because the writer commits to SQLite atomically after every block fsync, a killed process simply resumes on the next boot exactly where the SQLite database recorded the last successful write block.
