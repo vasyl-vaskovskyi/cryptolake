@@ -550,7 +550,7 @@ Verification checks:
 ### 5.10 Disaster Recovery
 
 - **Archive volume loss:** Unrecoverable unless external backups exist. If loss occurs, restart the writer to at least recover the last 48h from Redpanda.
-- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will safely auto-create fresh topics on the next publish. However, fresh topics start at Kafka offset `0`. Because the writer's PostgreSQL state table expects high offsets, the operator MUST run `cryptolake reset-state` or manually delete the `offsets.db` file so the writer knows to begin tracking from the new epoch's offset 0.
+- **Redpanda volume loss:** No archive impact (data is already flushed to disk). The collector will safely auto-create fresh topics on the next publish. However, fresh topics start at Kafka offset `0`. Because the writer's PostgreSQL state table expects high offsets, the operator MUST run `cryptolake reset-state` or manually truncate the `writer_file_state` table so the writer knows to begin tracking from the new epoch's offset 0.
 - **Automated Backup:** A daily automated cron job or sidecar container must execute an `rsync` or object-storage upload (`aws s3 sync`) of all sealed files (those with a `.sha256` sidecar) to cold storage. Because sealed files are immutable, backups can run safely at any time.
 
 ---
@@ -780,7 +780,7 @@ resume normal publish path
 
 **At-least-once delivery with writer-side deduplication**: If the writer crashes after flushing to disk but before committing the Kafka offset, it will re-consume some messages on restart. The writer guarantees duplicate-free archives:
 - Every archived line carries broker coordinates `(_topic, _partition, _offset)` — the durable identity of the message (see Section 4.1.1)
-- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a state table in PostgreSQL tracking the highest flushed `_offset` per (topic, partition). This state file **must** live on the same volume as the archive data (`/data`). On startup, the writer reads the PostgreSQL state to establish exactly where it left off, and seeks the Kafka consumer to those exact coordinates. (If the PostgreSQL database is lost due to disk failure, see Disaster Recovery 5.10).
+- Since checking the tail of an incrementally compressed `.zst` file is extremely inefficient, the writer maintains a state table in PostgreSQL tracking the highest flushed `_offset` per (topic, partition). On startup, the writer reads the PostgreSQL state to establish exactly where it left off, and seeks the Kafka consumer to those exact coordinates. (If the PostgreSQL database is lost due to disk failure, see Disaster Recovery 5.10).
 - **The archive is the contract**: downstream consumers (backtesting, analytics) can trust that archived files contain no duplicate broker records. Deduplication is the writer's responsibility, not pushed to consumers.
 - `cryptolake verify` validates this guarantee by checking for duplicate `(_topic, _partition, _offset)` tuples (see Section 5.7)
 
