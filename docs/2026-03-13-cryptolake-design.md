@@ -87,7 +87,7 @@ and data collection resumes without manual intervention.
 Given the collector is producing messages to Redpanda and the writer is consuming,
 when the writer process is killed (`docker kill writer`),
 and the writer is restarted after 5 minutes,
-then the writer resumes from its last committed Kafka offset,
+then the writer resumes from the high-water offset recorded in its local SQLite database,
 and all messages produced during the downtime (within Redpanda's 48h retention) are written to disk,
 and no messages are permanently lost (verified by comparing Redpanda topic high-water marks to the maximum `_offset` per topic/partition in the archive).
 
@@ -122,7 +122,7 @@ when `docker-compose down` is issued,
 then all services exit within 30 seconds,
 and the writer flushes all buffered data to disk before exiting,
 and Kafka offsets are committed,
-and any unsealed file is detected and sealed on next startup.
+and any unsealed file is gracefully handled via SQLite state recovery.
 
 **AC-11: Writer deduplication guarantee**
 Given the writer is actively consuming and writing data,
@@ -391,7 +391,7 @@ The writer appends broker coordinates to each envelope line before writing to di
 The tuple `(_topic, _partition, _offset)` is the **durable identity** of each message. It guarantees **intra-file ordering**: messages within a single archived file are strictly ordered by `_offset` (Kafka's partition guarantee). It is:
 - **Globally unique**: Kafka guarantees exactly one message per (topic, partition, offset)
 - **Stable**: Offsets do not change after write, regardless of collector restarts, session resets, or reprocessing
-- **The basis for deduplication**: On writer restart with at-least-once semantics, duplicate records are detected by checking for repeated `(_topic, _partition, _offset)` tuples in the active file
+- **The basis for verification**: While the writer guarantees deduplication via its SQLite byte-truncation strategy, downstream verify tools use this tuple to mathematically prove no duplicates exist across file boundaries.
 - **The basis for archive verification**: The verify CLI checks for duplicate or missing offsets across hourly file boundaries
 
 The `_` prefix convention signals these fields are infrastructure metadata added by the writer, not collector-produced data.
@@ -426,7 +426,7 @@ Topic naming convention: `{exchange}.{stream}` where `{stream}` matches the enve
 | `binance.liquidations` | symbol | 1 | 48h |
 | `binance.open_interest` | symbol | 1 | 48h |
 
-*Note on Topic Creation:* While Kafka auto-creation is often discouraged because it uses cluster defaults (e.g., 7 days retention), we explicitly configure Redpanda's global default `log_retention_ms` to 48 hours at startup. This allows the Collector to safely auto-create topics without risking disk exhaustion, keeping the deployment architecture simple.
+*Note on Topic Creation:* While Kafka auto-creation is often discouraged, we explicitly configure Redpanda's global defaults at startup: `log_retention_ms=172800000` (48 hours) and `default_topic_partitions=1`. This allows the Collector to safely auto-create topics while enforcing the strict single-partition topology the Writer relies on for ordering.
 
 ---
 
@@ -806,8 +806,9 @@ steady state                                |
   - Buffer reaches size threshold (e.g., 10,000 messages or 10MB)
   - Flush timer expires (e.g., every 30 seconds)
   - Hour boundary triggers rotation
-- **Flush Atomicity & Write-Ahead:** Plain multi-file writes are not atomic. Because offsets from one topic can land in different target files, a mid-flush crash can persist non-contiguous state. To guarantee exact at-least-once deduplication without data loss, the writer MUST use a strict flush sequence: 1) flush buffers to target `.zst` files, 2) `fsync` the files, 3) record the new high-water offsets to the local SQLite DB (which uses WAL mode for atomic commits), and 4) asynchronously commit Kafka offsets. 
-- **The Single Source of Truth:** On restart, the writer ALWAYS resumes consumption from the `_offset` recorded in its **SQLite DB**, *not* the Kafka consumer group offset. The Kafka consumer offset is merely a loose bookmark to prevent massive replays if the group is entirely reset. Any messages received from Kafka with an offset less than or equal to the SQLite high-water mark are silently skipped.
+- **Flush Atomicity & Safe Resumption:** Plain multi-file writes are not atomic. A crash between flushing a file and updating SQLite will result in duplicates on restart. To guarantee exactly-once archive semantics, the SQLite DB must act as the absolute source of truth and track BOTH the Kafka offset AND the physical byte size of the `.zst` file at the time of flush. 
+- **The Flush Sequence:** 1) flush buffers to `.zst` files, 2) `fsync` the files, 3) record the new high-water Kafka offsets AND the new file byte sizes to the SQLite DB in a single transaction, 4) asynchronously commit Kafka offsets.
+- **The Restart Sequence:** On boot, the writer reads the SQLite DB. For every active file, it truncates the `.zst` file on disk to the exact byte size recorded in SQLite (discarding any partially flushed or un-recorded trailing bytes from a crash). It then seeks the Kafka consumer to the recorded SQLite high-water offset and resumes. The Kafka consumer group offset is ignored for exact positioning.
 
 ### 8.4 File Rotator
 
@@ -839,7 +840,7 @@ steady state                                |
 | Missed depth diffs | `pu` chain breaks | `pu != previous u` in depth handler | Depth re-sync flow: buffer diffs, fetch snapshot, find sync point, replay | Archived `gap` record with `reason="pu_chain_break"` | `GapDetected` | Depth replay in `cryptolake verify`, chaos test `depth_reconnect_inflight.sh` |
 | Redpanda unavailable | Producer cannot publish | `KafkaError`, producer connectivity state | Buffer in memory, retry with backoff | No archive artifact unless overflow occurs; backlog remains in Redpanda/producer memory | `RedpandaBufferHigh` if buffer grows | Integration round-trip tests, manual broker outage drill |
 | Producer buffer overflow | Buffer hits max capacity | buffer size threshold, dropped-message counter | Continue accepting exchange traffic, drop newest messages, close gap when backlog drains | Archived `gap` record with `reason="buffer_overflow"` plus dropped counters | `MessagesDropped` | Chaos test `buffer_overflow_recovery.sh`, verify CLI gap output |
-| Writer crash | Process exits mid-consume | consumer lag rises, missing heartbeat | Restart writer, resume from last committed offset, dedup on broker coordinates | No duplicate archive records after restart; unsealed file may be sealed on boot | `WriterLagging` | Chaos tests `kill_writer.sh` and `writer_crash_before_commit.sh`, verify CLI dedup check |
+| Writer crash | Process exits mid-consume | consumer lag rises, missing heartbeat | Restart writer, resume from last SQLite offset, dedup on broker coordinates | No duplicate archive records after restart; unsealed file may be sealed on boot | `WriterLagging` | Chaos tests `kill_writer.sh` and `writer_crash_before_commit.sh`, verify CLI dedup check |
 | Scheduled REST poll miss | snapshot or open-interest poll fails all retries | retry exhaustion in periodic poller | Log, emit gap, wait until next interval | Archived `gap` record with `reason="snapshot_poll_miss"` | `SnapshotsFailing` | Forced poll-failure drill, verify CLI gap output |
 | Disk almost full / full | storage usage rises above threshold | `writer_disk_usage_pct` metric | Warn at 85%, pause writer at 95% until space is freed | No immediate gap artifact; backlog remains recoverable in Redpanda while within retention | `DiskAlmostFull`, `DiskCritical` | Chaos test `fill_disk.sh`, lag recovery after freeing space |
 | Binance rate limit | HTTP 429 | response status, `Retry-After` header | Back off per header; stagger future polls | None unless a poll fully exhausts retries, then `snapshot_poll_miss` gap record | `SnapshotsFailing` if retries keep failing | Manual rate-limit drill, poll spacing inspection |
@@ -926,7 +927,7 @@ services:
     command:
       - redpanda
       - start
-      - --set redpanda.log_retention_ms=172800000  # Force global 48h retention
+      - --set redpanda.log_retention_ms=172800000 --set redpanda.default_topic_partitions=1
     ports:
       - "127.0.0.1:9092:9092"   # host-only for local debugging
     healthcheck:
@@ -1104,7 +1105,7 @@ For Docker: the container inherits the host clock. Ensure the Docker host runs c
 
 ### 11.7 Deployment Rollout
 
-- **Writer update:** Stop writer → Redpanda buffers traffic → deploy new image → writer catches up from last committed offset. Zero data loss (within 48h retention).
+- **Writer update:** Stop writer → Redpanda buffers traffic → deploy new image → writer catches up from last SQLite offset. Zero data loss (within 48h retention).
 - **Collector update:** Stop collector → connection drops, gap window opens → deploy new image → collector reconnects, re-syncs depth, and automatically emits a gap record.
 - Zero-downtime collection is not a v1 goal; brief planned gaps (~30s) during restarts are acceptable and self-documenting.
 - **Rollback:** Revert to the previous image tag and restart. No schema migrations to undo.
@@ -1291,7 +1292,7 @@ cryptolake/
   - Kill WebSocket connection → verify auto-reconnect, snapshot re-sync, gap logged
   - Fill disk to 95% → verify writer pauses, alert fires, resumes after space freed
   - **Depth reconnect while snapshot is in flight**: Kill the `/ws/public` WebSocket while a periodic REST snapshot request is pending. Verify: (a) incoming diffs are buffered on the new connection, (b) the in-flight snapshot completes or is re-fetched, (c) the `pu` chain is re-established from the snapshot's `lastUpdateId`, (d) no diffs are silently dropped during the overlap, (e) a gap event record is written to the archive with `reason: "ws_disconnect"`.
-  - **Writer crash after flush before Kafka commit**: Kill the writer process (`docker kill`) immediately after a disk flush updates the SQLite DB, but before the Kafka offset commit. Verify: (a) on restart, the writer ignores the stale Kafka group offset and seeks perfectly using the SQLite high-water mark, (b) no duplicate records are written to the `.zst` files, (c) the resulting archive contains no duplicate broker records, (d) `cryptolake verify` passes clean.
+  - **Writer crash mid-flush**: Kill the writer process (`docker kill -s KILL`) randomly during a high-throughput multi-file flush. Verify: (a) on restart, the writer truncates any dangling bytes from the `.zst` files to match the last safe SQLite checkpoint, (b) the writer seeks perfectly using the SQLite high-water mark, (c) the resulting archive contains no duplicate broker records and no corrupt zstd frames, (d) `cryptolake verify` passes clean.
   - **Gap event written for disconnect / missed poll**: Force a WebSocket disconnect and separately skip a scheduled open_interest REST poll. Verify: (a) a `"type": "gap"` record appears in the archive for each incident, (b) the gap record's `reason` field matches the cause (`"ws_disconnect"` / `"snapshot_poll_miss"`), (c) the gap time window is accurate (within 1s of actual downtime), (d) `cryptolake verify` reports the gaps in its output.
   - **Buffer overflow at Redpanda recovery boundary**: Stop Redpanda while the collector is receiving high-frequency data (e.g., during a BTC volatility spike). Wait until the in-memory buffer fills to 100% and messages are being dropped. Then restart Redpanda. Verify: (a) the gap occurs at the moment of buffer overflow, not at the moment of Redpanda recovery — i.e., the newest messages dropped during the overflow period are the gap, and the collector resumes producing to Redpanda immediately on recovery without a second gap, (b) a `"type": "gap"` record is written with `reason: "buffer_overflow"` covering the exact time window of dropped messages, (c) `collector_messages_dropped_total` matches the count of messages in the gap window, (d) no messages are silently lost outside the reported gap window, (e) gap-filling logic (if implemented later) can use the gap record's timestamps to back-fill from Binance's REST historical endpoints.
 - **Run**: Manual, against running docker-compose stack
@@ -1415,7 +1416,7 @@ This appendix is a v1 operator quick-reference, not a full production SRE runboo
 When `docker compose down` is issued, expect:
 - collector to stop accepting new exchange messages and drain its producer buffer
 - writer to flush all active file buffers, commit final offsets, and exit
-- any active-but-unsealed file to be sealed on the next startup before normal consumption resumes
+- any active-but-unsealed file will have its final `.sha256` generated by the Verify CLI or a downstream batch process, as the Writer relies on SQLite for state, not sidecars.
 
 If shutdown was abrupt, verify recovery with:
 
