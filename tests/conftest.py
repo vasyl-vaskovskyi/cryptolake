@@ -5,8 +5,16 @@ from typing import Any
 
 import orjson
 import pytest
+import structlog
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _reset_structlog():
+    """Reset structlog between tests to avoid cached logger issues with capsys."""
+    yield
+    structlog.reset_defaults()
 
 
 @pytest.fixture
