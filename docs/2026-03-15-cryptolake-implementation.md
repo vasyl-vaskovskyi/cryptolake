@@ -3169,10 +3169,10 @@ class SnapshotScheduler:
             received_at=received_at,
         )
         self.producer.produce(envelope)
-
-        # Update depth handler sync point
-        last_update_id = self.adapter.parse_snapshot_last_update_id(raw_text)
-        self.depth_handler.set_sync_point(symbol, last_update_id)
+        # NOTE: Periodic snapshots are archived checkpoints for later reconstruction.
+        # They must NOT call depth_handler.set_sync_point() — that would reset the
+        # live pu chain validation mid-stream. Live sync is only reset during the
+        # depth resync flow (reconnect or pu_chain_break, see Section 7.2).
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -4733,9 +4733,10 @@ class WriterConsumer:
         """Main consume loop. Polls in executor, buffers, flushes, and commits."""
         loop = asyncio.get_event_loop()
         last_flush_time = time.monotonic()
-        # Track active hour per file key (exchange, symbol, stream) — not globally.
-        # Only seal a specific stream's file when *that stream* crosses an hour boundary.
-        active_hours: dict[tuple[str, str, str], int] = {}
+        # Track active (hour, date) per file key (exchange, symbol, stream).
+        # Stores the previous message's hour and date so that at day boundaries
+        # (23→00) we seal the correct previous-day file, not the new day's.
+        active_hours: dict[tuple[str, str, str], tuple[int, str]] = {}
 
         while self._running:
             # Non-blocking poll via executor (spec 8.2: avoid blocking uvloop)
@@ -4788,15 +4789,18 @@ class WriterConsumer:
                 tz=datetime.timezone.utc,
             )
             current_hour = msg_dt.hour
+            current_date = msg_dt.strftime("%Y-%m-%d")
             file_key = (envelope.get("exchange", ""),
                         envelope.get("symbol", ""),
                         envelope.get("stream", ""))
-            prev_hour = active_hours.get(file_key)
-            if prev_hour is not None and current_hour != prev_hour:
-                # Only seal the specific file that crossed an hour boundary
-                date_str = msg_dt.strftime("%Y-%m-%d")
-                await self._rotate_file(file_key, date_str, prev_hour)
-            active_hours[file_key] = current_hour
+            prev = active_hours.get(file_key)
+            if prev is not None:
+                prev_hour, prev_date = prev
+                if current_hour != prev_hour or current_date != prev_date:
+                    # Seal previous file using the PREVIOUS date/hour,
+                    # not the current message's date (critical at 23→00 day boundary)
+                    await self._rotate_file(file_key, prev_date, prev_hour)
+            active_hours[file_key] = (current_hour, current_date)
 
             # Add to buffer — may trigger flush
             flush_results = self.buffer_manager.add(envelope)
@@ -4810,18 +4814,24 @@ class WriterConsumer:
         date_str: str,
         hour: int,
     ) -> None:
-        """Seal files for a specific stream that has crossed an hour boundary (spec 8.4).
-        Flushes and seals all buffered date/hour variants for this stream."""
+        """Seal files for a specific stream that has crossed an hour boundary.
+        Order per spec 8.4: flush → write to disk → seal (.sha256 sidecar) →
+        save PG state → commit Kafka offsets."""
         exchange, symbol, stream = file_key
         logger.info("hourly_rotation_triggered", exchange=exchange,
                      symbol=symbol, stream=stream, hour=hour)
 
-        # Flush buffer for this specific file key (may span multiple date/hours)
+        # 1. Flush buffer for this specific file key
         results = self.buffer_manager.flush_key(file_key)
-        if results:
-            await self._write_and_save(results)
 
-        # Seal all flushed file paths (handles multi-hour edge case)
+        start = time.monotonic()
+        states: list[FileState] = []
+
+        # 2. Write to disk + fsync (no offset commit yet)
+        if results:
+            states = self._write_to_disk(results)
+
+        # 3. Seal all flushed file paths BEFORE committing offsets
         files_to_seal = set()
         if results:
             for r in results:
@@ -4834,17 +4844,29 @@ class WriterConsumer:
             if file_path.exists() and not sc.exists() and file_path.stat().st_size > 0:
                 write_sha256_sidecar(file_path, sc)
                 self._sealed_files.add(file_path)
+                writer_metrics.files_rotated_total.labels(
+                    exchange=exchange, symbol=symbol, stream=stream,
+                ).inc()
+                logger.info("file_sealed", path=str(file_path))
+
+        # 4. Now safe to commit — sidecar is durable on disk
+        if results:
+            await self._commit_state(states, results, start)
 
     async def _rotate_hour(self) -> None:
         """Seal all active files (used during shutdown). For normal operation,
-        use _rotate_file() which seals per-stream files individually."""
+        use _rotate_file() which seals per-stream files individually.
+        Order: flush → write to disk → seal all → commit offsets (spec 8.4)."""
         logger.info("rotation_seal_all")
-        # Flush all buffers first
-        results = self.buffer_manager.flush_all()
-        if results:
-            await self._write_and_save(results)
+        start = time.monotonic()
 
-        # Seal all active files: compute SHA-256, write sidecar
+        # 1. Flush all buffers and write to disk (no offset commit yet)
+        results = self.buffer_manager.flush_all()
+        states: list[FileState] = []
+        if results:
+            states = self._write_to_disk(results)
+
+        # 2. Seal all active files BEFORE committing offsets
         base = Path(self.base_dir)
         for zst_file in base.rglob("*.jsonl.zst"):
             sc = sidecar_path(zst_file)
@@ -4858,18 +4880,20 @@ class WriterConsumer:
                 ).inc()
                 logger.info("file_sealed", path=str(zst_file))
 
+        # 3. Now safe to commit — all sidecars are durable on disk
+        if results:
+            await self._commit_state(states, results, start)
+
     async def _flush_and_commit(self) -> None:
         results = self.buffer_manager.flush_all()
         if results:
             await self._write_and_save(results)
 
-    async def _write_and_save(self, results: list[FlushResult]) -> None:
-        """Flush sequence: write files → fsync → save state to PG → commit offsets."""
-        start = time.monotonic()
-        states_to_save: list[FileState] = []
-
+    def _write_to_disk(self, results: list[FlushResult]) -> list[FileState]:
+        """Write compressed frames to disk and fsync. Returns FileState list
+        for later commit. Does NOT save PG state or commit Kafka offsets."""
+        states: list[FileState] = []
         for result in results:
-            # Resolve sealed-file redirects (late arrivals)
             file_path = self._resolve_file_path(result.file_path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -4886,15 +4910,24 @@ class WriterConsumer:
                 stream=result.target.stream,
             ).inc(len(compressed))
 
-            states_to_save.append(FileState(
+            states.append(FileState(
                 topic=f"{result.target.exchange}.{result.target.stream}",
                 partition=result.partition,
                 high_water_offset=result.high_water_offset,
                 file_path=str(file_path),
                 file_byte_size=file_size,
             ))
+        return states
 
-        await self.state_manager.save_states(states_to_save)
+    async def _commit_state(
+        self,
+        states: list[FileState],
+        results: list[FlushResult],
+        start: float,
+    ) -> None:
+        """Save file states to PG and commit Kafka offsets.
+        Called after writes (and optional sealing) are complete."""
+        await self.state_manager.save_states(states)
         self._consumer.commit(asynchronous=True)
 
         elapsed_ms = (time.monotonic() - start) * 1000
@@ -4905,14 +4938,20 @@ class WriterConsumer:
             ).observe(elapsed_ms)
         logger.debug("flush_complete", files=len(results), elapsed_ms=round(elapsed_ms, 1))
 
+    async def _write_and_save(self, results: list[FlushResult]) -> None:
+        """Normal flush: write files → fsync → save state to PG → commit offsets.
+        For rotation (seal-before-commit), use _write_to_disk + seal + _commit_state."""
+        start = time.monotonic()
+        states = self._write_to_disk(results)
+        await self._commit_state(states, results, start)
+
     def is_connected(self) -> bool:
         """True if consumer exists and has been assigned partitions."""
         return self._consumer is not None and self._assigned
 
     async def stop(self) -> None:
         self._running = False
-        await self._flush_and_commit()
-        # Seal any remaining active files on shutdown
+        # _rotate_hour handles flush → write → seal → commit in correct order
         await self._rotate_hour()
         if self._consumer:
             self._consumer.close()
@@ -5237,15 +5276,25 @@ class TestGapReporting:
 
 
 class TestDepthReplay:
-    def _make_depth_env(self, offset, U, u, pu):
-        raw = f'{{"e":"depthUpdate","E":100,"s":"BTCUSDT","U":{U},"u":{u},"pu":{pu},"b":[],"a":[]}}'
-        return {**_make_data_envelope(offset, raw), "stream": "depth",
-                "_topic": "binance.depth"}
+    """Tests use received_at for cross-topic ordering (not _offset, which is
+    only meaningful within a single topic/partition — spec 4.1.1)."""
 
-    def _make_snap_env(self, offset, last_update_id):
+    _base_ts = 1741689600_000_000_000  # base timestamp for ordering
+
+    def _make_depth_env(self, seq, U, u, pu):
+        raw = f'{{"e":"depthUpdate","E":100,"s":"BTCUSDT","U":{U},"u":{u},"pu":{pu},"b":[],"a":[]}}'
+        env = {**_make_data_envelope(seq, raw), "stream": "depth",
+               "_topic": "binance.depth"}
+        # Use seq to derive a monotonically increasing received_at
+        env["received_at"] = self._base_ts + seq * 1_000_000
+        return env
+
+    def _make_snap_env(self, seq, last_update_id):
         raw = f'{{"lastUpdateId":{last_update_id},"bids":[],"asks":[]}}'
-        return {**_make_data_envelope(offset, raw), "stream": "depth_snapshot",
-                "_topic": "binance.depth_snapshot"}
+        env = {**_make_data_envelope(seq, raw), "stream": "depth_snapshot",
+               "_topic": "binance.depth_snapshot"}
+        env["received_at"] = self._base_ts + seq * 1_000_000
+        return env
 
     def test_valid_chain_passes(self):
         from src.cli.verify import verify_depth_replay
@@ -5312,7 +5361,8 @@ class TestDepthReplay:
         # ethusdt has broken chain (no snapshot)
         diff_eth_raw = '{"e":"depthUpdate","E":100,"s":"ETHUSDT","U":500,"u":505,"pu":499,"b":[],"a":[]}'
         diff_eth = {**_make_data_envelope(2, diff_eth_raw), "symbol": "ethusdt",
-                    "stream": "depth", "_topic": "binance.depth"}
+                    "stream": "depth", "_topic": "binance.depth",
+                    "received_at": self._base_ts + 2 * 1_000_000}
         errors = verify_depth_replay([diff_btc, diff_eth], [snap_btc], [])
         # btcusdt should pass, ethusdt should fail
         assert any("ethusdt" in e for e in errors)
@@ -5333,7 +5383,7 @@ Key functions:
 - `verify_envelopes(envelopes) -> list[str]`: required fields + raw_sha256 integrity
 - `check_duplicate_offsets(envelopes) -> list[str]`: unique (_topic, _partition, _offset) tuples
 - `report_gaps(envelopes) -> list[dict]`: filter type=="gap" records
-- `verify_depth_replay(depth_envs, snap_envs, gap_envs) -> list[str]`: pu chain replay — sorts diffs by _offset, walks snapshots, validates U/u/pu chain from each snapshot's lastUpdateId sync point, excuses breaks bounded by gap records
+- `verify_depth_replay(depth_envs, snap_envs, gap_envs) -> list[str]`: pu chain replay — sorts diffs and snapshots by received_at (cross-topic ordering), validates U/u/pu chain from each snapshot's lastUpdateId sync point, excuses breaks bounded by depth gap records
 - `generate_manifest(base_dir, exchange, date) -> dict`: per-date manifest JSON
 - CLI entry: `cryptolake verify --date YYYY-MM-DD --base-dir /data [--full] [--repair-checksums]`
 - CLI entry: `cryptolake manifest --date YYYY-MM-DD --base-dir /data`
@@ -5587,8 +5637,11 @@ def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> l
         gap_by_sym_stream[key].append(g)
 
     for symbol in depth_by_sym:
-        sym_depths = sorted(depth_by_sym[symbol], key=lambda e: e["_offset"])
-        sym_snaps = sorted(snap_by_sym.get(symbol, []), key=lambda e: e["_offset"])
+        # Sort by received_at (wall-clock timestamp), NOT _offset.
+        # Diffs and snapshots are on separate topics (binance.depth vs binance.depth_snapshot),
+        # so _offset values are incomparable across them (spec 4.1.1).
+        sym_depths = sorted(depth_by_sym[symbol], key=lambda e: e["received_at"])
+        sym_snaps = sorted(snap_by_sym.get(symbol, []), key=lambda e: e["received_at"])
         # Only depth and depth_snapshot gaps can excuse depth chain breaks
         sym_depth_gaps = gap_by_sym_stream.get((symbol, "depth"), []) + \
                          gap_by_sym_stream.get((symbol, "depth_snapshot"), [])
@@ -5601,14 +5654,15 @@ def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> l
         for env in sym_depths:
             raw = orjson.loads(env["raw_text"])
             U, u, pu = raw.get("U", 0), raw.get("u", 0), raw.get("pu", 0)
-            while snap_idx < len(sym_snaps) and sym_snaps[snap_idx]["_offset"] < env["_offset"]:
+            # Advance past snapshots that arrived before this diff (by received_at)
+            while snap_idx < len(sym_snaps) and sym_snaps[snap_idx]["received_at"] <= env["received_at"]:
                 snap_raw = orjson.loads(sym_snaps[snap_idx]["raw_text"])
                 sync_lid = snap_raw["lastUpdateId"]
                 synced, last_u = True, None
                 snap_idx += 1
             if not synced:
                 if not _in_gap(env["received_at"]):
-                    errors.append(f"[{symbol}] Depth diff at offset {env['_offset']} has no preceding snapshot")
+                    errors.append(f"[{symbol}] Depth diff at received_at {env['received_at']} has no preceding snapshot")
                 continue
             if last_u is None:
                 # First diff after snapshot: validate sync-point rule
@@ -5617,13 +5671,13 @@ def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> l
                     if not _in_gap(env["received_at"]):
                         errors.append(
                             f"[{symbol}] First diff after snapshot does not span sync point: "
-                            f"lastUpdateId={sync_lid}, U={U}, u={u} at offset {env['_offset']}")
+                            f"lastUpdateId={sync_lid}, U={U}, u={u} at received_at {env['received_at']}")
                     continue
                 last_u = u
                 continue
             if pu != last_u:
                 if not _in_gap(env["received_at"]):
-                    errors.append(f"[{symbol}] pu chain break at offset {env['_offset']}: expected pu={last_u}, got pu={pu}")
+                    errors.append(f"[{symbol}] pu chain break at received_at {env['received_at']}: expected pu={last_u}, got pu={pu}")
                 last_u = u
             else:
                 last_u = u
