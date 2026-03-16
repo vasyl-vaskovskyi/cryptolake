@@ -3,3 +3,15 @@
 /.idea/modules.xml
 /.idea/vcs.xml
 /.idea/workspace.xml
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+.env
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+/data/
