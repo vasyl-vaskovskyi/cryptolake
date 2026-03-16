@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from src.writer import metrics as writer_metrics
 from src.writer.buffer_manager import BufferManager, FlushResult
 from src.writer.compressor import ZstdFrameCompressor
 from src.writer.file_rotator import (
-    build_file_path, compute_sha256, sidecar_path, write_sha256_sidecar,
+    build_file_path, sidecar_path, write_sha256_sidecar,
 )
 from src.writer.state_manager import FileState, StateManager
 
@@ -193,7 +194,6 @@ class WriterConsumer:
             ).inc()
 
             # Per-file hourly rotation (spec 8.2: file routing by message received_at)
-            import datetime
             msg_dt = datetime.datetime.fromtimestamp(
                 envelope["received_at"] / 1_000_000_000,
                 tz=datetime.timezone.utc,
