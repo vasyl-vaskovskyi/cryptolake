@@ -127,6 +127,26 @@ class DepthHandler(StreamHandler):
             result = detector.validate_diff(U=U, u=u, pu=pu)
             if result.stale:
                 continue
+            if result.gap:
+                import time as _time
+                logger.warning("depth_replay_pu_chain_break", symbol=symbol,
+                               expected_pu=detector._last_u, actual_pu=pu)
+                collector_metrics.gaps_detected_total.labels(
+                    exchange=self.exchange, symbol=symbol, stream="depth",
+                ).inc()
+                now = _time.time_ns()
+                gap = create_gap_envelope(
+                    exchange=self.exchange, symbol=symbol, stream="depth",
+                    collector_session_id=self.collector_session_id,
+                    session_seq=session_seq,
+                    gap_start_ts=now, gap_end_ts=now,
+                    reason="pu_chain_break",
+                    detail=f"pu chain break during replay: expected pu={detector._last_u}, got pu={pu}",
+                )
+                self.producer.produce(gap)
+                if self._on_pu_chain_break:
+                    self._on_pu_chain_break(symbol)
+                return
             if not result.valid:
                 continue
             envelope = create_data_envelope(

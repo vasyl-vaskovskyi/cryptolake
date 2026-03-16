@@ -45,6 +45,7 @@ class WebSocketManager:
         self._last_received_at: dict[tuple[str, str], int] = {}
         self._consecutive_drops = 0
         self._backpressure_threshold = 10  # consecutive drops before pausing WS reads
+        self._tasks: list[asyncio.Task] = []
 
     def _next_seq(self, symbol: str, stream: str) -> int:
         key = (symbol, stream)
@@ -58,12 +59,12 @@ class WebSocketManager:
                       if s not in ("depth_snapshot", "open_interest")]
         urls = self.adapter.get_ws_urls(self.symbols, ws_streams)
 
-        tasks = []
+        self._tasks = []
         for socket_name, url in urls.items():
-            tasks.append(asyncio.create_task(
+            self._tasks.append(asyncio.create_task(
                 self._connection_loop(socket_name, url)
             ))
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def has_ws_streams(self) -> bool:
         """True if this manager is expected to open any WebSocket connections."""
@@ -83,6 +84,12 @@ class WebSocketManager:
 
     async def stop(self) -> None:
         self._running = False
+        for t in self._tasks:
+            if not t.done():
+                t.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
 
     async def _connection_loop(self, socket_name: str, url: str) -> None:
         backoff = 1

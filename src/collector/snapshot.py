@@ -51,6 +51,8 @@ class SnapshotScheduler:
         self._session: aiohttp.ClientSession | None = None
         self._seq_counters: dict[str, int] = {s: 0 for s in symbols}
         self._running = False
+        self._stop_event: asyncio.Event | None = None
+        self._tasks: list[asyncio.Task] = []
 
     def _get_interval(self, symbol: str) -> int:
         return self.overrides.get(symbol, self.default_interval_s)
@@ -58,15 +60,24 @@ class SnapshotScheduler:
     async def start(self) -> None:
         self._session = aiohttp.ClientSession()
         self._running = True
-        tasks = []
+        self._stop_event = asyncio.Event()
+        self._tasks = []
         for i, symbol in enumerate(self.symbols):
             interval = self._get_interval(symbol)
             delay = (interval / len(self.symbols)) * i
-            tasks.append(asyncio.create_task(self._poll_loop(symbol, interval, delay)))
-        await asyncio.gather(*tasks)
+            self._tasks.append(asyncio.create_task(self._poll_loop(symbol, interval, delay)))
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
     async def stop(self) -> None:
         self._running = False
+        if self._stop_event:
+            self._stop_event.set()
+        for t in self._tasks:
+            if not t.done():
+                t.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._session:
             await self._session.close()
 
@@ -98,10 +109,18 @@ class SnapshotScheduler:
 
     async def _poll_loop(self, symbol: str, interval: int, initial_delay: float) -> None:
         if initial_delay > 0:
-            await asyncio.sleep(initial_delay)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=initial_delay)
+                return  # stop requested
+            except asyncio.TimeoutError:
+                pass
         while self._running:
             await self._take_snapshot(symbol)
-            await asyncio.sleep(interval)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                return  # stop requested
+            except asyncio.TimeoutError:
+                pass
 
     async def _take_snapshot(self, symbol: str) -> None:
         raw_text = await self.fetch_snapshot(symbol)

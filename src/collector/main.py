@@ -71,6 +71,7 @@ class Collector:
             symbols=self.symbols,
             enabled_streams=self.enabled_streams,
         )
+        self._tasks: list[asyncio.Task] = []
         # Wire producer overflow to WS backpressure
         self.producer._on_overflow = lambda ex, sym, st: self._on_producer_overflow()
 
@@ -86,11 +87,11 @@ class Collector:
     async def start(self) -> None:
         logger.info("collector_starting", session_id=self.session_id,
                      symbols=self.symbols, streams=self.enabled_streams)
-        tasks = []
+        self._tasks = []
 
         # WebSocket streams
         ws_task = asyncio.create_task(self.ws_manager.start())
-        tasks.append(ws_task)
+        self._tasks.append(ws_task)
 
         # Snapshot scheduler
         if "depth" in self.enabled_streams:
@@ -105,7 +106,7 @@ class Collector:
                 default_interval=self.exchange_cfg.depth.snapshot_interval,
                 overrides=self.exchange_cfg.depth.snapshot_overrides,
             )
-            tasks.append(asyncio.create_task(self.snapshot_scheduler.start()))
+            self._tasks.append(asyncio.create_task(self.snapshot_scheduler.start()))
 
         # Open interest poller
         if "open_interest" in self.enabled_streams:
@@ -119,12 +120,12 @@ class Collector:
                 poll_interval_seconds=parse_interval_seconds(
                     self.exchange_cfg.open_interest.poll_interval),
             )
-            tasks.append(asyncio.create_task(self.oi_poller.start()))
+            self._tasks.append(asyncio.create_task(self.oi_poller.start()))
 
         # Health/metrics HTTP server
-        tasks.append(asyncio.create_task(self._start_http()))
+        self._tasks.append(asyncio.create_task(self._start_http()))
 
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
     async def shutdown(self) -> None:
         logger.info("collector_shutting_down")
@@ -134,6 +135,13 @@ class Collector:
         if self.oi_poller:
             await self.oi_poller.stop()
         self.producer.flush(timeout=10.0)
+        # Cancel any remaining top-level tasks
+        for t in self._tasks:
+            if not t.done():
+                t.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         logger.info("collector_shutdown_complete")
 
     async def _start_http(self) -> None:
@@ -150,9 +158,11 @@ class Collector:
         return web.json_response({"status": "ok"})
 
     async def _ready(self, request: web.Request) -> web.Response:
+        loop = asyncio.get_running_loop()
+        producer_ok = await loop.run_in_executor(None, self.producer.is_connected)
         checks = {
             "ws_connected": self.ws_manager.is_connected(),
-            "producer_connected": self.producer.is_connected(),
+            "producer_connected": producer_ok,
         }
         status = 200 if all(checks.values()) else 503
         return web.json_response(checks, status=status)

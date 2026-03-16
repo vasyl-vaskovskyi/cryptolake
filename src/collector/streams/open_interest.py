@@ -35,28 +35,46 @@ class OpenInterestPoller:
         self._session: aiohttp.ClientSession | None = None
         self._seq_counters: dict[str, int] = {s: 0 for s in symbols}
         self._running = False
+        self._stop_event: asyncio.Event | None = None
+        self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
         self._session = aiohttp.ClientSession()
         self._running = True
-        # Stagger initial requests
-        tasks = []
+        self._stop_event = asyncio.Event()
+        self._tasks = []
         for i, symbol in enumerate(self.symbols):
             delay = (self.poll_interval / len(self.symbols)) * i
-            tasks.append(asyncio.create_task(self._poll_loop(symbol, initial_delay=delay)))
-        await asyncio.gather(*tasks)
+            self._tasks.append(asyncio.create_task(self._poll_loop(symbol, initial_delay=delay)))
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
     async def stop(self) -> None:
         self._running = False
+        if self._stop_event:
+            self._stop_event.set()
+        for t in self._tasks:
+            if not t.done():
+                t.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._session:
             await self._session.close()
 
     async def _poll_loop(self, symbol: str, initial_delay: float = 0) -> None:
         if initial_delay > 0:
-            await asyncio.sleep(initial_delay)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=initial_delay)
+                return  # stop requested
+            except asyncio.TimeoutError:
+                pass
         while self._running:
             await self._poll_once(symbol)
-            await asyncio.sleep(self.poll_interval)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval)
+                return  # stop requested
+            except asyncio.TimeoutError:
+                pass
 
     async def _poll_once(self, symbol: str, retries: int = 3) -> None:
         url = self.adapter.build_open_interest_url(symbol)
