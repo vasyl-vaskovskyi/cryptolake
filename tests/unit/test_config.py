@@ -143,3 +143,43 @@ monitoring:
             "liquidations",
             "open_interest",
         ]
+
+    def test_writer_streams_override_auto_includes_depth_snapshot(self) -> None:
+        """writer_streams_override with 'depth' must auto-add 'depth_snapshot'."""
+        from src.common.config import BinanceExchangeConfig
+
+        cfg = BinanceExchangeConfig(
+            symbols=["btcusdt"],
+            writer_streams_override=["trades", "depth"],
+        )
+        assert "depth_snapshot" in cfg.writer_streams_override
+        assert cfg.writer_streams_override == ["trades", "depth", "depth_snapshot"]
+
+    def test_writer_streams_override_no_duplicate_depth_snapshot(self) -> None:
+        """If depth_snapshot is already listed, don't duplicate it."""
+        from src.common.config import BinanceExchangeConfig
+
+        cfg = BinanceExchangeConfig(
+            symbols=["btcusdt"],
+            writer_streams_override=["depth", "depth_snapshot"],
+        )
+        assert cfg.writer_streams_override.count("depth_snapshot") == 1
+
+    def test_writer_streams_override_none_by_default(self) -> None:
+        from src.common.config import BinanceExchangeConfig
+
+        cfg = BinanceExchangeConfig(symbols=["btcusdt"])
+        assert cfg.writer_streams_override is None
+
+    def test_env_override_does_not_bleed_os_environ(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When explicit env_overrides are passed, os.environ should not bleed in."""
+        from src.common.config import load_config
+
+        monkeypatch.setenv("REDPANDA__BROKERS", "leaked:9092,leaked:9093")
+        config = load_config(
+            FIXTURES_DIR / "config_valid.yaml",
+            env_overrides={"WRITER__COMPRESSION_LEVEL": "5"},
+        )
+        assert config.writer.compression_level == 5
+        # os.environ REDPANDA__BROKERS should NOT have been applied
+        assert config.redpanda.brokers == ["redpanda:9092"]

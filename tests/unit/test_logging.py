@@ -19,3 +19,17 @@ class TestStructuredLogging:
         assert parsed["session_seq"] == 42
         assert "timestamp" in parsed
         assert parsed["level"] == "info"
+
+    def test_warning_level_suppresses_info(self, capsys) -> None:
+        from src.common.logging import get_logger, setup_logging
+
+        setup_logging(level="WARNING")
+        log = get_logger(component="test")
+        log.info("should_be_suppressed")
+        log.warning("should_appear")
+
+        output = capsys.readouterr().out
+        assert "should_be_suppressed" not in output
+        parsed = json.loads(output.strip())
+        assert parsed["event"] == "should_appear"
+        assert parsed["level"] == "warning"

@@ -149,13 +149,15 @@ def load_config(path: Path, env_overrides: dict[str, str] | None = None) -> Cryp
 
     data = yaml.safe_load(path.read_text()) or {}
 
-    auto_overrides = {
-        key: value
-        for key, value in os.environ.items()
-        if "__" in key
-        and key.split("__", 1)[0].lower() in {"database", "exchanges", "redpanda", "writer", "monitoring"}
-    }
-    overrides = {**auto_overrides, **(env_overrides or {})}
+    if env_overrides is not None:
+        overrides = env_overrides
+    else:
+        overrides = {
+            key: value
+            for key, value in os.environ.items()
+            if "__" in key
+            and key.split("__", 1)[0].lower() in {"database", "exchanges", "redpanda", "writer", "monitoring"}
+        }
     if overrides:
         data = _apply_env_overrides(data, overrides)
 

@@ -156,6 +156,25 @@ class TestEnvelopeSerialization:
         assert parsed["type"] == "gap"
         assert "raw_text" not in parsed
 
+    def test_deserialize_envelope_round_trip(self) -> None:
+        from src.common.envelope import (
+            create_data_envelope,
+            deserialize_envelope,
+            serialize_envelope,
+        )
+
+        original = create_data_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            raw_text='{"e":"aggTrade","p":"0.00100000"}',
+            exchange_ts=1741689600120,
+            collector_session_id="test_session",
+            session_seq=42,
+        )
+        roundtripped = deserialize_envelope(serialize_envelope(original))
+        assert roundtripped == original
+
     def test_add_broker_coordinates(self) -> None:
         from src.common.envelope import add_broker_coordinates, create_data_envelope
 
