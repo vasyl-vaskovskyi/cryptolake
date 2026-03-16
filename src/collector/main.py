@@ -80,7 +80,7 @@ class Collector:
     def _on_pu_chain_break(self, symbol: str) -> None:
         """Callback from DepthHandler when pu chain breaks — triggers depth resync."""
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.create_task(self.ws_manager._depth_resync(symbol))
 
     async def start(self) -> None:
