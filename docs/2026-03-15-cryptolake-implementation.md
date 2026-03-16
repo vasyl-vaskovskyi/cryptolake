@@ -2340,10 +2340,16 @@ class CryptoLakeProducer:
             "queue.buffering.max.kbytes": 1048576,  # 1GB
         })
 
+    def _get_stream_cap(self, stream: str) -> int:
+        """Return the per-stream buffer cap for partitioned overflow protection."""
+        return self.buffer_caps.get(stream, self.other_cap)
+
     def produce(self, envelope: dict) -> bool:
         """Produce an envelope to the appropriate Redpanda topic.
 
         Returns True if produced, False if dropped due to overflow.
+        Enforces per-stream buffer caps to prevent high-volume streams (depth)
+        from starving low-volume irreplaceable streams (liquidations, funding_rate).
         On recovery from overflow, emits a buffer_overflow gap record.
         """
         import time as _time
@@ -2353,12 +2359,31 @@ class CryptoLakeProducer:
         key = symbol.encode()
         value = serialize_envelope(envelope)
 
+        # Check per-stream cap and optimistically increment under a single lock
+        # to avoid TOCTOU between cap check and count update (spec 7.5)
+        with self._lock:
+            current = self._buffer_counts.get(stream, 0)
+            cap = self._get_stream_cap(stream)
+            if current >= cap:
+                # Per-stream cap exceeded — drop to protect other streams
+                collector_metrics.messages_dropped_total.labels(
+                    exchange=self.exchange, symbol=symbol, stream=stream,
+                ).inc()
+                overflow_key = (symbol, stream)
+                if overflow_key not in self._overflow_start:
+                    self._overflow_start[overflow_key] = _time.time_ns()
+                if self._on_overflow:
+                    self._on_overflow(self.exchange, symbol, stream)
+                return False
+            # Optimistically increment before produce; delivery callback decrements
+            self._buffer_counts[stream] = current + 1
+
         try:
             self._producer.produce(
                 topic=topic,
                 key=key,
                 value=value,
-                on_delivery=self._on_delivery,
+                on_delivery=self._make_delivery_cb(stream),
             )
             self._producer.poll(0)
             collector_metrics.messages_produced_total.labels(
@@ -2372,6 +2397,9 @@ class CryptoLakeProducer:
 
             return True
         except BufferError:
+            # Roll back optimistic increment since produce failed
+            with self._lock:
+                self._buffer_counts[stream] = max(0, self._buffer_counts.get(stream, 1) - 1)
             collector_metrics.messages_dropped_total.labels(
                 exchange=self.exchange, symbol=symbol, stream=stream,
             ).inc()
@@ -2382,6 +2410,18 @@ class CryptoLakeProducer:
             if self._on_overflow:
                 self._on_overflow(self.exchange, symbol, stream)
             return False
+
+    def _make_delivery_cb(self, stream: str):
+        """Create a delivery callback that decrements per-stream buffer count."""
+        def _cb(err, msg):
+            with self._lock:
+                count = self._buffer_counts.get(stream, 0)
+                if count > 0:
+                    self._buffer_counts[stream] = count - 1
+            if err is not None:
+                logger.error("producer_delivery_failed", error=str(err),
+                             topic=msg.topic(), key=msg.key())
+        return _cb
 
     def _emit_overflow_gap(self, symbol: str, stream: str, start_ts: int) -> None:
         """Emit a buffer_overflow gap record when recovering from overflow."""
@@ -2406,11 +2446,18 @@ class CryptoLakeProducer:
                 topic=topic,
                 key=symbol.encode(),
                 value=serialize_envelope(gap),
-                on_delivery=self._on_delivery,
+                on_delivery=self._make_delivery_cb(stream),
             )
             logger.info("buffer_overflow_gap_emitted", symbol=symbol, stream=stream)
         except BufferError:
             logger.error("buffer_overflow_gap_emit_failed", symbol=symbol, stream=stream)
+
+    def is_connected(self) -> bool:
+        """Check if the producer can reach the broker (best-effort via pending queue length)."""
+        try:
+            return len(self._producer) < self.max_buffer
+        except Exception:
+            return False
 
     def flush(self, timeout: float = 10.0) -> int:
         return self._producer.flush(timeout)
@@ -2418,11 +2465,6 @@ class CryptoLakeProducer:
     def poll(self, timeout: float = 0) -> int:
         return self._producer.poll(timeout)
 
-    @staticmethod
-    def _on_delivery(err, msg):
-        if err is not None:
-            logger.error("producer_delivery_failed", error=str(err),
-                         topic=msg.topic(), key=msg.key())
 ```
 
 - [ ] **Step 2: Commit**
@@ -2556,11 +2598,23 @@ class DepthHandler(StreamHandler):
             return
 
         if result.gap:
+            import time as _time
             logger.warning("depth_pu_chain_break", symbol=symbol,
                            expected_pu=detector._last_u, actual_pu=pu)
             collector_metrics.gaps_detected_total.labels(
                 exchange=self.exchange, symbol=symbol, stream="depth",
             ).inc()
+            # Emit gap record immediately when break is observed (spec 7.4)
+            now = _time.time_ns()
+            gap = create_gap_envelope(
+                exchange=self.exchange, symbol=symbol, stream="depth",
+                collector_session_id=self.collector_session_id,
+                session_seq=session_seq,
+                gap_start_ts=now, gap_end_ts=now,
+                reason="pu_chain_break",
+                detail=f"pu chain break: expected pu={detector._last_u}, got pu={pu}",
+            )
+            self.producer.produce(gap)
             # Trigger resync via callback (wired by Collector to WebSocketManager._depth_resync)
             if self._on_pu_chain_break:
                 self._on_pu_chain_break(symbol)
@@ -2572,7 +2626,28 @@ class DepthHandler(StreamHandler):
             if pending is not None and len(pending) < _MAX_PENDING_DIFFS:
                 pending.append((raw_text, exchange_ts, session_seq))
             else:
+                import time as _time
                 logger.warning("depth_pending_buffer_full", symbol=symbol)
+                collector_metrics.gaps_detected_total.labels(
+                    exchange=self.exchange, symbol=symbol, stream="depth",
+                ).inc()
+                # Emit gap record for explicit data loss (spec invariant 1.4)
+                now = _time.time_ns()
+                gap = create_gap_envelope(
+                    exchange=self.exchange, symbol=symbol, stream="depth",
+                    collector_session_id=self.collector_session_id,
+                    session_seq=session_seq,
+                    gap_start_ts=now, gap_end_ts=now,
+                    reason="buffer_overflow",
+                    detail=f"Depth pending-diff buffer full ({_MAX_PENDING_DIFFS}), diffs dropped while awaiting snapshot",
+                )
+                self.producer.produce(gap)
+                # Force resync — continued buffering is pointless
+                detector.reset()
+                if pending is not None:
+                    pending.clear()
+                if self._on_pu_chain_break:
+                    self._on_pu_chain_break(symbol)
             return
 
         envelope = create_data_envelope(
@@ -3093,6 +3168,7 @@ class WebSocketManager:
         self.enabled_streams = enabled_streams
         self._seq_counters: dict[tuple[str, str], int] = {}
         self._running = False
+        self._ws_connected: dict[str, bool] = {}  # {socket_name: connected}
         self._last_received_at: dict[tuple[str, str], int] = {}
         self._consecutive_drops = 0
         self._backpressure_threshold = 10  # consecutive drops before pausing WS reads
@@ -3116,6 +3192,12 @@ class WebSocketManager:
             ))
         await asyncio.gather(*tasks)
 
+    def is_connected(self) -> bool:
+        """True if all expected WebSocket sockets are currently connected."""
+        if not self._ws_connected:
+            return False
+        return all(self._ws_connected.values())
+
     async def stop(self) -> None:
         self._running = False
 
@@ -3129,6 +3211,7 @@ class WebSocketManager:
                 ).inc()
                 async with websockets.connect(url, ping_interval=30, ping_timeout=10,
                                               close_timeout=5) as ws:
+                    self._ws_connected[socket_name] = True
                     logger.info("ws_connected", socket=socket_name, url=url[:80])
                     backoff = 1  # reset on successful connect
                     await self._receive_loop(ws, socket_name, connect_time)
@@ -3137,6 +3220,7 @@ class WebSocketManager:
             except Exception as e:
                 logger.error("ws_unexpected_error", socket=socket_name, error=str(e))
             finally:
+                self._ws_connected[socket_name] = False
                 collector_metrics.ws_connections_active.labels(
                     exchange=self.exchange
                 ).dec()
@@ -3386,6 +3470,10 @@ class Collector:
         if "liquidations" in self.enabled_streams:
             self.handlers["liquidations"] = LiquidationsHandler("binance", self.session_id, self.producer)
 
+        # Initialize optional components to None (created conditionally in start())
+        self.snapshot_scheduler = None
+        self.oi_poller = None
+
         self.ws_manager = WebSocketManager(
             exchange="binance",
             collector_session_id=self.session_id,
@@ -3474,8 +3562,10 @@ class Collector:
         return web.json_response({"status": "ok"})
 
     async def _ready(self, request: web.Request) -> web.Response:
-        # Check WS and producer connectivity
-        checks = {"ws_connected": True, "producer_connected": True}
+        checks = {
+            "ws_connected": self.ws_manager.is_connected(),
+            "producer_connected": self.producer.is_connected(),
+        }
         status = 200 if all(checks.values()) else 503
         return web.json_response(checks, status=status)
 
@@ -4429,6 +4519,7 @@ class WriterConsumer:
         self.base_dir = base_dir
         self._consumer = None
         self._running = False
+        self._assigned = False  # True once consumer receives partition assignment
         self._sealed_files: set[Path] = set()  # tracks sealed .jsonl.zst paths
         self._late_seq: dict[Path, int] = {}  # late-arrival sequence counters
 
@@ -4449,7 +4540,10 @@ class WriterConsumer:
         # Discover already-sealed files (those with .sha256 sidecar)
         self._discover_sealed_files()
 
-        self._consumer.subscribe(self.topics)
+        def _on_assign(consumer, partitions):
+            self._assigned = True
+            logger.info("consumer_partitions_assigned", count=len(partitions))
+        self._consumer.subscribe(self.topics, on_assign=_on_assign)
         self._running = True
 
         # Collapse to max offset per (topic, partition) since state is now keyed per file
@@ -4627,6 +4721,10 @@ class WriterConsumer:
             ).observe(elapsed_ms)
         logger.debug("flush_complete", files=len(results), elapsed_ms=round(elapsed_ms, 1))
 
+    def is_connected(self) -> bool:
+        """True if consumer exists and has been assigned partitions."""
+        return self._consumer is not None and self._assigned
+
     async def stop(self) -> None:
         self._running = False
         await self._flush_and_commit()
@@ -4718,7 +4816,7 @@ class Writer:
         return web.json_response({"status": "ok"})
 
     async def _ready(self, request: web.Request) -> web.Response:
-        checks = {"consumer_connected": True, "storage_writable": True}
+        checks = {"consumer_connected": self.consumer.is_connected(), "storage_writable": True}
         try:
             Path(self.config.writer.base_dir).mkdir(parents=True, exist_ok=True)
             test_file = Path(self.config.writer.base_dir) / ".write_test"
@@ -4985,11 +5083,11 @@ class TestDepthReplay:
         errors = verify_depth_replay(diffs, [snap], [])
         assert len(errors) >= 1 and "pu chain break" in errors[0].lower()
 
-    def test_pu_break_with_gap_is_excused(self):
+    def test_pu_break_with_depth_gap_is_excused(self):
         from src.cli.verify import verify_depth_replay
         snap = self._make_snap_env(0, 1000)
-        gap = {"type": "gap", "symbol": "btcusdt", "gap_start_ts": 0,
-               "gap_end_ts": 9999999999_000_000_000,
+        gap = {"type": "gap", "symbol": "btcusdt", "stream": "depth",
+               "gap_start_ts": 0, "gap_end_ts": 9999999999_000_000_000,
                "received_at": 1741689600_000_000_000}
         diffs = [
             self._make_depth_env(1, 999, 1002, 998),
@@ -4997,6 +5095,29 @@ class TestDepthReplay:
         ]
         errors = verify_depth_replay(diffs, [snap], [gap])
         assert errors == []
+
+    def test_non_depth_gap_does_not_excuse_depth_break(self):
+        """A trades gap for the same symbol must NOT excuse a depth pu chain break."""
+        from src.cli.verify import verify_depth_replay
+        snap = self._make_snap_env(0, 1000)
+        gap = {"type": "gap", "symbol": "btcusdt", "stream": "trades",
+               "gap_start_ts": 0, "gap_end_ts": 9999999999_000_000_000,
+               "received_at": 1741689600_000_000_000}
+        diffs = [
+            self._make_depth_env(1, 999, 1002, 998),
+            self._make_depth_env(2, 1010, 1015, 1008),
+        ]
+        errors = verify_depth_replay(diffs, [snap], [gap])
+        assert len(errors) >= 1 and "pu chain break" in errors[0].lower()
+
+    def test_first_diff_must_span_sync_point(self):
+        """First diff after snapshot must satisfy U <= lastUpdateId+1 <= u."""
+        from src.cli.verify import verify_depth_replay
+        snap = self._make_snap_env(0, 1000)
+        # Diff that does NOT span lastUpdateId+1=1001: U=1010, u=1015
+        diffs = [self._make_depth_env(1, 1010, 1015, 1009)]
+        errors = verify_depth_replay(diffs, [snap], [])
+        assert len(errors) >= 1 and "sync point" in errors[0].lower()
 
     def test_multi_symbol_isolated(self):
         """Each symbol's pu chain is validated independently."""
@@ -5270,29 +5391,35 @@ def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> l
     from collections import defaultdict
     depth_by_sym: dict[str, list] = defaultdict(list)
     snap_by_sym: dict[str, list] = defaultdict(list)
-    gap_by_sym: dict[str, list] = defaultdict(list)
 
     for e in depth_envelopes:
         depth_by_sym[e["symbol"]].append(e)
     for e in snapshot_envelopes:
         snap_by_sym[e["symbol"]].append(e)
+    # Scope gap exemptions by (symbol, stream) — only depth gaps excuse depth breaks
+    gap_by_sym_stream: dict[tuple[str, str], list] = defaultdict(list)
     for g in gap_envelopes:
-        gap_by_sym[g.get("symbol", "")].append(g)
+        key = (g.get("symbol", ""), g.get("stream", ""))
+        gap_by_sym_stream[key].append(g)
 
     for symbol in depth_by_sym:
         sym_depths = sorted(depth_by_sym[symbol], key=lambda e: e["_offset"])
         sym_snaps = sorted(snap_by_sym.get(symbol, []), key=lambda e: e["_offset"])
-        sym_gaps = gap_by_sym.get(symbol, [])
-        gap_windows = [(g["gap_start_ts"], g["gap_end_ts"]) for g in sym_gaps]
+        # Only depth and depth_snapshot gaps can excuse depth chain breaks
+        sym_depth_gaps = gap_by_sym_stream.get((symbol, "depth"), []) + \
+                         gap_by_sym_stream.get((symbol, "depth_snapshot"), [])
+        gap_windows = [(g["gap_start_ts"], g["gap_end_ts"]) for g in sym_depth_gaps]
 
         def _in_gap(received_at):
             return any(s <= received_at <= e for s, e in gap_windows)
 
-        snap_idx, synced, last_u = 0, False, None
+        snap_idx, synced, last_u, sync_lid = 0, False, None, None
         for env in sym_depths:
             raw = orjson.loads(env["raw_text"])
             U, u, pu = raw.get("U", 0), raw.get("u", 0), raw.get("pu", 0)
             while snap_idx < len(sym_snaps) and sym_snaps[snap_idx]["_offset"] < env["_offset"]:
+                snap_raw = orjson.loads(sym_snaps[snap_idx]["raw_text"])
+                sync_lid = snap_raw["lastUpdateId"]
                 synced, last_u = True, None
                 snap_idx += 1
             if not synced:
@@ -5300,6 +5427,14 @@ def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> l
                     errors.append(f"[{symbol}] Depth diff at offset {env['_offset']} has no preceding snapshot")
                 continue
             if last_u is None:
+                # First diff after snapshot: validate sync-point rule
+                # U <= lastUpdateId+1 and u >= lastUpdateId+1
+                if not (U <= sync_lid + 1 <= u):
+                    if not _in_gap(env["received_at"]):
+                        errors.append(
+                            f"[{symbol}] First diff after snapshot does not span sync point: "
+                            f"lastUpdateId={sync_lid}, U={U}, u={u} at offset {env['_offset']}")
+                    continue
                 last_u = u
                 continue
             if pu != last_u:
@@ -5314,7 +5449,7 @@ def verify_depth_replay(depth_envelopes, snapshot_envelopes, gap_envelopes) -> l
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_verify.py -v`
-Expected: All 14 tests PASS.
+Expected: All 17 tests PASS.
 
 - [ ] **Step 5: Commit**
 
