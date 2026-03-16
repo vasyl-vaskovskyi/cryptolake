@@ -2453,9 +2453,25 @@ class CryptoLakeProducer:
             logger.error("buffer_overflow_gap_emit_failed", symbol=symbol, stream=stream)
 
     def is_connected(self) -> bool:
-        """Check if the producer can reach the broker (best-effort via pending queue length)."""
+        """Check if the producer can reach the broker via metadata query."""
         try:
-            return len(self._producer) < self.max_buffer
+            # list_topics() actually contacts the broker — timeout keeps it fast
+            self._producer.list_topics(timeout=5)
+            return True
+        except Exception:
+            return False
+
+    def is_healthy_for_resync(self) -> bool:
+        """True if producer is connected and not actively dropping messages.
+        Used as precondition for depth resync (spec 7.2)."""
+        if self._overflow_start:
+            return False  # actively in overflow for at least one stream
+        try:
+            pending = len(self._producer)
+            if pending > self.max_buffer * 0.8:
+                return False  # buffer above 80% — too risky for resync
+            self._producer.list_topics(timeout=5)
+            return True
         except Exception:
             return False
 
@@ -2495,9 +2511,58 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+import structlog
+
+from src.collector.gap_detector import SessionSeqTracker
+from src.collector import metrics as collector_metrics
+from src.common.envelope import create_gap_envelope
+
+logger = structlog.get_logger()
+
 
 class StreamHandler(ABC):
-    """Processes a routed message for a specific stream type."""
+    """Processes a routed message for a specific stream type.
+
+    Subclasses that want session_seq gap detection should call
+    self._check_seq(symbol, session_seq) at the start of handle().
+    """
+
+    def _init_seq_tracking(self, exchange: str, collector_session_id: str,
+                           producer, stream_name: str) -> None:
+        """Call from subclass __init__ to enable session_seq gap detection."""
+        self._seq_exchange = exchange
+        self._seq_collector_session_id = collector_session_id
+        self._seq_producer = producer
+        self._seq_stream = stream_name
+        self._seq_trackers: dict[str, SessionSeqTracker] = {}
+
+    def _check_seq(self, symbol: str, session_seq: int) -> None:
+        """Check session_seq continuity; emit gap record on skip (spec 7.4)."""
+        tracker = self._seq_trackers.get(symbol)
+        if tracker is None:
+            tracker = SessionSeqTracker()
+            self._seq_trackers[symbol] = tracker
+        gap = tracker.check(session_seq)
+        if gap is not None:
+            import time as _time
+            logger.warning("session_seq_skip", symbol=symbol,
+                           stream=self._seq_stream,
+                           expected=gap.expected, actual=gap.actual)
+            collector_metrics.gaps_detected_total.labels(
+                exchange=self._seq_exchange, symbol=symbol,
+                stream=self._seq_stream,
+            ).inc()
+            now = _time.time_ns()
+            gap_env = create_gap_envelope(
+                exchange=self._seq_exchange, symbol=symbol,
+                stream=self._seq_stream,
+                collector_session_id=self._seq_collector_session_id,
+                session_seq=session_seq,
+                gap_start_ts=now, gap_end_ts=now,
+                reason="session_seq_skip",
+                detail=f"session_seq skip: expected {gap.expected}, got {gap.actual}",
+            )
+            self._seq_producer.produce(gap_env)
 
     @abstractmethod
     async def handle(
@@ -2526,8 +2591,10 @@ class TradesHandler(StreamHandler):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
         self.producer = producer
+        self._init_seq_tracking(exchange, collector_session_id, producer, "trades")
 
     async def handle(self, symbol: str, raw_text: str, exchange_ts: int | None, session_seq: int) -> None:
+        self._check_seq(symbol, session_seq)
         envelope = create_data_envelope(
             exchange=self.exchange,
             symbol=symbol,
@@ -2717,8 +2784,10 @@ class BookTickerHandler(StreamHandler):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
         self.producer = producer
+        self._init_seq_tracking(exchange, collector_session_id, producer, "bookticker")
 
     async def handle(self, symbol: str, raw_text: str, exchange_ts: int | None, session_seq: int) -> None:
+        self._check_seq(symbol, session_seq)
         envelope = create_data_envelope(
             exchange=self.exchange,
             symbol=symbol,
@@ -2745,8 +2814,10 @@ class FundingRateHandler(StreamHandler):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
         self.producer = producer
+        self._init_seq_tracking(exchange, collector_session_id, producer, "funding_rate")
 
     async def handle(self, symbol: str, raw_text: str, exchange_ts: int | None, session_seq: int) -> None:
+        self._check_seq(symbol, session_seq)
         envelope = create_data_envelope(
             exchange=self.exchange,
             symbol=symbol,
@@ -2773,8 +2844,10 @@ class LiquidationsHandler(StreamHandler):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
         self.producer = producer
+        self._init_seq_tracking(exchange, collector_session_id, producer, "liquidations")
 
     async def handle(self, symbol: str, raw_text: str, exchange_ts: int | None, session_seq: int) -> None:
+        self._check_seq(symbol, session_seq)
         envelope = create_data_envelope(
             exchange=self.exchange,
             symbol=symbol,
@@ -3192,8 +3265,18 @@ class WebSocketManager:
             ))
         await asyncio.gather(*tasks)
 
+    def has_ws_streams(self) -> bool:
+        """True if this manager is expected to open any WebSocket connections."""
+        ws_streams = [s for s in self.enabled_streams
+                      if s not in ("depth_snapshot", "open_interest")]
+        urls = self.adapter.get_ws_urls(self.symbols, ws_streams)
+        return len(urls) > 0
+
     def is_connected(self) -> bool:
-        """True if all expected WebSocket sockets are currently connected."""
+        """True if all expected WebSocket sockets are currently connected.
+        Returns True if no WS sockets are expected (REST-only config, spec 11.3)."""
+        if not self.has_ws_streams():
+            return True  # no WS needed — skip check
         if not self._ws_connected:
             return False
         return all(self._ws_connected.values())
@@ -3303,6 +3386,32 @@ class WebSocketManager:
             return
 
         logger.info("depth_resync_starting", symbol=symbol)
+
+        # Precondition: wait until producer is healthy (spec 7.2)
+        # Do not resync while producer is offline or dropping messages
+        _max_wait = 60  # seconds
+        _waited = 0
+        while not self.producer.is_healthy_for_resync() and _waited < _max_wait:
+            logger.warning("depth_resync_waiting_for_producer", symbol=symbol,
+                           waited_s=_waited)
+            await asyncio.sleep(2)
+            _waited += 2
+        if not self.producer.is_healthy_for_resync():
+            logger.error("depth_resync_aborted_producer_unhealthy", symbol=symbol)
+            import time as _time
+            from src.common.envelope import create_gap_envelope
+            gap = create_gap_envelope(
+                exchange=self.exchange, symbol=symbol, stream="depth",
+                collector_session_id=self.collector_session_id,
+                session_seq=self._next_seq(symbol, "depth"),
+                gap_start_ts=_time.time_ns(), gap_end_ts=_time.time_ns(),
+                reason="pu_chain_break",
+                detail=f"Depth resync aborted: producer unhealthy after {_max_wait}s wait",
+            )
+            # Best-effort gap emit — producer may still be unhealthy
+            self.producer.produce(gap)
+            return
+
         depth_handler.reset(symbol)
 
         # Import here to avoid circular dependency
@@ -4332,6 +4441,17 @@ class BufferManager:
             return self._flush_buffer(key, target)
         return None
 
+    def flush_key(self, file_key: tuple[str, str, str]) -> list[FlushResult]:
+        """Flush buffers matching a (exchange, symbol, stream) prefix."""
+        exchange, symbol, stream = file_key
+        results: list[FlushResult] = []
+        for key in list(self._buffers.keys()):
+            if key[0] == exchange and key[1] == symbol and key[2] == stream:
+                if self._buffers[key]:
+                    target = FileTarget(*key)
+                    results.extend(self._flush_buffer(key, target))
+        return results
+
     def flush_all(self) -> list[FlushResult]:
         """Flush all non-empty buffers."""
         results: list[FlushResult] = []
@@ -4542,8 +4662,32 @@ class WriterConsumer:
 
         def _on_assign(consumer, partitions):
             self._assigned = True
+            self._assigned_partitions = set(
+                (tp.topic, tp.partition) for tp in partitions
+            )
             logger.info("consumer_partitions_assigned", count=len(partitions))
-        self._consumer.subscribe(self.topics, on_assign=_on_assign)
+
+        def _on_revoke(consumer, partitions):
+            revoked = set((tp.topic, tp.partition) for tp in partitions)
+            logger.critical("consumer_partitions_revoked",
+                            revoked=list(revoked),
+                            detail="Writer exclusivity violated — another consumer "
+                                   "joined the group or rebalance occurred")
+            # Flush any buffered data before losing ownership
+            # (best-effort — we may lose the race)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._flush_and_commit())
+            self._assigned = False
+            # Crash the writer to prevent split-brain writes (spec 8.2)
+            raise RuntimeError(
+                f"Writer exclusivity violated: partitions {revoked} revoked. "
+                "Another writer may have joined consumer group. Shutting down."
+            )
+
+        self._consumer.subscribe(self.topics, on_assign=_on_assign,
+                                 on_revoke=_on_revoke)
         self._running = True
 
         # Collapse to max offset per (topic, partition) since state is now keyed per file
@@ -4589,7 +4733,9 @@ class WriterConsumer:
         """Main consume loop. Polls in executor, buffers, flushes, and commits."""
         loop = asyncio.get_event_loop()
         last_flush_time = time.monotonic()
-        last_hour: int | None = None
+        # Track active hour per file key (exchange, symbol, stream) — not globally.
+        # Only seal a specific stream's file when *that stream* crosses an hour boundary.
+        active_hours: dict[tuple[str, str, str], int] = {}
 
         while self._running:
             # Non-blocking poll via executor (spec 8.2: avoid blocking uvloop)
@@ -4635,16 +4781,22 @@ class WriterConsumer:
                 stream=envelope.get("stream", ""),
             ).inc()
 
-            # Check for hourly rotation trigger
+            # Per-file hourly rotation (spec 8.2: file routing by message received_at)
             import datetime
             msg_dt = datetime.datetime.fromtimestamp(
                 envelope["received_at"] / 1_000_000_000,
                 tz=datetime.timezone.utc,
             )
             current_hour = msg_dt.hour
-            if last_hour is not None and current_hour != last_hour:
-                await self._rotate_hour()
-            last_hour = current_hour
+            file_key = (envelope.get("exchange", ""),
+                        envelope.get("symbol", ""),
+                        envelope.get("stream", ""))
+            prev_hour = active_hours.get(file_key)
+            if prev_hour is not None and current_hour != prev_hour:
+                # Only seal the specific file that crossed an hour boundary
+                date_str = msg_dt.strftime("%Y-%m-%d")
+                await self._rotate_file(file_key, date_str, prev_hour)
+            active_hours[file_key] = current_hour
 
             # Add to buffer — may trigger flush
             flush_results = self.buffer_manager.add(envelope)
@@ -4652,9 +4804,41 @@ class WriterConsumer:
                 await self._write_and_save(flush_results)
                 last_flush_time = time.monotonic()
 
+    async def _rotate_file(
+        self,
+        file_key: tuple[str, str, str],
+        date_str: str,
+        hour: int,
+    ) -> None:
+        """Seal files for a specific stream that has crossed an hour boundary (spec 8.4).
+        Flushes and seals all buffered date/hour variants for this stream."""
+        exchange, symbol, stream = file_key
+        logger.info("hourly_rotation_triggered", exchange=exchange,
+                     symbol=symbol, stream=stream, hour=hour)
+
+        # Flush buffer for this specific file key (may span multiple date/hours)
+        results = self.buffer_manager.flush_key(file_key)
+        if results:
+            await self._write_and_save(results)
+
+        # Seal all flushed file paths (handles multi-hour edge case)
+        files_to_seal = set()
+        if results:
+            for r in results:
+                files_to_seal.add(r.file_path)
+        # Always include the explicitly targeted file
+        files_to_seal.add(build_file_path(
+            self.base_dir, exchange, symbol, stream, date_str, hour))
+        for file_path in files_to_seal:
+            sc = sidecar_path(file_path)
+            if file_path.exists() and not sc.exists() and file_path.stat().st_size > 0:
+                write_sha256_sidecar(file_path, sc)
+                self._sealed_files.add(file_path)
+
     async def _rotate_hour(self) -> None:
-        """Seal all active files for the previous hour (spec 8.4)."""
-        logger.info("hourly_rotation_triggered")
+        """Seal all active files (used during shutdown). For normal operation,
+        use _rotate_file() which seals per-stream files individually."""
+        logger.info("rotation_seal_all")
         # Flush all buffers first
         results = self.buffer_manager.flush_all()
         if results:
