@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import signal
+from pathlib import Path
+
+import structlog
+import uvloop
+from aiohttp import web
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
+from src.common.config import load_config
+from src.common.logging import setup_logging
+from src.writer.buffer_manager import BufferManager
+from src.writer.compressor import ZstdFrameCompressor
+from src.writer.consumer import WriterConsumer
+from src.writer.state_manager import StateManager
+
+logger = structlog.get_logger()
+
+
+class Writer:
+    def __init__(self, config_path: str):
+        self.config = load_config(Path(config_path))
+        exchange_cfg = self.config.exchanges.binance
+        self.enabled_streams = exchange_cfg.get_enabled_streams()
+        if exchange_cfg.writer_streams_override:
+            self.enabled_streams = exchange_cfg.writer_streams_override
+
+        self.topics = [f"binance.{s}" for s in self.enabled_streams]
+        self.state_manager = StateManager(self.config.database.url)
+        self.compressor = ZstdFrameCompressor(level=self.config.writer.compression_level)
+        self.buffer_manager = BufferManager(
+            base_dir=self.config.writer.base_dir,
+            flush_messages=self.config.writer.flush_messages,
+            flush_interval_seconds=self.config.writer.flush_interval_seconds,
+        )
+        self.consumer = WriterConsumer(
+            brokers=self.config.redpanda.brokers,
+            topics=self.topics,
+            group_id="cryptolake-writer",
+            buffer_manager=self.buffer_manager,
+            compressor=self.compressor,
+            state_manager=self.state_manager,
+            base_dir=self.config.writer.base_dir,
+        )
+
+    async def start(self) -> None:
+        logger.info("writer_starting", topics=self.topics)
+        await self.state_manager.connect()
+        await self.consumer.start()
+        await asyncio.gather(
+            self.consumer.consume_loop(),
+            self._start_http(),
+        )
+
+    async def shutdown(self) -> None:
+        logger.info("writer_shutting_down")
+        await self.consumer.stop()
+        await self.state_manager.close()
+        logger.info("writer_shutdown_complete")
+
+    async def _start_http(self) -> None:
+        app = web.Application()
+        app.router.add_get("/health", self._health)
+        app.router.add_get("/ready", self._ready)
+        app.router.add_get("/metrics", self._metrics)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = self.config.monitoring.prometheus_port + 1  # writer on 8001
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+
+    async def _health(self, request: web.Request) -> web.Response:
+        return web.json_response({"status": "ok"})
+
+    async def _ready(self, request: web.Request) -> web.Response:
+        checks = {"consumer_connected": self.consumer.is_connected(), "storage_writable": True}
+        try:
+            Path(self.config.writer.base_dir).mkdir(parents=True, exist_ok=True)
+            test_file = Path(self.config.writer.base_dir) / ".write_test"
+            test_file.write_text("ok")
+            test_file.unlink()
+        except Exception:
+            checks["storage_writable"] = False
+        status = 200 if all(checks.values()) else 503
+        return web.json_response(checks, status=status)
+
+    async def _metrics(self, request: web.Request) -> web.Response:
+        return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+
+
+def main():
+    setup_logging()
+    uvloop.install()
+
+    config_path = os.environ.get("CONFIG_PATH", "config/config.yaml")
+    writer = Writer(config_path)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    def _signal_handler():
+        loop.create_task(writer.shutdown())
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    try:
+        loop.run_until_complete(writer.start())
+    finally:
+        loop.close()
+
+
+if __name__ == "__main__":
+    main()
