@@ -108,6 +108,8 @@ def _extract_data_value(frame: str, search_start: int) -> str:
     while i < len(frame) and frame[i] in " \t\n\r":
         i += 1
 
+    if i >= len(frame):
+        raise ValueError("Frame truncated: no value after 'data' key")
     if frame[i] != "{":
         raise ValueError(f"Expected '{{' at position {i}, got '{frame[i]}'")
 

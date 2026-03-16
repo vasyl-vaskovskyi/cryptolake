@@ -21,8 +21,9 @@ class ExchangeAdapter(ABC):
         raw_data_text must be extracted via zero-copy string slicing."""
 
     @abstractmethod
-    def extract_exchange_ts(self, stream: str, raw_text: str) -> int:
+    def extract_exchange_ts(self, stream: str, raw_text: str) -> int | None:
         """Extract exchange timestamp (milliseconds) from raw payload.
+        Returns None when no exchange timestamp is available (caller should use received_at).
         Uses lightweight parsing via orjson."""
 
     @abstractmethod
