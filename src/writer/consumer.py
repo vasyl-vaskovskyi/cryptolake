@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -70,11 +71,34 @@ class WriterConsumer:
         # Discover already-sealed files (those with .sha256 sidecar)
         self._discover_sealed_files()
 
+        # Compute seek targets from PG state BEFORE subscribe so they're
+        # available when on_assign fires during the first poll().
+        seek_map: dict[tuple[str, int], int] = {}
+        for s in states.values():
+            key = (s.topic, s.partition)
+            seek_map[key] = max(seek_map.get(key, 0), s.high_water_offset + 1)
+        self._pending_seeks = seek_map
+
         def _on_assign(consumer, partitions):
             self._assigned = True
             self._assigned_partitions = set(
                 (tp.topic, tp.partition) for tp in partitions
             )
+            # Apply pending seeks inside the assignment callback — this runs
+            # within poll() before any messages are returned, so no pre-seek
+            # messages can slip through and violate exactly-once recovery.
+            if self._pending_seeks:
+                from confluent_kafka import TopicPartition
+                for tp in partitions:
+                    key = (tp.topic, tp.partition)
+                    if key in self._pending_seeks:
+                        consumer.seek(
+                            TopicPartition(tp.topic, tp.partition, self._pending_seeks[key])
+                        )
+                        logger.info("consumer_seek", topic=tp.topic,
+                                    partition=tp.partition,
+                                    offset=self._pending_seeks[key])
+                self._pending_seeks = {}
             logger.info("consumer_partitions_assigned", count=len(partitions))
 
         def _on_revoke(consumer, partitions):
@@ -100,13 +124,6 @@ class WriterConsumer:
         self._consumer.subscribe(self.topics, on_assign=_on_assign,
                                  on_revoke=_on_revoke)
         self._running = True
-
-        # Collapse to max offset per (topic, partition) since state is now keyed per file
-        seek_map: dict[tuple[str, int], int] = {}
-        for s in states.values():
-            key = (s.topic, s.partition)
-            seek_map[key] = max(seek_map.get(key, 0), s.high_water_offset + 1)
-        self._pending_seeks = seek_map
 
     def _recover_files(self, states: dict) -> None:
         """Truncate files to PostgreSQL-recorded byte sizes on startup."""
@@ -162,23 +179,6 @@ class WriterConsumer:
         while self._running:
             # Non-blocking poll via executor (spec 8.2: avoid blocking uvloop)
             msg = await loop.run_in_executor(None, self._consumer.poll, 1.0)
-
-            # Handle pending seeks on assignment — only clear once
-            # assignments are available, otherwise seeks are lost (finding 1)
-            if self._pending_seeks:
-                assignments = self._consumer.assignment()
-                if assignments:
-                    for tp in assignments:
-                        key = (tp.topic, tp.partition)
-                        if key in self._pending_seeks:
-                            from confluent_kafka import TopicPartition
-                            self._consumer.seek(
-                                TopicPartition(tp.topic, tp.partition, self._pending_seeks[key])
-                            )
-                            logger.info("consumer_seek", topic=tp.topic,
-                                        partition=tp.partition,
-                                        offset=self._pending_seeks[key])
-                    self._pending_seeks = {}
 
             if msg is None:
                 if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
@@ -312,6 +312,8 @@ class WriterConsumer:
         results = self.buffer_manager.flush_all()
         if results:
             await self._write_and_save(results)
+        self._update_disk_metrics()
+        self._update_consumer_lag()
 
     def _write_to_disk(self, results: list[FlushResult]) -> list[FileState]:
         """Write compressed frames to disk and fsync. Returns FileState list
@@ -333,6 +335,13 @@ class WriterConsumer:
                 symbol=result.target.symbol,
                 stream=result.target.stream,
             ).inc(len(compressed))
+
+            raw_size = sum(len(line) for line in result.lines)
+            if len(compressed) > 0:
+                writer_metrics.compression_ratio.labels(
+                    exchange=result.target.exchange,
+                    stream=result.target.stream,
+                ).set(raw_size / len(compressed))
 
             states.append(FileState(
                 topic=f"{result.target.exchange}.{result.target.stream}",
@@ -368,6 +377,33 @@ class WriterConsumer:
         start = time.monotonic()
         states = self._write_to_disk(results)
         await self._commit_state(states, results, start)
+
+    def _update_disk_metrics(self) -> None:
+        try:
+            usage = shutil.disk_usage(self.base_dir)
+            writer_metrics.disk_usage_bytes.set(usage.used)
+            writer_metrics.disk_usage_pct.set(usage.used / usage.total * 100)
+        except OSError:
+            pass
+
+    def _update_consumer_lag(self) -> None:
+        if not self._consumer or not self._assigned:
+            return
+        from confluent_kafka import TopicPartition
+        for tp in self._consumer.assignment():
+            try:
+                _, high = self._consumer.get_watermark_offsets(tp)
+                positions = self._consumer.position([TopicPartition(tp.topic, tp.partition)])
+                if positions and positions[0].offset >= 0:
+                    lag = max(0, high - positions[0].offset)
+                    parts = tp.topic.split(".", 1)
+                    exchange = parts[0] if len(parts) > 1 else ""
+                    stream = parts[1] if len(parts) > 1 else tp.topic
+                    writer_metrics.consumer_lag.labels(
+                        exchange=exchange, stream=stream,
+                    ).set(lag)
+            except Exception:
+                pass
 
     def is_connected(self) -> bool:
         """True if consumer exists and has been assigned partitions."""
