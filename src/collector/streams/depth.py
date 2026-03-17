@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Callable
 
 import structlog
@@ -52,13 +53,12 @@ class DepthHandler(StreamHandler):
             return
 
         if result.gap:
-            import time as _time
             logger.warning("depth_pu_chain_break", symbol=symbol,
                            expected_pu=detector._last_u, actual_pu=pu)
             collector_metrics.gaps_detected_total.labels(
                 exchange=self.exchange, symbol=symbol, stream="depth",
             ).inc()
-            now = _time.time_ns()
+            now = time.time_ns()
             gap = create_gap_envelope(
                 exchange=self.exchange, symbol=symbol, stream="depth",
                 collector_session_id=self.collector_session_id,
@@ -78,12 +78,11 @@ class DepthHandler(StreamHandler):
             if pending is not None and len(pending) < _MAX_PENDING_DIFFS:
                 pending.append((raw_text, exchange_ts, session_seq))
             else:
-                import time as _time
                 logger.warning("depth_pending_buffer_full", symbol=symbol)
                 collector_metrics.gaps_detected_total.labels(
                     exchange=self.exchange, symbol=symbol, stream="depth",
                 ).inc()
-                now = _time.time_ns()
+                now = time.time_ns()
                 gap = create_gap_envelope(
                     exchange=self.exchange, symbol=symbol, stream="depth",
                     collector_session_id=self.collector_session_id,
@@ -128,13 +127,12 @@ class DepthHandler(StreamHandler):
             if result.stale:
                 continue
             if result.gap:
-                import time as _time
                 logger.warning("depth_replay_pu_chain_break", symbol=symbol,
                                expected_pu=detector._last_u, actual_pu=pu)
                 collector_metrics.gaps_detected_total.labels(
                     exchange=self.exchange, symbol=symbol, stream="depth",
                 ).inc()
-                now = _time.time_ns()
+                now = time.time_ns()
                 gap = create_gap_envelope(
                     exchange=self.exchange, symbol=symbol, stream="depth",
                     collector_session_id=self.collector_session_id,

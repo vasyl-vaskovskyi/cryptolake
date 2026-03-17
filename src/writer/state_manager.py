@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import structlog
@@ -108,7 +109,6 @@ class StateManager:
         Retries up to 3 times on connection errors. If all retries fail,
         raises the exception — the writer will crash and resume from PG state on restart.
         """
-        import asyncio
         max_retries = 3
         for attempt in range(max_retries):
             try:

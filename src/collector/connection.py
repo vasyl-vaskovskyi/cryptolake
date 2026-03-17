@@ -3,20 +3,22 @@ from __future__ import annotations
 import asyncio
 import time
 
+import aiohttp
 import structlog
 import websockets
 
 from src.collector import metrics as collector_metrics
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.base import StreamHandler
-from src.common.envelope import create_gap_envelope
-from src.exchanges.binance import BinanceAdapter
+from src.common.envelope import create_data_envelope, create_gap_envelope
+from src.exchanges.binance import BinanceAdapter, _PUBLIC_STREAMS, _MARKET_STREAMS
 
 logger = structlog.get_logger()
 
 # Backoff: 1s, 2s, 4s, 8s, 16s, 32s, max 60s
 _MAX_BACKOFF = 60
 _RECONNECT_BEFORE_24H = 23 * 3600 + 50 * 60  # 23h50m
+_REST_ONLY_STREAMS = frozenset({"depth_snapshot", "open_interest"})
 
 
 class WebSocketManager:
@@ -53,11 +55,14 @@ class WebSocketManager:
         self._seq_counters[key] = seq + 1
         return seq
 
+    def _get_ws_urls(self) -> dict[str, str]:
+        """Build WebSocket URLs, excluding REST-only streams."""
+        ws_streams = [s for s in self.enabled_streams if s not in _REST_ONLY_STREAMS]
+        return self.adapter.get_ws_urls(self.symbols, ws_streams)
+
     async def start(self) -> None:
         self._running = True
-        ws_streams = [s for s in self.enabled_streams
-                      if s not in ("depth_snapshot", "open_interest")]
-        urls = self.adapter.get_ws_urls(self.symbols, ws_streams)
+        urls = self._get_ws_urls()
 
         self._tasks = []
         for socket_name, url in urls.items():
@@ -68,10 +73,7 @@ class WebSocketManager:
 
     def has_ws_streams(self) -> bool:
         """True if this manager is expected to open any WebSocket connections."""
-        ws_streams = [s for s in self.enabled_streams
-                      if s not in ("depth_snapshot", "open_interest")]
-        urls = self.adapter.get_ws_urls(self.symbols, ws_streams)
-        return len(urls) > 0
+        return len(self._get_ws_urls()) > 0
 
     def is_connected(self) -> bool:
         """True if all expected WebSocket sockets are currently connected.
@@ -194,12 +196,11 @@ class WebSocketManager:
             _waited += 2
         if not self.producer.is_healthy_for_resync():
             logger.error("depth_resync_aborted_producer_unhealthy", symbol=symbol)
-            import time as _time
             gap = create_gap_envelope(
                 exchange=self.exchange, symbol=symbol, stream="depth",
                 collector_session_id=self.collector_session_id,
                 session_seq=self._next_seq(symbol, "depth"),
-                gap_start_ts=_time.time_ns(), gap_end_ts=_time.time_ns(),
+                gap_start_ts=time.time_ns(), gap_end_ts=time.time_ns(),
                 reason="pu_chain_break",
                 detail=f"Depth resync aborted: producer unhealthy after {_max_wait}s wait",
             )
@@ -208,8 +209,6 @@ class WebSocketManager:
 
         depth_handler.reset(symbol)
 
-        # Import here to avoid circular dependency
-        import aiohttp
         retries = 3
         for attempt in range(retries):
             try:
@@ -226,9 +225,7 @@ class WebSocketManager:
                 depth_handler.set_sync_point(symbol, last_update_id)
 
                 # Produce the resync snapshot to the archive
-                from src.common.envelope import create_data_envelope
-                import time as _time
-                received_at = _time.time_ns()
+                received_at = time.time_ns()
                 env = create_data_envelope(
                     exchange=self.exchange, symbol=symbol, stream="depth_snapshot",
                     raw_text=raw_text, exchange_ts=int(received_at / 1_000_000),
@@ -248,12 +245,11 @@ class WebSocketManager:
 
         # All retries exhausted
         logger.error("depth_resync_exhausted", symbol=symbol)
-        import time as _time
         gap = create_gap_envelope(
             exchange=self.exchange, symbol=symbol, stream="depth",
             collector_session_id=self.collector_session_id,
             session_seq=self._next_seq(symbol, "depth"),
-            gap_start_ts=_time.time_ns(), gap_end_ts=_time.time_ns(),
+            gap_start_ts=time.time_ns(), gap_end_ts=time.time_ns(),
             reason="pu_chain_break",
             detail=f"Depth resync failed after {retries} retries, waiting for periodic snapshot",
         )
@@ -262,7 +258,6 @@ class WebSocketManager:
     def _emit_disconnect_gaps(self, socket_name: str) -> None:
         """Emit gap records for all symbol/stream combos on this socket."""
         now = time.time_ns()
-        from src.exchanges.binance import _PUBLIC_STREAMS, _MARKET_STREAMS
         if socket_name == "public":
             affected = _PUBLIC_STREAMS
         elif socket_name == "market":

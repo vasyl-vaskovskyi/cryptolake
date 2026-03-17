@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ from src.common.config import load_config
 from src.common.logging import setup_logging
 from src.collector.connection import WebSocketManager
 from src.collector.producer import CryptoLakeProducer
-from src.collector.snapshot import SnapshotScheduler
+from src.collector.snapshot import SnapshotScheduler, parse_interval_seconds
 from src.collector.streams.trades import TradesHandler
 from src.collector.streams.depth import DepthHandler
 from src.collector.streams.bookticker import BookTickerHandler
@@ -79,8 +80,7 @@ class Collector:
         self.ws_manager._consecutive_drops += 1
 
     def _on_pu_chain_break(self, symbol: str) -> None:
-        """Callback from DepthHandler when pu chain breaks — triggers depth resync."""
-        import asyncio
+        """Callback from DepthHandler when pu chain breaks -- triggers depth resync."""
         loop = asyncio.get_running_loop()
         loop.create_task(self.ws_manager._depth_resync(symbol))
 
@@ -110,7 +110,6 @@ class Collector:
 
         # Open interest poller
         if "open_interest" in self.enabled_streams:
-            from src.collector.snapshot import parse_interval_seconds
             self.oi_poller = OpenInterestPoller(
                 exchange="binance",
                 collector_session_id=self.session_id,
@@ -175,7 +174,6 @@ class Collector:
 
 
 def main():
-    import os
     setup_logging()
     uvloop.install()
 

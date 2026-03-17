@@ -1,6 +1,3 @@
-import pytest
-
-
 class TestDepthPuChainValidator:
     def test_first_diff_after_sync_accepted(self):
         from src.collector.gap_detector import DepthGapDetector

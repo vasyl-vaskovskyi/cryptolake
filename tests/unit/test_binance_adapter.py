@@ -1,6 +1,3 @@
-import pytest
-
-
 class TestBinanceURLBuilding:
     def test_ws_urls_two_sockets(self):
         from src.exchanges.binance import BinanceAdapter

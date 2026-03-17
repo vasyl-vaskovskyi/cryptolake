@@ -396,9 +396,9 @@ class WriterConsumer:
                 positions = self._consumer.position([TopicPartition(tp.topic, tp.partition)])
                 if positions and positions[0].offset >= 0:
                     lag = max(0, high - positions[0].offset)
-                    parts = tp.topic.split(".", 1)
-                    exchange = parts[0] if len(parts) > 1 else ""
-                    stream = parts[1] if len(parts) > 1 else tp.topic
+                    exchange, _, stream = tp.topic.partition(".")
+                    if not stream:
+                        exchange, stream = "", tp.topic
                     writer_metrics.consumer_lag.labels(
                         exchange=exchange, stream=stream,
                     ).set(lag)

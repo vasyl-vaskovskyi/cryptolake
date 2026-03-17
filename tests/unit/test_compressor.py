@@ -1,5 +1,4 @@
 import zstandard as zstd
-import pytest
 
 
 class TestZstdCompressor:

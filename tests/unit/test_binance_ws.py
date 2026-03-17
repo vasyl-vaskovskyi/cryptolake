@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import orjson
-import pytest
 
 from src.exchanges.binance import BinanceAdapter
 

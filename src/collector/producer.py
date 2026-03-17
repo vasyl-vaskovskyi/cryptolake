@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
 import structlog
 
 from src.collector import metrics as collector_metrics
-from src.common.envelope import serialize_envelope
+from src.common.envelope import create_gap_envelope, serialize_envelope
 
 logger = structlog.get_logger()
 
@@ -70,7 +71,6 @@ class CryptoLakeProducer:
         from starving low-volume irreplaceable streams (liquidations, funding_rate).
         On recovery from overflow, emits a buffer_overflow gap record.
         """
-        import time as _time
         stream = envelope["stream"]
         symbol = envelope["symbol"]
         topic = f"{self.exchange}.{stream}"
@@ -89,7 +89,7 @@ class CryptoLakeProducer:
                 ).inc()
                 overflow_key = (symbol, stream)
                 if overflow_key not in self._overflow_start:
-                    self._overflow_start[overflow_key] = _time.time_ns()
+                    self._overflow_start[overflow_key] = time.time_ns()
                 if self._on_overflow:
                     self._on_overflow(self.exchange, symbol, stream)
                 return False
@@ -124,7 +124,7 @@ class CryptoLakeProducer:
             # Track overflow window start
             overflow_key = (symbol, stream)
             if overflow_key not in self._overflow_start:
-                self._overflow_start[overflow_key] = _time.time_ns()
+                self._overflow_start[overflow_key] = time.time_ns()
             if self._on_overflow:
                 self._on_overflow(self.exchange, symbol, stream)
             return False
@@ -143,8 +143,6 @@ class CryptoLakeProducer:
 
     def _emit_overflow_gap(self, symbol: str, stream: str, start_ts: int) -> None:
         """Emit a buffer_overflow gap record when recovering from overflow."""
-        import time as _time
-        from src.common.envelope import create_gap_envelope
         gap = create_gap_envelope(
             exchange=self.exchange,
             symbol=symbol,
@@ -152,7 +150,7 @@ class CryptoLakeProducer:
             collector_session_id=self.collector_session_id,
             session_seq=self._overflow_seq,
             gap_start_ts=start_ts,
-            gap_end_ts=_time.time_ns(),
+            gap_end_ts=time.time_ns(),
             reason="buffer_overflow",
             detail=f"Producer buffer was full; messages dropped for {stream}/{symbol}",
         )

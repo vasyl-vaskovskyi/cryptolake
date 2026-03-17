@@ -140,7 +140,7 @@ class SnapshotScheduler:
                 gap_start_ts=time.time_ns(),
                 gap_end_ts=time.time_ns(),
                 reason="snapshot_poll_miss",
-                detail=f"Depth snapshot poll failed after all retries",
+                detail="Depth snapshot poll failed after all retries",
             )
             self.producer.produce(gap)
             return

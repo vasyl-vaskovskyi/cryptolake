@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 
 import structlog
@@ -35,7 +36,6 @@ class StreamHandler(ABC):
             self._seq_trackers[symbol] = tracker
         gap = tracker.check(session_seq)
         if gap is not None:
-            import time as _time
             logger.warning("session_seq_skip", symbol=symbol,
                            stream=self._seq_stream,
                            expected=gap.expected, actual=gap.actual)
@@ -43,7 +43,7 @@ class StreamHandler(ABC):
                 exchange=self._seq_exchange, symbol=symbol,
                 stream=self._seq_stream,
             ).inc()
-            now = _time.time_ns()
+            now = time.time_ns()
             gap_env = create_gap_envelope(
                 exchange=self._seq_exchange, symbol=symbol,
                 stream=self._seq_stream,

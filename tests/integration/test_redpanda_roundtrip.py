@@ -52,7 +52,7 @@ def redpanda() -> str:
         DockerContainer("redpandadata/redpanda:v24.1.2")
         .waiting_for(LogMessageWaitStrategy("started").with_startup_timeout(30))
         .with_bind_ports(19092, host_port)
-        .with_command(command) as container
+        .with_command(command) as _container
     ):
         yield f"127.0.0.1:{host_port}"
 

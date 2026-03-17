@@ -28,7 +28,7 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 
-def get_logger(**initial_bindings: Any):
+def get_logger(**initial_bindings: Any) -> Any:
     return structlog.get_logger(**initial_bindings)
 
 

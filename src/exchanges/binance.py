@@ -82,8 +82,7 @@ class BinanceAdapter(ExchangeAdapter):
         if stream == "depth_snapshot":
             # REST snapshot has no event timestamp
             return None
-        ts = parsed.get("E")
-        return ts if ts is not None else None
+        return parsed.get("E")
 
     def build_snapshot_url(self, symbol: str, limit: int = 1000) -> str:
         return f"{self.rest_base}/fapi/v1/depth?symbol={symbol.upper()}&limit={limit}"
@@ -141,15 +140,12 @@ def _extract_data_value(frame: str, search_start: int) -> str:
 
 def _parse_stream_key(stream_key: str) -> tuple[str, str]:
     """Parse 'btcusdt@aggTrade' -> ('btcusdt', 'trades')"""
-    parts = stream_key.split("@", 1)
-    symbol = parts[0].lower()
-    binance_stream = parts[1] if len(parts) > 1 else ""
-
-    # Strip any parameters (e.g., @depth@100ms -> depth, @markPrice@1s -> markPrice)
-    base_stream = binance_stream.split("@")[0]
+    symbol, _, remainder = stream_key.partition("@")
+    # Strip any parameters (e.g., depth@100ms -> depth, markPrice@1s -> markPrice)
+    base_stream = remainder.split("@")[0]
 
     stream_type = _STREAM_KEY_MAP.get(base_stream)
     if stream_type is None:
         raise ValueError(f"Unknown Binance stream key: {stream_key}")
 
-    return symbol, stream_type
+    return symbol.lower(), stream_type

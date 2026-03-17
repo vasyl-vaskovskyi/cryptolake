@@ -1,5 +1,4 @@
 import hashlib
-import pytest
 from pathlib import Path
 
 
@@ -79,7 +78,7 @@ class TestSHA256Sidecar:
         assert sc_path.read_text().strip().startswith(expected)
 
     def test_sidecar_format(self, tmp_path):
-        from src.writer.file_rotator import write_sha256_sidecar, compute_sha256
+        from src.writer.file_rotator import write_sha256_sidecar
 
         test_file = tmp_path / "hour-14.jsonl.zst"
         test_file.write_bytes(b"content")

@@ -1,6 +1,3 @@
-import pytest
-
-
 class TestWriterState:
     def test_state_record_creation(self):
         from src.writer.state_manager import FileState
