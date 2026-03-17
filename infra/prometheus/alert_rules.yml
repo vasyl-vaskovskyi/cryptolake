@@ -10,13 +10,13 @@ groups:
           description: Collector emitted at least one gap envelope in the last 5 minutes.
 
       - alert: ConnectionLost
-        expr: sum(collector_ws_connections_active) < 2
+        expr: sum(collector_ws_connections_active) < 4
         for: 30s
         labels:
           severity: critical
         annotations:
           summary: Collector WebSocket connectivity degraded
-          description: Active Binance WebSocket connections fell below the expected count.
+          description: Active Binance WebSocket connections fell below expected count (default 6 for 3 symbols x 2 sockets).
 
       - alert: WriterLagging
         expr: max(writer_consumer_lag) > 1000

@@ -36,10 +36,6 @@ services:
       - internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr
       - internal://redpanda:9092,external://127.0.0.1:9092
-      - --pandaproxy-addr
-      - internal://0.0.0.0:8082
-      - --advertise-pandaproxy-addr
-      - internal://redpanda:8082
       - --set
       - redpanda.auto_create_topics_enabled=true
       - --set
@@ -129,6 +125,11 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     depends_on:
       - collector
       - writer
@@ -145,6 +146,11 @@ services:
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     depends_on:
       - prometheus
 
@@ -160,6 +166,11 @@ services:
       - alertmanager_egress
     volumes:
       - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9093/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
 volumes:
   postgres_data:

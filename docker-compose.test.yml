@@ -5,16 +5,26 @@ services:
     extends:
       file: docker-compose.yml
       service: postgres
+    networks:
+      - cryptolake_internal
 
   redpanda:
     extends:
       file: docker-compose.yml
       service: redpanda
+    networks:
+      - cryptolake_internal
 
   collector:
     extends:
       file: docker-compose.yml
       service: collector
+    networks:
+      - cryptolake_internal
+      - collector_egress
+    depends_on:
+      redpanda:
+        condition: service_healthy
     environment:
       - CONFIG_PATH=/app/config/config.test.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
@@ -30,6 +40,13 @@ services:
     extends:
       file: docker-compose.yml
       service: writer
+    networks:
+      - cryptolake_internal
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       - CONFIG_PATH=/app/config/config.test.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
@@ -45,16 +62,23 @@ services:
     extends:
       file: docker-compose.yml
       service: prometheus
+    networks:
+      - cryptolake_internal
 
   grafana:
     extends:
       file: docker-compose.yml
       service: grafana
+    networks:
+      - cryptolake_internal
 
   alertmanager:
     extends:
       file: docker-compose.yml
       service: alertmanager
+    networks:
+      - cryptolake_internal
+      - alertmanager_egress
 
 volumes:
   postgres_data:

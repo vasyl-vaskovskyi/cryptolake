@@ -10,7 +10,6 @@ from src.exchanges.binance import BinanceAdapter
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
-@pytest.mark.integration
 class TestBinanceWSFixtures:
     def test_route_all_fixture_types(self) -> None:
         adapter = BinanceAdapter(

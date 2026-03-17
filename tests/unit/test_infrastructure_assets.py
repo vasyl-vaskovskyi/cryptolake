@@ -19,6 +19,13 @@ def _read_yaml(relative_path: str) -> dict:
     return yaml.safe_load(_read_text(relative_path))
 
 
+class TestDockerIgnore:
+    def test_dockerignore_excludes_non_build_directories(self) -> None:
+        content = _read_text(".dockerignore")
+        for excluded in (".git", "tests", "docs", "infra", "__pycache__", ".venv", ".env"):
+            assert excluded in content, f"{excluded} should be excluded in .dockerignore"
+
+
 class TestDockerfiles:
     def test_service_dockerfiles_use_uv_and_non_root_runtime(self) -> None:
         collector = _read_text("Dockerfile.collector")
@@ -88,6 +95,10 @@ class TestComposeStacks:
             "data_volume",
         }
 
+        # All services must have health checks
+        for name in services:
+            assert "healthcheck" in services[name], f"{name} is missing a healthcheck"
+
     def test_test_compose_uses_fast_config_and_timeout_wrappers(self) -> None:
         compose = _read_yaml("docker-compose.test.yml")
         services = compose["services"]
@@ -95,6 +106,11 @@ class TestComposeStacks:
         for name in ("postgres", "redpanda", "collector", "writer", "prometheus", "grafana", "alertmanager"):
             assert services[name]["extends"]["file"] == "docker-compose.yml"
             assert services[name]["extends"]["service"] == name
+
+        # Verify explicit network assignments (extends does not inherit networks)
+        assert set(services["collector"]["networks"]) == {"cryptolake_internal", "collector_egress"}
+        assert set(services["writer"]["networks"]) == {"cryptolake_internal"}
+        assert set(services["alertmanager"]["networks"]) == {"cryptolake_internal", "alertmanager_egress"}
 
         collector_env = set(services["collector"]["environment"])
         writer_env = set(services["writer"]["environment"])
@@ -160,7 +176,7 @@ class TestChaosScripts:
         scripts = {
             "tests/chaos/kill_writer.sh": ["docker kill", "cryptolake-writer-1", "cryptolake verify"],
             "tests/chaos/kill_ws_connection.sh": ["docker kill", "cryptolake-collector-1", "ws_disconnect"],
-            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "df -h /data", "fill_disk.tmp"],
+            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "df -h /data", "fill_disk.tmp", "docker compose exec writer"],
             "tests/chaos/depth_reconnect_inflight.sh": ["depth", "docker compose up -d collector", "cryptolake verify"],
             "tests/chaos/buffer_overflow_recovery.sh": ["redpanda", "buffer", "docker compose up -d redpanda"],
             "tests/chaos/writer_crash_before_commit.sh": ["docker kill -s KILL", "cryptolake-writer-1", "cryptolake verify"],

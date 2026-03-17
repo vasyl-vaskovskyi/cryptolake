@@ -9,7 +9,7 @@ docker compose exec writer df -h /data
 echo "3. Waiting 60 seconds..."
 sleep 60
 echo "4. Checking writer health..."
-curl -s http://localhost:8001/health || echo "Writer health check failed"
+docker compose exec writer python -c "from urllib.request import urlopen; print(urlopen('http://127.0.0.1:8001/health').read().decode())" || echo "Writer health check failed"
 echo "5. Cleaning up..."
 docker compose exec writer rm -f /data/fill_disk.tmp
 echo "6. Waiting 30 seconds for recovery..."

@@ -1,0 +1,13 @@
+.git
+tests
+docs
+infra
+*.md
+__pycache__
+.venv
+.env
+.env.example
+.worktrees
+.coverage
+htmlcov
+.pytest_cache
