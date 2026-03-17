@@ -1,0 +1,72 @@
+name: cryptolake-test
+
+services:
+  postgres:
+    extends:
+      file: docker-compose.yml
+      service: postgres
+
+  redpanda:
+    extends:
+      file: docker-compose.yml
+      service: redpanda
+
+  collector:
+    extends:
+      file: docker-compose.yml
+      service: collector
+    environment:
+      - CONFIG_PATH=/app/config/config.test.yaml
+      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
+      - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - TEST_DURATION_SECONDS=${TEST_DURATION_SECONDS:-600}
+    command:
+      - sh
+      - -c
+      - timeout "$${TEST_DURATION_SECONDS}" uv run python -m src.collector.main
+    restart: "no"
+
+  writer:
+    extends:
+      file: docker-compose.yml
+      service: writer
+    environment:
+      - CONFIG_PATH=/app/config/config.test.yaml
+      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
+      - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - TEST_DURATION_SECONDS=${TEST_DURATION_SECONDS:-600}
+    command:
+      - sh
+      - -c
+      - timeout "$${TEST_DURATION_SECONDS}" uv run python -m src.writer.main
+    restart: "no"
+
+  prometheus:
+    extends:
+      file: docker-compose.yml
+      service: prometheus
+
+  grafana:
+    extends:
+      file: docker-compose.yml
+      service: grafana
+
+  alertmanager:
+    extends:
+      file: docker-compose.yml
+      service: alertmanager
+
+volumes:
+  postgres_data:
+  redpanda_data:
+  prometheus_data:
+  data_volume:
+
+networks:
+  cryptolake_internal:
+    driver: bridge
+    internal: true
+  collector_egress:
+    driver: bridge
+  alertmanager_egress:
+    driver: bridge

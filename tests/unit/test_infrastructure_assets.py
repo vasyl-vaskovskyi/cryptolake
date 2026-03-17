@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import yaml
+
+from src.common.config import load_config
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _read_text(relative_path: str) -> str:
+    return (PROJECT_ROOT / relative_path).read_text()
+
+
+def _read_yaml(relative_path: str) -> dict:
+    return yaml.safe_load(_read_text(relative_path))
+
+
+class TestDockerfiles:
+    def test_service_dockerfiles_use_uv_and_non_root_runtime(self) -> None:
+        collector = _read_text("Dockerfile.collector")
+        writer = _read_text("Dockerfile.writer")
+
+        assert "FROM python:3.12.7-slim AS base" in collector
+        assert "RUN pip install uv" in collector
+        assert 'CMD ["uv", "run", "python", "-m", "src.collector.main"]' in collector
+        assert "USER cryptolake" in collector
+
+        assert "FROM python:3.12.7-slim AS base" in writer
+        assert "RUN pip install uv" in writer
+        assert 'CMD ["uv", "run", "python", "-m", "src.writer.main"]' in writer
+        assert "USER cryptolake" in writer
+
+
+class TestRuntimeConfigs:
+    def test_runtime_configs_load_expected_profiles(self) -> None:
+        production = load_config(PROJECT_ROOT / "config" / "config.yaml")
+        example = load_config(PROJECT_ROOT / "config" / "config.example.yaml")
+        test = load_config(PROJECT_ROOT / "config" / "config.test.yaml")
+
+        assert production.database.url.startswith("postgresql://")
+        assert example.database.url.startswith("postgresql://")
+        assert production.redpanda.brokers == ["redpanda:9092"]
+        assert example.exchanges.binance.symbols == ["btcusdt", "ethusdt", "solusdt"]
+
+        assert test.exchanges.binance.symbols == ["btcusdt"]
+        assert test.exchanges.binance.depth.snapshot_interval == "30s"
+        assert test.exchanges.binance.open_interest.poll_interval == "30s"
+        assert test.writer.flush_messages == 100
+        assert test.writer.flush_interval_seconds == 10
+
+
+class TestComposeStacks:
+    def test_main_compose_wires_full_stack_with_isolated_networks(self) -> None:
+        compose = _read_yaml("docker-compose.yml")
+        services = compose["services"]
+
+        assert set(services) == {
+            "postgres",
+            "redpanda",
+            "collector",
+            "writer",
+            "prometheus",
+            "grafana",
+            "alertmanager",
+        }
+
+        assert services["collector"]["build"]["context"] == "."
+        assert services["collector"]["build"]["dockerfile"] == "Dockerfile.collector"
+        assert set(services["collector"]["networks"]) == {"cryptolake_internal", "collector_egress"}
+
+        assert services["writer"]["build"]["context"] == "."
+        assert services["writer"]["build"]["dockerfile"] == "Dockerfile.writer"
+        assert set(services["writer"]["networks"]) == {"cryptolake_internal"}
+        assert services["writer"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+        assert compose["networks"]["cryptolake_internal"]["internal"] is True
+        assert "collector_egress" in compose["networks"]
+        assert "alertmanager_egress" in compose["networks"]
+
+        assert set(compose["volumes"]) == {
+            "postgres_data",
+            "redpanda_data",
+            "prometheus_data",
+            "data_volume",
+        }
+
+    def test_test_compose_uses_fast_config_and_timeout_wrappers(self) -> None:
+        compose = _read_yaml("docker-compose.test.yml")
+        services = compose["services"]
+
+        for name in ("postgres", "redpanda", "collector", "writer", "prometheus", "grafana", "alertmanager"):
+            assert services[name]["extends"]["file"] == "docker-compose.yml"
+            assert services[name]["extends"]["service"] == name
+
+        collector_env = set(services["collector"]["environment"])
+        writer_env = set(services["writer"]["environment"])
+        assert "CONFIG_PATH=/app/config/config.test.yaml" in collector_env
+        assert "CONFIG_PATH=/app/config/config.test.yaml" in writer_env
+        assert any("TEST_DURATION_SECONDS" in item for item in collector_env)
+        assert any("TEST_DURATION_SECONDS" in item for item in writer_env)
+        assert "timeout" in " ".join(services["collector"]["command"])
+        assert "timeout" in " ".join(services["writer"]["command"])
+
+
+class TestObservabilityAssets:
+    def test_prometheus_alertmanager_and_dashboard_assets_cover_expected_signals(self) -> None:
+        prometheus = _read_yaml("infra/prometheus/prometheus.yml")
+        alert_rules = _read_yaml("infra/prometheus/alert_rules.yml")
+        alertmanager = _read_yaml("infra/alertmanager/alertmanager.yml")
+        datasources = _read_yaml("infra/grafana/provisioning/datasources.yml")
+        dashboards = _read_yaml("infra/grafana/provisioning/dashboards.yml")
+        dashboard = json.loads(_read_text("infra/grafana/dashboards/cryptolake.json"))
+
+        job_names = {job["job_name"] for job in prometheus["scrape_configs"]}
+        assert job_names == {"collector", "writer", "redpanda"}
+        assert prometheus["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == ["alertmanager:9093"]
+
+        rules = alert_rules["groups"][0]["rules"]
+        alert_names = {rule["alert"] for rule in rules}
+        assert alert_names == {
+            "GapDetected",
+            "ConnectionLost",
+            "WriterLagging",
+            "WriterLagCritical",
+            "SnapshotsFailing",
+            "DiskAlmostFull",
+            "DiskCritical",
+            "HighLatency",
+            "NTPDrift",
+            "RedpandaBufferHigh",
+            "MessagesDropped",
+        }
+
+        assert datasources["datasources"][0]["url"] == "http://prometheus:9090"
+        assert dashboards["providers"][0]["options"]["path"] == "/var/lib/grafana/dashboards"
+
+        panel_titles = {panel["title"] for panel in dashboard["panels"]}
+        assert panel_titles == {
+            "Message Throughput",
+            "Exchange Latency Heatmap",
+            "Consumer Lag",
+            "Connection Status",
+            "Gap Timeline",
+            "Disk Usage",
+            "Snapshot Health",
+            "Compression Efficiency",
+        }
+
+        receiver = alertmanager["receivers"][0]["webhook_configs"][0]
+        assert receiver["url"] == "${WEBHOOK_URL}"
+        assert receiver["send_resolved"] is True
+
+
+class TestChaosScripts:
+    def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
+        scripts = {
+            "tests/chaos/kill_writer.sh": ["docker kill", "cryptolake-writer-1", "cryptolake verify"],
+            "tests/chaos/kill_ws_connection.sh": ["docker kill", "cryptolake-collector-1", "ws_disconnect"],
+            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "df -h /data", "fill_disk.tmp"],
+            "tests/chaos/depth_reconnect_inflight.sh": ["depth", "docker compose up -d collector", "cryptolake verify"],
+            "tests/chaos/buffer_overflow_recovery.sh": ["redpanda", "buffer", "docker compose up -d redpanda"],
+            "tests/chaos/writer_crash_before_commit.sh": ["docker kill -s KILL", "cryptolake-writer-1", "cryptolake verify"],
+        }
+
+        for relative_path, expected_snippets in scripts.items():
+            path = PROJECT_ROOT / relative_path
+            text = path.read_text()
+
+            assert text.startswith("#!/usr/bin/env bash")
+            assert "set -euo pipefail" in text
+            assert os.access(path, os.X_OK)
+            for snippet in expected_snippets:
+                assert snippet in text

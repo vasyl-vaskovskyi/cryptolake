@@ -1,0 +1,52 @@
+database:
+  url: "postgresql://cryptolake:changeme@postgres:5432/cryptolake"
+
+exchanges:
+  binance:
+    enabled: true
+    market: "usdm_futures"
+    ws_base: "wss://fstream.binance.com"
+    rest_base: "https://fapi.binance.com"
+    symbols:
+      - btcusdt
+      - ethusdt
+      - solusdt
+    streams:
+      trades: true
+      depth: true
+      bookticker: true
+      funding_rate: true
+      liquidations: true
+      open_interest: true
+    depth:
+      update_speed: "100ms"
+      snapshot_interval: "5m"
+      snapshot_overrides:
+        btcusdt: "1m"
+    open_interest:
+      poll_interval: "5m"
+    collector_id: "binance-collector-01"
+
+redpanda:
+  brokers:
+    - "redpanda:9092"
+  retention_hours: 48
+
+writer:
+  base_dir: "/data"
+  rotation: "hourly"
+  compression: "zstd"
+  compression_level: 3
+  checksum: "sha256"
+  flush_messages: 10000
+  flush_interval_seconds: 30
+
+monitoring:
+  prometheus_port: 8000
+  alerting:
+    webhook_url: ""
+    rules:
+      gap_detected: "critical"
+      connection_lost: "critical"
+      writer_lag_seconds: 30
+      disk_usage_pct: 85
