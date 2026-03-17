@@ -33,7 +33,7 @@ services:
     command:
       - sh
       - -c
-      - timeout "$${TEST_DURATION_SECONDS}" uv run python -m src.collector.main
+      - timeout "$${TEST_DURATION_SECONDS}" /app/.venv/bin/python -m src.collector.main
     restart: "no"
 
   writer:
@@ -55,7 +55,7 @@ services:
     command:
       - sh
       - -c
-      - timeout "$${TEST_DURATION_SECONDS}" uv run python -m src.writer.main
+      - timeout "$${TEST_DURATION_SECONDS}" /app/.venv/bin/python -m src.writer.main
     restart: "no"
 
   prometheus:

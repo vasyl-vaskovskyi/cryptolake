@@ -16,4 +16,4 @@ USER cryptolake
 
 EXPOSE 8001
 
-CMD ["uv", "run", "python", "-m", "src.writer.main"]
+CMD ["/app/.venv/bin/python", "-m", "src.writer.main"]

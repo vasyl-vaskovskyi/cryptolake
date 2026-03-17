@@ -61,6 +61,8 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
     networks:
       - cryptolake_internal
       - collector_egress
@@ -92,6 +94,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8001"
     networks:
       - cryptolake_internal
     volumes:
@@ -156,16 +160,19 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
-      - --config.expand-env
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sed "s|\$${WEBHOOK_URL}|$$WEBHOOK_URL|g" /etc/alertmanager/alertmanager.template.yml > /tmp/alertmanager.yml
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml
     environment:
-      - WEBHOOK_URL=${WEBHOOK_URL:?Set WEBHOOK_URL in .env}
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:9093}
     networks:
       - cryptolake_internal
       - alertmanager_egress
     volumes:
-      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.template.yml:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9093/-/healthy || exit 1"]
       interval: 15s

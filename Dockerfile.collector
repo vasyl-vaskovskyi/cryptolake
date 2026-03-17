@@ -16,4 +16,4 @@ USER cryptolake
 
 EXPOSE 8000
 
-CMD ["uv", "run", "python", "-m", "src.collector.main"]
+CMD ["/app/.venv/bin/python", "-m", "src.collector.main"]

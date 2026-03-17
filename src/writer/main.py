@@ -88,7 +88,10 @@ class Writer:
         return web.json_response(checks, status=status)
 
     async def _metrics(self, request: web.Request) -> web.Response:
-        return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+        return web.Response(
+            body=generate_latest(),
+            headers={"Content-Type": CONTENT_TYPE_LATEST},
+        )
 
 
 def main():
