@@ -44,7 +44,7 @@ services:
       - cryptolake_internal
     volumes:
       - ./config:/app/config:ro
-      - data_volume:/data
+      - data_volume:${HOST_DATA_DIR:-/data}
     depends_on:
       redpanda:
         condition: service_healthy
@@ -54,6 +54,7 @@ services:
       - CONFIG_PATH=/app/config/config.test.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
       - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
       - TEST_DURATION_SECONDS=${TEST_DURATION_SECONDS:-600}
     command:
       - sh

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -19,6 +20,9 @@ _REQUIRED_GAP_FIELDS = {
     "collector_session_id", "session_seq", "gap_start_ts", "gap_end_ts",
     "reason", "detail", "_topic", "_partition", "_offset",
 }
+
+
+DEFAULT_ARCHIVE_DIR = os.getenv("HOST_DATA_DIR", "/data")
 
 
 def verify_checksum(data_path: Path, sidecar_path: Path) -> list[str]:
@@ -238,7 +242,7 @@ def cli():
 
 @cli.command()
 @click.option("--date", required=True, help="Date to verify (YYYY-MM-DD)")
-@click.option("--base-dir", default="/data", help="Archive base directory")
+@click.option("--base-dir", default=DEFAULT_ARCHIVE_DIR, help="Archive base directory")
 @click.option("--exchange", default=None, help="Filter by exchange")
 @click.option("--symbol", default=None, help="Filter by symbol")
 @click.option("--stream", default=None, help="Filter by stream")
@@ -334,7 +338,7 @@ def verify(date, base_dir, exchange, symbol, stream, full, repair_checksums):
 
 @cli.command()
 @click.option("--date", required=True, help="Date (YYYY-MM-DD)")
-@click.option("--base-dir", default="/data", help="Archive base directory")
+@click.option("--base-dir", default=DEFAULT_ARCHIVE_DIR, help="Archive base directory")
 @click.option("--exchange", default="binance", help="Exchange name")
 def manifest(date, base_dir, exchange):
     """Generate manifest.json for a date directory."""

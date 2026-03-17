@@ -11,5 +11,5 @@ docker compose up -d redpanda
 echo "4. Waiting 60 seconds for buffer drain..."
 sleep 60
 echo "5. Checking collector buffer metrics and writer verification..."
-docker compose exec writer uv run cryptolake verify --date "$(date -u +%Y-%m-%d)" --base-dir /data --full
+docker compose exec writer uv run cryptolake verify --date "$(date -u +%Y-%m-%d)" --base-dir "${HOST_DATA_DIR:-/data}" --full
 echo "=== Check: collector buffer recovers after redpanda restart with no unrecoverable backlog ==="

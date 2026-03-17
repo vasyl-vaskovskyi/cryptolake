@@ -83,7 +83,6 @@ redpanda:
   brokers: ["localhost:9092"]
   retention_hours: 6
 writer:
-  base_dir: "/data"
   rotation: hourly
   compression: zstd
   compression_level: 3
@@ -113,6 +112,15 @@ monitoring:
             env_overrides={"REDPANDA__BROKERS": "broker1:9092,broker2:9092"},
         )
         assert config.redpanda.brokers == ["broker1:9092", "broker2:9092"]
+
+    def test_host_data_dir_alias_overrides_writer_base_dir(self) -> None:
+        from src.common.config import load_config
+
+        config = load_config(
+            FIXTURES_DIR / "config_valid.yaml",
+            env_overrides={"HOST_DATA_DIR": "/tmp/archive"},
+        )
+        assert config.writer.base_dir == "/tmp/archive"
 
     def test_config_missing_file_raises(self) -> None:
         from src.common.config import load_config

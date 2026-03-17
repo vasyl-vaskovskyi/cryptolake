@@ -109,8 +109,12 @@ class DatabaseConfig(BaseModel):
     url: str
 
 
+def _default_archive_dir() -> str:
+    return os.environ.get("HOST_DATA_DIR", "/data")
+
+
 class WriterConfig(BaseModel):
-    base_dir: str = "/data"
+    base_dir: str = Field(default_factory=_default_archive_dir)
     rotation: str = "hourly"
     compression: str = "zstd"
     compression_level: int = 3
@@ -143,6 +147,14 @@ def _apply_env_overrides(data: dict[str, Any], overrides: dict[str, str]) -> dic
     return data
 
 
+def _normalize_env_overrides(overrides: dict[str, str]) -> dict[str, str]:
+    normalized = dict(overrides)
+    host_data_dir = normalized.pop("HOST_DATA_DIR", None)
+    if host_data_dir is not None and "WRITER__BASE_DIR" not in normalized:
+        normalized["WRITER__BASE_DIR"] = host_data_dir
+    return normalized
+
+
 def load_config(path: Path, env_overrides: dict[str, str] | None = None) -> CryptoLakeConfig:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -150,7 +162,7 @@ def load_config(path: Path, env_overrides: dict[str, str] | None = None) -> Cryp
     data = yaml.safe_load(path.read_text()) or {}
 
     if env_overrides is not None:
-        overrides = env_overrides
+        overrides = _normalize_env_overrides(env_overrides)
     else:
         overrides = {
             key: value
@@ -158,6 +170,9 @@ def load_config(path: Path, env_overrides: dict[str, str] | None = None) -> Cryp
             if "__" in key
             and key.split("__", 1)[0].lower() in {"database", "exchanges", "redpanda", "writer", "monitoring"}
         }
+        if "HOST_DATA_DIR" in os.environ:
+            overrides["HOST_DATA_DIR"] = os.environ["HOST_DATA_DIR"]
+        overrides = _normalize_env_overrides(overrides)
     if overrides:
         data = _apply_env_overrides(data, overrides)
 

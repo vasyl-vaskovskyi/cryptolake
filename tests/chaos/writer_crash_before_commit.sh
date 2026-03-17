@@ -9,5 +9,5 @@ docker compose up -d writer
 echo "3. Waiting 60 seconds for recovery..."
 sleep 60
 echo "4. Running full verification..."
-docker compose exec writer uv run cryptolake verify --date "$(date -u +%Y-%m-%d)" --base-dir /data --full
+docker compose exec writer uv run cryptolake verify --date "$(date -u +%Y-%m-%d)" --base-dir "${HOST_DATA_DIR:-/data}" --full
 echo "=== Check: No duplicates, no corrupt zstd frames, verification passes ==="

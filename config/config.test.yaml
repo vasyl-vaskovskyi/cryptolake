@@ -30,7 +30,6 @@ redpanda:
   retention_hours: 48
 
 writer:
-  base_dir: "/data"
   rotation: "hourly"
   compression: "zstd"
   compression_level: 3

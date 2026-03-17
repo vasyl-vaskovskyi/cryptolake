@@ -33,12 +33,12 @@ class TestDockerfiles:
 
         assert "FROM python:3.12.7-slim AS base" in collector
         assert "RUN pip install uv" in collector
-        assert 'CMD ["uv", "run", "python", "-m", "src.collector.main"]' in collector
+        assert 'CMD ["/app/.venv/bin/python", "-m", "src.collector.main"]' in collector
         assert "USER cryptolake" in collector
 
         assert "FROM python:3.12.7-slim AS base" in writer
         assert "RUN pip install uv" in writer
-        assert 'CMD ["uv", "run", "python", "-m", "src.writer.main"]' in writer
+        assert 'CMD ["/app/.venv/bin/python", "-m", "src.writer.main"]' in writer
         assert "USER cryptolake" in writer
 
 
@@ -84,7 +84,8 @@ class TestComposeStacks:
         assert services["writer"]["build"]["dockerfile"] == "Dockerfile.writer"
         assert set(services["writer"]["networks"]) == {"cryptolake_internal", "host_access"}
         assert services["writer"]["depends_on"]["postgres"]["condition"] == "service_healthy"
-        assert "${HOST_DATA_DIR:-/data}:/data" in services["writer"]["volumes"]
+        assert "${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}" in services["writer"]["volumes"]
+        assert "HOST_DATA_DIR=${HOST_DATA_DIR:-/data}" in services["writer"]["environment"]
 
         assert compose["networks"]["cryptolake_internal"]["internal"] is True
         assert "host_access" in compose["networks"]
@@ -113,7 +114,8 @@ class TestComposeStacks:
         assert set(services["collector"]["networks"]) == {"cryptolake_internal", "collector_egress"}
         assert set(services["writer"]["networks"]) == {"cryptolake_internal"}
         assert set(services["alertmanager"]["networks"]) == {"cryptolake_internal", "alertmanager_egress"}
-        assert "data_volume:/data" in services["writer"]["volumes"]
+        assert "data_volume:${HOST_DATA_DIR:-/data}" in services["writer"]["volumes"]
+        assert "HOST_DATA_DIR=${HOST_DATA_DIR:-/data}" in services["writer"]["environment"]
 
         collector_env = set(services["collector"]["environment"])
         writer_env = set(services["writer"]["environment"])
@@ -130,8 +132,8 @@ class TestObservabilityAssets:
         prometheus = _read_yaml("infra/prometheus/prometheus.yml")
         alert_rules = _read_yaml("infra/prometheus/alert_rules.yml")
         alertmanager = _read_yaml("infra/alertmanager/alertmanager.yml")
-        datasources = _read_yaml("infra/grafana/provisioning/datasources.yml")
-        dashboards = _read_yaml("infra/grafana/provisioning/dashboards.yml")
+        datasources = _read_yaml("infra/grafana/provisioning/datasources/datasources.yml")
+        dashboards = _read_yaml("infra/grafana/provisioning/dashboards/dashboards.yml")
         dashboard = json.loads(_read_text("infra/grafana/dashboards/cryptolake.json"))
 
         job_names = {job["job_name"] for job in prometheus["scrape_configs"]}
@@ -179,7 +181,7 @@ class TestChaosScripts:
         scripts = {
             "tests/chaos/kill_writer.sh": ["docker kill", "cryptolake-writer-1", "cryptolake verify"],
             "tests/chaos/kill_ws_connection.sh": ["docker kill", "cryptolake-collector-1", "ws_disconnect"],
-            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "df -h /data", "fill_disk.tmp", "docker compose exec writer"],
+            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "HOST_DATA_DIR", "fill_disk.tmp", "docker compose exec writer"],
             "tests/chaos/depth_reconnect_inflight.sh": ["depth", "docker compose up -d collector", "cryptolake verify"],
             "tests/chaos/buffer_overflow_recovery.sh": ["redpanda", "buffer", "docker compose up -d redpanda"],
             "tests/chaos/writer_crash_before_commit.sh": ["docker kill -s KILL", "cryptolake-writer-1", "cryptolake verify"],

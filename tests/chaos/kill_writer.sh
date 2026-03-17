@@ -11,5 +11,5 @@ docker compose up -d writer
 echo "4. Waiting 60 seconds for catch-up..."
 sleep 60
 echo "5. Running verification..."
-docker compose exec writer uv run cryptolake verify --date "$(date -u +%Y-%m-%d)" --base-dir /data --full
+docker compose exec writer uv run cryptolake verify --date "$(date -u +%Y-%m-%d)" --base-dir "${HOST_DATA_DIR:-/data}" --full
 echo "=== Check: Errors should be 0, writer should have caught up ==="
