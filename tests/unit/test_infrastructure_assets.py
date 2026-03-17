@@ -114,8 +114,8 @@ class TestComposeStacks:
         assert set(services["collector"]["networks"]) == {"cryptolake_internal", "collector_egress"}
         assert set(services["writer"]["networks"]) == {"cryptolake_internal"}
         assert set(services["alertmanager"]["networks"]) == {"cryptolake_internal", "alertmanager_egress"}
-        assert "data_volume:${HOST_DATA_DIR:-/data}" in services["writer"]["volumes"]
-        assert "HOST_DATA_DIR=${HOST_DATA_DIR:-/data}" in services["writer"]["environment"]
+        assert "${TEST_DATA_DIR:-/data}:${TEST_DATA_DIR:-/data}" in services["writer"]["volumes"]
+        assert "HOST_DATA_DIR=${TEST_DATA_DIR:-/data}" in services["writer"]["environment"]
 
         collector_env = set(services["collector"]["environment"])
         writer_env = set(services["writer"]["environment"])
@@ -179,12 +179,12 @@ class TestObservabilityAssets:
 class TestChaosScripts:
     def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
         scripts = {
-            "tests/chaos/kill_writer.sh": ["docker kill", "cryptolake-writer-1", "cryptolake verify"],
-            "tests/chaos/kill_ws_connection.sh": ["docker kill", "cryptolake-collector-1", "ws_disconnect"],
-            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "HOST_DATA_DIR", "fill_disk.tmp", "docker compose exec writer"],
-            "tests/chaos/depth_reconnect_inflight.sh": ["depth", "docker compose up -d collector", "cryptolake verify"],
-            "tests/chaos/buffer_overflow_recovery.sh": ["redpanda", "buffer", "docker compose up -d redpanda"],
-            "tests/chaos/writer_crash_before_commit.sh": ["docker kill -s KILL", "cryptolake-writer-1", "cryptolake verify"],
+            "tests/chaos/kill_writer.sh": ["docker kill", "WRITER_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/kill_ws_connection.sh": ["docker kill", "COLLECTOR_CONTAINER", "collector_restart", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "collector_restart", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
         }
 
         for relative_path, expected_snippets in scripts.items():
@@ -196,3 +196,16 @@ class TestChaosScripts:
             assert os.access(path, os.X_OK)
             for snippet in expected_snippets:
                 assert snippet in text
+
+    def test_common_helper_exists_with_setup_and_teardown(self) -> None:
+        path = PROJECT_ROOT / "tests/chaos/common.sh"
+        text = path.read_text()
+        assert "setup_stack" in text
+        assert "teardown_stack" in text
+        assert "down -v --rmi local" in text
+        assert "count_gaps" in text
+        assert "check_integrity" in text
+        assert "print_archive_stats" in text
+        assert "print_gap_details" in text
+        assert "print_test_report" in text
+        assert "preflight_checks" in text

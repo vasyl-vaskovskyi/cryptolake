@@ -13,6 +13,7 @@ VALID_GAP_REASONS = frozenset(
         "session_seq_skip",
         "buffer_overflow",
         "snapshot_poll_miss",
+        "collector_restart",
     }
 )
 

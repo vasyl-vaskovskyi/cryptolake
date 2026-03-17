@@ -9,7 +9,12 @@ from pathlib import Path
 
 import structlog
 
-from src.common.envelope import add_broker_coordinates, deserialize_envelope
+from src.common.envelope import (
+    add_broker_coordinates,
+    create_gap_envelope,
+    deserialize_envelope,
+    serialize_envelope,
+)
 from src.writer import metrics as writer_metrics
 from src.writer.buffer_manager import BufferManager, FlushResult
 from src.writer.compressor import ZstdFrameCompressor
@@ -53,6 +58,8 @@ class WriterConsumer:
         self._assigned = False  # True once consumer receives partition assignment
         self._sealed_files: set[Path] = set()  # tracks sealed .jsonl.zst paths
         self._late_seq: dict[Path, int] = {}  # late-arrival sequence counters
+        # Track last seen session per (exchange, symbol, stream) for gap detection
+        self._last_session: dict[tuple[str, str, str], tuple[str, int]] = {}  # -> (session_id, received_at)
 
     async def start(self) -> None:
         from confluent_kafka import Consumer as KafkaConsumer
@@ -145,6 +152,56 @@ class WriterConsumer:
                 data_path = sc.with_suffix("")  # remove .sha256
                 self._sealed_files.add(data_path)
 
+    def _check_session_change(self, envelope: dict) -> dict | None:
+        """Detect collector session changes and return a gap envelope if one occurred.
+
+        When the collector crashes (SIGKILL), it cannot emit gap records itself.
+        The writer detects the session_id change and injects a collector_restart
+        gap record into the archive to record the data loss window.
+        """
+        stream_key = (
+            envelope.get("exchange", ""),
+            envelope.get("symbol", ""),
+            envelope.get("stream", ""),
+        )
+        session_id = envelope.get("collector_session_id", "")
+        received_at = envelope.get("received_at", 0)
+
+        prev = self._last_session.get(stream_key)
+        self._last_session[stream_key] = (session_id, received_at)
+
+        if prev is None:
+            return None
+
+        prev_session_id, prev_received_at = prev
+        if session_id == prev_session_id:
+            return None
+
+        exchange, symbol, stream = stream_key
+        logger.warning(
+            "collector_session_change_detected",
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            old_session=prev_session_id,
+            new_session=session_id,
+        )
+        writer_metrics.session_gaps_detected_total.labels(
+            exchange=exchange, symbol=symbol, stream=stream,
+        ).inc()
+        return create_gap_envelope(
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            collector_session_id=session_id,
+            session_seq=-1,
+            gap_start_ts=prev_received_at,
+            gap_end_ts=received_at,
+            reason="collector_restart",
+            detail=f"Collector session changed: {prev_session_id} -> {session_id}",
+            received_at=received_at,
+        )
+
     def _resolve_file_path(self, file_path: Path) -> Path:
         """If file_path is sealed (has sidecar), return a late-arrival spillover path.
 
@@ -204,6 +261,22 @@ class WriterConsumer:
                 symbol=envelope.get("symbol", ""),
                 stream=envelope.get("stream", ""),
             ).inc()
+
+            # Detect collector session changes (covers crash/SIGKILL where
+            # the collector could not emit its own gap records)
+            if envelope.get("type") == "data":
+                gap_envelope = self._check_session_change(envelope)
+                if gap_envelope is not None:
+                    gap_envelope = add_broker_coordinates(
+                        gap_envelope,
+                        topic=msg.topic(),
+                        partition=msg.partition(),
+                        offset=-1,  # synthetic record, not from Kafka
+                    )
+                    gap_results = self.buffer_manager.add(gap_envelope)
+                    if gap_results:
+                        await self._write_and_save(gap_results)
+                        last_flush_time = time.monotonic()
 
             # Per-file hourly rotation (spec 8.2: file routing by message received_at)
             msg_dt = datetime.datetime.fromtimestamp(

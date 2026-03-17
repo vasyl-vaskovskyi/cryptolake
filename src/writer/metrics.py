@@ -40,6 +40,12 @@ disk_usage_pct = Gauge(
     "Percentage of volume used",
 )
 
+session_gaps_detected_total = Counter(
+    "writer_session_gaps_detected_total",
+    "Collector session changes detected (potential data loss)",
+    ["exchange", "symbol", "stream"],
+)
+
 flush_duration_ms = Histogram(
     "writer_flush_duration_ms",
     "Time to flush buffer to disk (ms)",

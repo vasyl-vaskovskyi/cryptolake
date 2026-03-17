@@ -100,6 +100,7 @@ class TestEnvelopeCreation:
         assert "session_seq_skip" in VALID_GAP_REASONS
         assert "buffer_overflow" in VALID_GAP_REASONS
         assert "snapshot_poll_miss" in VALID_GAP_REASONS
+        assert "collector_restart" in VALID_GAP_REASONS
 
     def test_gap_invalid_reason_raises(self) -> None:
         from src.common.envelope import create_gap_envelope

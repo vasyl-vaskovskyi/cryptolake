@@ -120,11 +120,12 @@ class WebSocketManager:
                     exchange=self.exchange
                 ).inc()
 
+            # Emit gap records for all streams on this socket
+            # (must run before the _running check so graceful shutdown still records gaps)
+            self._emit_disconnect_gaps(socket_name)
+
             if not self._running:
                 break
-
-            # Emit gap records for all streams on this socket
-            self._emit_disconnect_gaps(socket_name)
 
             # Trigger depth resync if public socket disconnected (spec 7.2)
             if socket_name == "public" and "depth" in self.enabled_streams:

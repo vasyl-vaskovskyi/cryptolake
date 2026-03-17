@@ -115,6 +115,67 @@ class TestDepthHandler:
         assert resync_called == ["btcusdt"]
 
 
+class TestWriterSessionChangeDetection:
+    """Writer-side detection of collector session changes (crash/SIGKILL coverage)."""
+
+    def _make_consumer(self):
+        from src.writer.consumer import WriterConsumer
+
+        consumer = WriterConsumer.__new__(WriterConsumer)
+        consumer._last_session = {}
+        return consumer
+
+    def _make_envelope(self, session_id="s1", received_at=1000, stream="trades"):
+        return {
+            "type": "data",
+            "exchange": "binance",
+            "symbol": "btcusdt",
+            "stream": stream,
+            "collector_session_id": session_id,
+            "received_at": received_at,
+        }
+
+    def test_first_message_no_gap(self):
+        consumer = self._make_consumer()
+        env = self._make_envelope()
+        result = consumer._check_session_change(env)
+        assert result is None
+
+    def test_same_session_no_gap(self):
+        consumer = self._make_consumer()
+        consumer._check_session_change(self._make_envelope(session_id="s1", received_at=1000))
+        result = consumer._check_session_change(self._make_envelope(session_id="s1", received_at=2000))
+        assert result is None
+
+    def test_session_change_emits_gap(self):
+        consumer = self._make_consumer()
+        consumer._check_session_change(self._make_envelope(session_id="s1", received_at=1000))
+        result = consumer._check_session_change(self._make_envelope(session_id="s2", received_at=5000))
+        assert result is not None
+        assert result["type"] == "gap"
+        assert result["reason"] == "collector_restart"
+        assert result["gap_start_ts"] == 1000
+        assert result["gap_end_ts"] == 5000
+        assert "s1" in result["detail"]
+        assert "s2" in result["detail"]
+
+    def test_session_change_per_stream(self):
+        """Session tracking is per (exchange, symbol, stream) — different streams are independent."""
+        consumer = self._make_consumer()
+        consumer._check_session_change(self._make_envelope(session_id="s1", stream="trades"))
+        consumer._check_session_change(self._make_envelope(session_id="s1", stream="depth"))
+        # Change session for trades only
+        result_trades = consumer._check_session_change(
+            self._make_envelope(session_id="s2", stream="trades", received_at=2000)
+        )
+        result_depth = consumer._check_session_change(
+            self._make_envelope(session_id="s1", stream="depth", received_at=2000)
+        )
+        assert result_trades is not None
+        assert result_trades["stream"] == "trades"
+        assert result_depth is None
+
+
 class TestProducerOverflow:
     def test_buffer_error_increments_dropped(self):
         """When confluent_kafka raises BufferError, produce returns False and tracks overflow window."""
