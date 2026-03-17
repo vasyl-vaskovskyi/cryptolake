@@ -129,16 +129,26 @@ class WriterConsumer:
                 self._sealed_files.add(data_path)
 
     def _resolve_file_path(self, file_path: Path) -> Path:
-        """If file_path is sealed (has sidecar), return a late-arrival spillover path."""
-        if file_path in self._sealed_files or sidecar_path(file_path).exists():
-            self._sealed_files.add(file_path)
-            seq = self._late_seq.get(file_path, 0) + 1
-            self._late_seq[file_path] = seq
-            # Build late path: hour-14.late-1.jsonl.zst
-            stem = file_path.stem.split(".")[0]  # "hour-14"
+        """If file_path is sealed (has sidecar), return a late-arrival spillover path.
+
+        Loops through late-N sequence numbers to skip any that are also
+        sealed (e.g. after a restart where late-1 was already written and
+        sealed in a prior run).
+        """
+        if file_path not in self._sealed_files and not sidecar_path(file_path).exists():
+            return file_path
+        self._sealed_files.add(file_path)
+        seq = self._late_seq.get(file_path, 0)
+        stem = file_path.stem.split(".")[0]  # "hour-14"
+        while True:
+            seq += 1
             late_name = f"{stem}.late-{seq}.jsonl.zst"
-            return file_path.parent / late_name
-        return file_path
+            late_path = file_path.parent / late_name
+            if late_path not in self._sealed_files and not sidecar_path(late_path).exists():
+                self._late_seq[file_path] = seq
+                return late_path
+            # This late file is also sealed; mark it and try the next one
+            self._sealed_files.add(late_path)
 
     async def consume_loop(self) -> None:
         """Main consume loop. Polls in executor, buffers, flushes, and commits."""
@@ -153,20 +163,22 @@ class WriterConsumer:
             # Non-blocking poll via executor (spec 8.2: avoid blocking uvloop)
             msg = await loop.run_in_executor(None, self._consumer.poll, 1.0)
 
-            # Handle pending seeks on assignment
+            # Handle pending seeks on assignment — only clear once
+            # assignments are available, otherwise seeks are lost (finding 1)
             if self._pending_seeks:
                 assignments = self._consumer.assignment()
-                for tp in assignments:
-                    key = (tp.topic, tp.partition)
-                    if key in self._pending_seeks:
-                        from confluent_kafka import TopicPartition
-                        self._consumer.seek(
-                            TopicPartition(tp.topic, tp.partition, self._pending_seeks[key])
-                        )
-                        logger.info("consumer_seek", topic=tp.topic,
-                                    partition=tp.partition,
-                                    offset=self._pending_seeks[key])
-                self._pending_seeks = {}
+                if assignments:
+                    for tp in assignments:
+                        key = (tp.topic, tp.partition)
+                        if key in self._pending_seeks:
+                            from confluent_kafka import TopicPartition
+                            self._consumer.seek(
+                                TopicPartition(tp.topic, tp.partition, self._pending_seeks[key])
+                            )
+                            logger.info("consumer_seek", topic=tp.topic,
+                                        partition=tp.partition,
+                                        offset=self._pending_seeks[key])
+                    self._pending_seeks = {}
 
             if msg is None:
                 if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
@@ -241,11 +253,13 @@ class WriterConsumer:
         if results:
             states = self._write_to_disk(results)
 
-        # 3. Seal all flushed file paths BEFORE committing offsets
+        # 3. Seal all flushed file paths BEFORE committing offsets.
+        # Use actual written paths from states (may differ from FlushResult
+        # if _resolve_file_path redirected to a late spillover file).
         files_to_seal = set()
-        if results:
-            for r in results:
-                files_to_seal.add(r.file_path)
+        if states:
+            for s in states:
+                files_to_seal.add(Path(s.file_path))
         # Always include the explicitly targeted file
         files_to_seal.add(build_file_path(
             self.base_dir, exchange, symbol, stream, date_str, hour))
