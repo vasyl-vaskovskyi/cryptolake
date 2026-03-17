@@ -51,6 +51,7 @@ services:
       retries: 5
     networks:
       - cryptolake_internal
+      - host_access
     volumes:
       - redpanda_data:/var/lib/redpanda/data
 
@@ -98,6 +99,7 @@ services:
       - "127.0.0.1:8001:8001"
     networks:
       - cryptolake_internal
+      - host_access
     volumes:
       - ./config:/app/config:ro
       - data_volume:/data
@@ -145,6 +147,7 @@ services:
       - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
     networks:
       - cryptolake_internal
+      - host_access
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?Set GF_ADMIN_PASSWORD in .env}
     volumes:
@@ -189,6 +192,10 @@ networks:
   cryptolake_internal:
     driver: bridge
     internal: true
+  # Host-published services need a non-internal bridge on Docker Desktop or
+  # their configured port bindings do not appear on the host.
+  host_access:
+    driver: bridge
   collector_egress:
     driver: bridge
   alertmanager_egress:
