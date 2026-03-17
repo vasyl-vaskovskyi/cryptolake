@@ -51,7 +51,8 @@ class TestRuntimeConfigs:
         assert production.database.url.startswith("postgresql://")
         assert example.database.url.startswith("postgresql://")
         assert production.redpanda.brokers == ["redpanda:9092"]
-        assert example.exchanges.binance.symbols == ["btcusdt", "ethusdt", "solusdt"]
+        assert production.exchanges.binance.symbols == ["btcusdt"]
+        assert example.exchanges.binance.symbols == ["btcusdt"]
 
         assert test.exchanges.binance.symbols == ["btcusdt"]
         assert test.exchanges.binance.depth.snapshot_interval == "30s"
@@ -81,10 +82,12 @@ class TestComposeStacks:
 
         assert services["writer"]["build"]["context"] == "."
         assert services["writer"]["build"]["dockerfile"] == "Dockerfile.writer"
-        assert set(services["writer"]["networks"]) == {"cryptolake_internal"}
+        assert set(services["writer"]["networks"]) == {"cryptolake_internal", "host_access"}
         assert services["writer"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+        assert "${HOST_DATA_DIR:-/data}:/data" in services["writer"]["volumes"]
 
         assert compose["networks"]["cryptolake_internal"]["internal"] is True
+        assert "host_access" in compose["networks"]
         assert "collector_egress" in compose["networks"]
         assert "alertmanager_egress" in compose["networks"]
 
@@ -92,7 +95,6 @@ class TestComposeStacks:
             "postgres_data",
             "redpanda_data",
             "prometheus_data",
-            "data_volume",
         }
 
         # All services must have health checks
@@ -111,6 +113,7 @@ class TestComposeStacks:
         assert set(services["collector"]["networks"]) == {"cryptolake_internal", "collector_egress"}
         assert set(services["writer"]["networks"]) == {"cryptolake_internal"}
         assert set(services["alertmanager"]["networks"]) == {"cryptolake_internal", "alertmanager_egress"}
+        assert "data_volume:/data" in services["writer"]["volumes"]
 
         collector_env = set(services["collector"]["environment"])
         writer_env = set(services["writer"]["environment"])

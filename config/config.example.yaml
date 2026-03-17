@@ -9,8 +9,6 @@ exchanges:
     rest_base: "https://fapi.binance.com"
     symbols:
       - btcusdt
-      - ethusdt
-      - solusdt
     streams:
       trades: true
       depth: true

@@ -42,6 +42,9 @@ services:
       service: writer
     networks:
       - cryptolake_internal
+    volumes:
+      - ./config:/app/config:ro
+      - data_volume:/data
     depends_on:
       redpanda:
         condition: service_healthy
@@ -90,6 +93,8 @@ networks:
   cryptolake_internal:
     driver: bridge
     internal: true
+  host_access:
+    driver: bridge
   collector_egress:
     driver: bridge
   alertmanager_egress:

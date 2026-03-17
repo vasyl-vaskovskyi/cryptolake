@@ -102,7 +102,7 @@ services:
       - host_access
     volumes:
       - ./config:/app/config:ro
-      - data_volume:/data
+      - ${HOST_DATA_DIR:-/data}:/data
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
@@ -186,7 +186,6 @@ volumes:
   postgres_data:
   redpanda_data:
   prometheus_data:
-  data_volume:
 
 networks:
   cryptolake_internal:
