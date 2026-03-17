@@ -9,7 +9,8 @@ COPY pyproject.toml uv.lock ./
 COPY src/ src/
 RUN uv sync --frozen --no-dev
 
-RUN mkdir -p /data && chown cryptolake:cryptolake /data
+RUN mkdir -p /data /home/cryptolake/.cache/uv && \
+    chown -R cryptolake:cryptolake /data /home/cryptolake
 
 USER cryptolake
 
