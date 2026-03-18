@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CryptoLake EC2 deployment — single instance running docker-compose
+  with CloudWatch agent, EBS data volume, and automated backups.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Access
+        Parameters:
+          - SSHKeyName
+          - SSHAllowCIDR
+      - Label:
+          default: Instance
+        Parameters:
+          - InstanceType
+          - InstanceArchitecture
+          - DataVolumeSize
+      - Label:
+          default: Application
+        Parameters:
+          - GitRepoURL
+          - GitBranch
+          - PostgresPassword
+          - GrafanaPassword
+
+Parameters:
+  SSHKeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 key pair for SSH access
+
+  SSHAllowCIDR:
+    Type: String
+    Description: CIDR block allowed to SSH (e.g. 203.0.113.5/32)
+    AllowedPattern: '(\d{1,3}\.){3}\d{1,3}/\d{1,2}'
+    ConstraintDescription: Must be a valid CIDR (e.g. 1.2.3.4/32)
+
+  InstanceType:
+    Type: String
+    Default: t3.xlarge
+    Description: EC2 instance type (4 vCPU, 16 GB recommended minimum)
+
+  InstanceArchitecture:
+    Type: String
+    Default: x86_64
+    AllowedValues:
+      - x86_64
+      - arm64
+    Description: Must match the selected EC2 instance type architecture
+
+  DataVolumeSize:
+    Type: Number
+    Default: 500
+    MinValue: 100
+    Description: Size of the /data EBS volume in GB
+
+  GitRepoURL:
+    Type: String
+    Description: Git repository URL to clone (HTTPS)
+
+  GitBranch:
+    Type: String
+    Default: main
+    Description: Git branch to checkout
+
+  PostgresPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the PostgreSQL database
+
+  GrafanaPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the Grafana admin user
+
+Conditions:
+  UseArm64: !Equals [!Ref InstanceArchitecture, arm64]
+
+Resources:
+  # --- IAM ---
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-role'
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  # --- Networking ---
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName} - SSH only'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHAllowCIDR
+          Description: SSH access from allowed CIDR
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+          Description: Allow all outbound (Docker pulls, Git clone, Binance API)
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-sg'
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-eip'
+
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref EC2Instance
+      AllocationId: !GetAtt ElasticIP.AllocationId
+
+  # --- Storage ---
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: !Ref DataVolumeSize
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-data'
+        - Key: Backup
+          Value: 'true'
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref EC2Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/xvdf
+
+  # --- EC2 Instance ---
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT15M
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      ImageId: !If
+        - UseArm64
+        - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
+        - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SSHKeyName
+      EbsOptimized: true
+      Monitoring: true
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !GetAtt SecurityGroup.GroupId
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          # Signal CloudFormation on exit (success or failure)
+          trap '/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}' EXIT
+
+          echo "=== Installing Docker ==="
+          dnf update -y
+          dnf install -y docker git xfsprogs aws-cfn-bootstrap
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ec2-user
+
+          # Install Docker Compose plugin (pinned version for reproducibility)
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) COMPOSE_ARCH=x86_64 ;;
+            aarch64|arm64) COMPOSE_ARCH=aarch64 ;;
+            *)
+              echo "ERROR: Unsupported architecture: $ARCH"
+              exit 1
+              ;;
+          esac
+          curl -SL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${COMPOSE_ARCH}" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          echo "=== Waiting for EBS data volume ==="
+          DEVICE=""
+          for i in $(seq 1 60); do
+            if [ -e /dev/xvdf ]; then DEVICE=/dev/xvdf; break; fi
+            if [ -e /dev/nvme1n1 ]; then DEVICE=/dev/nvme1n1; break; fi
+            sleep 1
+          done
+          if [ -z "$DEVICE" ]; then
+            echo "ERROR: Data volume not found after 60s"
+            exit 1
+          fi
+          echo "Found data volume at $DEVICE"
+
+          # Format only if not already formatted
+          if ! blkid "$DEVICE"; then
+            mkfs.xfs "$DEVICE"
+          fi
+          mkdir -p /data
+          mount "$DEVICE" /data
+
+          # Idempotent fstab entry (use UUID for reliability)
+          VOL_UUID=$(blkid -s UUID -o value "$DEVICE")
+          grep -q "$VOL_UUID" /etc/fstab || echo "UUID=$VOL_UUID /data xfs defaults,nofail 0 2" >> /etc/fstab
+
+          echo "=== Installing CloudWatch Agent ==="
+          dnf install -y amazon-cloudwatch-agent
+          cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
+          {
+            "agent": {
+              "metrics_collection_interval": 60,
+              "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+            },
+            "metrics": {
+              "namespace": "CryptoLake",
+              "append_dimensions": {
+                "InstanceId": "${!aws:InstanceId}"
+              },
+              "metrics_collected": {
+                "mem": {
+                  "measurement": ["mem_used_percent"]
+                },
+                "disk": {
+                  "measurement": ["disk_used_percent"],
+                  "resources": ["/", "/data"],
+                  "ignore_file_system_types": ["sysfs", "devtmpfs", "tmpfs"]
+                },
+                "diskio": {
+                  "measurement": ["reads", "writes", "read_bytes", "write_bytes"],
+                  "resources": ["*"]
+                }
+              }
+            },
+            "logs": {
+              "logs_collected": {
+                "files": {
+                  "collect_list": [
+                    {
+                      "file_path": "/var/lib/docker/containers/*/*.log",
+                      "log_group_name": "/cryptolake/docker",
+                      "log_stream_name": "{instance_id}/{file_name}",
+                      "retention_in_days": 30
+                    },
+                    {
+                      "file_path": "/var/log/user-data.log",
+                      "log_group_name": "/cryptolake/user-data",
+                      "log_stream_name": "{instance_id}",
+                      "retention_in_days": 7
+                    }
+                  ]
+                }
+              }
+            }
+          }
+          CWCONFIG
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+            -a fetch-config -m ec2 \
+            -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
+          echo "=== Cloning repo and starting stack ==="
+          cd /opt
+          git clone -b ${GitBranch} ${GitRepoURL} cryptolake
+          cd cryptolake
+
+          # Create .env from CloudFormation parameters (NoEcho — not logged)
+          cat > .env << 'ENVFILE'
+          POSTGRES_PASSWORD=${PostgresPassword}
+          GF_ADMIN_PASSWORD=${GrafanaPassword}
+          WEBHOOK_URL=
+          GRAFANA_BIND=127.0.0.1
+          HOST_DATA_DIR=/data
+          ENVFILE
+          chmod 600 .env
+
+          # Build images and start the stack
+          docker compose up -d --build
+          echo "=== Waiting for application services to become healthy ==="
+          REQUIRED_SERVICES="postgres redpanda collector writer prometheus grafana alertmanager"
+          unhealthy_services=""
+          for i in $(seq 1 60); do
+            unhealthy_services=""
+            for service in $REQUIRED_SERVICES; do
+              container_id=$(docker compose ps -q "$service" || true)
+              if [ -z "$container_id" ]; then
+                unhealthy_services="$unhealthy_services ${service}:missing"
+                continue
+              fi
+              status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id")
+              if [ "$status" != "healthy" ] && [ "$status" != "running" ]; then
+                unhealthy_services="$unhealthy_services ${service}:$status"
+              fi
+            done
+            if [ -z "$unhealthy_services" ]; then
+              break
+            fi
+            echo "Services not ready yet:$unhealthy_services"
+            sleep 5
+          done
+          if [ -n "$unhealthy_services" ]; then
+            echo "ERROR: Services failed to become healthy in time:$unhealthy_services"
+            docker compose ps
+            docker compose logs --tail=100
+            exit 1
+          fi
+
+          echo "=== Bootstrap complete ==="
+
+  # --- Backup ---
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: !Sub '${AWS::StackName}-vault'
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub '${AWS::StackName}-daily'
+        BackupPlanRule:
+          - RuleName: DailyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: 'cron(0 5 * * ? *)'
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: 7
+
+  BackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores'
+
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: !Sub '${AWS::StackName}-data-volume'
+        IamRoleArn: !GetAtt BackupRole.Arn
+        ListOfTags:
+          - ConditionType: STRINGEQUALS
+            ConditionKey: Backup
+            ConditionValue: 'true'
+
+Outputs:
+  PublicIP:
+    Description: Elastic IP address for SSH access
+    Value: !Ref ElasticIP
+
+  SSHCommand:
+    Description: SSH command to connect
+    Value: !Sub 'ssh -i ~/.ssh/${SSHKeyName}.pem ec2-user@${ElasticIP}'
+
+  GrafanaTunnel:
+    Description: SSH tunnel command for Grafana access
+    Value: !Sub 'ssh -L 3000:localhost:3000 -i ~/.ssh/${SSHKeyName}.pem ec2-user@${ElasticIP}'
+
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+
+  DataVolumeId:
+    Description: EBS Data Volume ID
+    Value: !Ref DataVolume
+
+  SelectedArchitecture:
+    Description: AMI architecture selected for the instance
+    Value: !Ref InstanceArchitecture
+
+  SelectedAvailabilityZone:
+    Description: Availability Zone used for the instance and data volume
+    Value: !Select [0, !GetAZs '']
+
+  CloudWatchLogsGroup:
+    Description: CloudWatch Logs group for Docker container logs
+    Value: /cryptolake/docker
+
+  BackupVaultName:
+    Description: AWS Backup vault name
+    Value: !Ref BackupVault

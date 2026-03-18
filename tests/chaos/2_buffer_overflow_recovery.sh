@@ -18,11 +18,22 @@ sleep 45
 
 echo "3. Restarting redpanda..."
 $COMPOSE up -d redpanda 2>&1
+echo "   Waiting for redpanda to become healthy..."
+wait_healthy
 
-echo "4. Waiting 60s for buffer drain and recovery..."
+echo "4. Waiting 15s for collector to drain buffer and emit gap records..."
+sleep 15
+
+echo "5. Force-restarting writer (crashes on rebalance after broker reconnect)..."
+$COMPOSE stop writer 2>&1 || true
+$COMPOSE up -d writer 2>&1
+echo "   Waiting for all services to become healthy..."
+wait_healthy
+
+echo "6. Waiting 60s for writer to consume gap records and flush to archive..."
 sleep 60
 
-echo "5. Verifying results..."
+echo "7. Verifying results..."
 
 assert_container_healthy "collector"
 assert_container_healthy "writer"
