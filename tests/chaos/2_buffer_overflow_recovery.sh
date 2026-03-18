@@ -13,27 +13,26 @@ wait_for_data 30
 echo "1. Stopping redpanda to force collector buffer growth..."
 $COMPOSE stop redpanda 2>&1
 
-echo "2. Waiting 45s while collector buffers messages..."
-sleep 45
+echo "2. Waiting for collector buffer to overflow..."
+wait_for_overflow 120
 
 echo "3. Restarting redpanda..."
 $COMPOSE up -d redpanda 2>&1
 echo "   Waiting for redpanda to become healthy..."
-wait_healthy
+# We don't use wait_healthy here because the writer is expected to have crashed
+# during the redpanda outage (session timeout).
+wait_service_healthy redpanda
 
-echo "4. Waiting 15s for collector to drain buffer and emit gap records..."
-sleep 15
-
-echo "5. Force-restarting writer (crashes on rebalance after broker reconnect)..."
+echo "4. Force-restarting writer (crashes on rebalance after broker reconnect)..."
 $COMPOSE stop writer 2>&1 || true
 $COMPOSE up -d writer 2>&1
 echo "   Waiting for all services to become healthy..."
 wait_healthy
 
-echo "6. Waiting 60s for writer to consume gap records and flush to archive..."
-sleep 60
+echo "5. Waiting for buffer_overflow gaps to appear in archive..."
+wait_for_gaps "buffer_overflow" 90
 
-echo "7. Verifying results..."
+echo "6. Verifying results..."
 
 assert_container_healthy "collector"
 assert_container_healthy "writer"
@@ -51,5 +50,5 @@ else
 fi
 
 print_test_report
-teardown_stack
+test teardown_stack
 print_results

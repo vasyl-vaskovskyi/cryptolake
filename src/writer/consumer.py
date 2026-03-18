@@ -81,40 +81,48 @@ class WriterConsumer:
 
         # Compute seek targets from PG state BEFORE subscribe so they're
         # available when on_assign fires during the first poll().
+        # We take the MINIMUM offset across all files for a (topic, partition)
+        # to ensure no data is lost; re-consumed messages will be truncated
+        # by _recover_files based on their recorded byte sizes.
         seek_map: dict[tuple[str, int], int] = {}
         for s in states.values():
             key = (s.topic, s.partition)
-            seek_map[key] = max(seek_map.get(key, 0), s.high_water_offset + 1)
+            target = s.high_water_offset + 1
+            if key not in seek_map or target < seek_map[key]:
+                seek_map[key] = target
         self._pending_seeks = seek_map
+        # Track recovery high-water marks to prevent duplicates when resuming
+        # from a MIN offset across multiple files in a partition (spec 8.2).
+        self._recovery_high_water = {
+            s.state_key: s.high_water_offset for s in states.values()
+        }
 
         def _on_assign(consumer, partitions):
             self._assigned = True
             self._assigned_partitions = set(
                 (tp.topic, tp.partition) for tp in partitions
             )
-            # Apply pending seeks inside the assignment callback — this runs
-            # within poll() before any messages are returned, so no pre-seek
-            # messages can slip through and violate exactly-once recovery.
+            # Apply pending seeks by modifying the TopicPartition objects
+            # in the partitions list. The consumer uses these offsets
+            # when performing the assignment (spec 8.2).
             if self._pending_seeks:
-                from confluent_kafka import TopicPartition
                 for tp in partitions:
                     key = (tp.topic, tp.partition)
                     if key in self._pending_seeks:
-                        consumer.seek(
-                            TopicPartition(tp.topic, tp.partition, self._pending_seeks[key])
-                        )
-                        logger.info("consumer_seek", topic=tp.topic,
-                                    partition=tp.partition,
-                                    offset=self._pending_seeks[key])
+                        tp.offset = self._pending_seeks[key]
+                        logger.debug("consumer_set_initial_offset",
+                                     topic=tp.topic,
+                                     partition=tp.partition,
+                                     offset=tp.offset)
                 self._pending_seeks = {}
             logger.info("consumer_partitions_assigned", count=len(partitions))
 
         def _on_revoke(consumer, partitions):
             revoked = set((tp.topic, tp.partition) for tp in partitions)
-            logger.critical("consumer_partitions_revoked",
-                            revoked=list(revoked),
-                            detail="Writer exclusivity violated — another consumer "
-                                   "joined the group or rebalance occurred")
+            logger.info("consumer_partitions_revoked",
+                        revoked=list(revoked),
+                        intentional=not self._running)
+
             # Flush any buffered data before losing ownership
             # (best-effort — we may lose the race)
             try:
@@ -122,12 +130,14 @@ class WriterConsumer:
                 loop.create_task(self._flush_and_commit())
             except RuntimeError:
                 pass
-            self._assigned = False
-            # Crash the writer to prevent split-brain writes (spec 8.2)
-            raise RuntimeError(
-                f"Writer exclusivity violated: partitions {revoked} revoked. "
-                "Another writer may have joined consumer group. Shutting down."
-            )
+
+            if self._running:
+                # Spontaneous revocation while we should be running — crash to prevent split-brain
+                self._running = False
+                raise RuntimeError(
+                    f"Writer exclusivity violated: partitions {revoked} revoked. "
+                    "Another writer may have joined consumer group. Shutting down."
+                )
 
         self._consumer.subscribe(self.topics, on_assign=_on_assign,
                                  on_revoke=_on_revoke)
@@ -264,6 +274,27 @@ class WriterConsumer:
                 partition=msg_partition,
                 offset=msg_offset,
             )
+
+            # De-duplication during recovery: skip messages already in the archive (spec 8.2)
+            target = self.buffer_manager._route(envelope)
+            from src.writer.file_rotator import build_file_path
+            base_path = build_file_path(
+                self.buffer_manager.base_dir, target.exchange, target.symbol,
+                target.stream, target.date, target.hour,
+            )
+            file_path = self._resolve_file_path(base_path)
+            state_key = (msg_topic, msg_partition, str(file_path))
+            if state_key in self._recovery_high_water:
+                if msg_offset <= self._recovery_high_water[state_key]:
+                    writer_metrics.messages_skipped_total.labels(
+                        exchange=envelope.get("exchange", ""),
+                        symbol=envelope.get("symbol", ""),
+                        stream=envelope.get("stream", ""),
+                    ).inc()
+                    continue
+                else:
+                    # Once we pass the recorded high water for this file, we can stop checking
+                    del self._recovery_high_water[state_key]
 
             writer_metrics.messages_consumed_total.labels(
                 exchange=envelope.get("exchange", ""),

@@ -73,7 +73,8 @@ class BufferManager:
         self.total_buffered -= len(messages)
 
         lines = [orjson.dumps(env) + b"\n" for env in messages]
-        high_water = max(m["_offset"] for m in messages if m["_offset"] >= 0)
+        # Use default=-1 to handle buffers containing only synthetic records (spec 8.2)
+        high_water = max((m["_offset"] for m in messages if m["_offset"] >= 0), default=-1)
         partition = messages[0]["_partition"]  # all messages in same buffer share partition
         file_path = build_file_path(
             self.base_dir, target.exchange, target.symbol,

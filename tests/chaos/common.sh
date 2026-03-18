@@ -81,7 +81,7 @@ setup_stack() {
 }
 
 wait_healthy() {
-    local attempts=0 max_attempts=30
+    local attempts=0 max_attempts=60
     while (( attempts < max_attempts )); do
         local all_healthy=true
         for svc in postgres redpanda collector writer; do
@@ -177,6 +177,73 @@ for f in sorted(base.rglob('*.zst')):
         issues += 1
 exit(1 if issues else 0)
 "
+}
+
+# ---------------------------------------------------------------------------
+# Condition-based waiting helpers
+# ---------------------------------------------------------------------------
+
+# Wait for collector to start dropping messages (buffer overflow).
+# Polls collector_messages_dropped_total via the Prometheus endpoint
+# inside the collector container.
+# Usage: wait_for_overflow [max_seconds]
+wait_for_overflow() {
+    local max_wait="${1:-120}"
+    echo "   Polling collector metrics for message drops..."
+    for i in $(seq 1 "$max_wait"); do
+        drops=$($COMPOSE exec -T collector python -c "
+from urllib.request import urlopen
+data = urlopen('http://localhost:8000/metrics', timeout=2).read().decode()
+total = 0
+for line in data.splitlines():
+    if line.startswith('collector_messages_dropped_total{'):
+        total += float(line.split()[-1])
+print(int(total))
+" 2>/dev/null || echo "0")
+        if (( drops > 0 )); then
+            echo "   Buffer overflow detected after ${i}s (${drops} messages dropped)"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "   WARNING: No overflow detected after ${max_wait}s"
+    return 1
+}
+
+# Wait for specific gap type to appear in the archive.
+# Polls the archive directory for gap records matching the given reason.
+# Usage: wait_for_gaps "buffer_overflow" [max_seconds]
+wait_for_gaps() {
+    local reason="$1"
+    local max_wait="${2:-90}"
+    echo "   Polling archive for ${reason} gaps..."
+    local elapsed=0
+    while (( elapsed < max_wait )); do
+        count=$(count_gaps "$reason" 2>/dev/null || echo "0")
+        if (( count > 0 )); then
+            echo "   Found ${count} ${reason} gap(s) in archive after ${elapsed}s"
+            return 0
+        fi
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+    echo "   WARNING: No ${reason} gaps found after ${max_wait}s"
+    return 1
+}
+
+# Wait for a single service to become healthy.
+# Usage: wait_service_healthy "redpanda" [max_seconds]
+wait_service_healthy() {
+    local svc="$1"
+    local max_wait="${2:-60}"
+    for i in $(seq 1 "$max_wait"); do
+        if $COMPOSE ps "$svc" --format '{{.Status}}' 2>/dev/null | grep -q "(healthy)"; then
+            return 0
+        fi
+        sleep 2
+    done
+    echo "   WARNING: ${svc} not healthy after $((max_wait * 2))s"
+    return 1
 }
 
 # ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ class StateManager:
     VALUES (%(topic)s, %(partition)s, %(file_path)s, %(high_water_offset)s, %(file_byte_size)s, NOW())
     ON CONFLICT (topic, partition, file_path)
     DO UPDATE SET
-        high_water_offset = EXCLUDED.high_water_offset,
+        high_water_offset = GREATEST(writer_file_state.high_water_offset, EXCLUDED.high_water_offset),
         file_byte_size = EXCLUDED.file_byte_size,
         updated_at = NOW();
     """
@@ -63,10 +63,9 @@ class StateManager:
     async def connect(self) -> None:
         import psycopg
 
-        self._conn = await psycopg.AsyncConnection.connect(self._db_url)
+        self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
         async with self._conn.cursor() as cur:
             await cur.execute(self.CREATE_TABLE_SQL)
-        await self._conn.commit()
 
     async def close(self) -> None:
         if self._conn:
@@ -93,7 +92,7 @@ class StateManager:
         """Reconnect to PostgreSQL if the connection is closed or broken."""
         import psycopg
         if self._conn is None:
-            self._conn = await psycopg.AsyncConnection.connect(self._db_url)
+            self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
             return
         try:
             # Lightweight check — execute a no-op
@@ -105,7 +104,7 @@ class StateManager:
                 await self._conn.close()
             except Exception:
                 pass
-            self._conn = await psycopg.AsyncConnection.connect(self._db_url)
+            self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
 
     async def save_states(self, states: list[FileState]) -> None:
         """Atomically save multiple file states in a single transaction.

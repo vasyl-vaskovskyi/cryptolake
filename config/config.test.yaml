@@ -31,9 +31,9 @@ redpanda:
   producer:
     max_buffer: 100000
     buffer_caps:
-      depth: 7500
-      trades: 7500
-    default_stream_cap: 7500
+      depth: 2000
+      trades: 2000
+    default_stream_cap: 2000
 
 writer:
   rotation: "hourly"

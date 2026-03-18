@@ -6,6 +6,12 @@ messages_consumed_total = Counter(
     ["exchange", "symbol", "stream"],
 )
 
+messages_skipped_total = Counter(
+    "writer_messages_skipped_total",
+    "Messages skipped during recovery (already in archive)",
+    ["exchange", "symbol", "stream"],
+)
+
 consumer_lag = Gauge(
     "writer_consumer_lag",
     "Messages behind head (gap proxy)",
