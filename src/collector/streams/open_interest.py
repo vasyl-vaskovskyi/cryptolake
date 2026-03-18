@@ -62,6 +62,8 @@ class OpenInterestPoller:
             await self._session.close()
 
     async def _poll_loop(self, symbol: str, initial_delay: float = 0) -> None:
+        assert self._stop_event is not None, "call start() first"
+        assert self._session is not None, "call start() first"
         if initial_delay > 0:
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=initial_delay)
@@ -77,6 +79,7 @@ class OpenInterestPoller:
                 pass
 
     async def _poll_once(self, symbol: str, retries: int = 3) -> None:
+        assert self._session is not None, "call start() first"
         url = self.adapter.build_open_interest_url(symbol)
         for attempt in range(retries):
             try:

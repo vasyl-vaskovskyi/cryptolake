@@ -73,6 +73,7 @@ class StateManager:
             await self._conn.close()
 
     async def load_all_states(self) -> dict[tuple[str, int, str], FileState]:
+        assert self._conn is not None, "call connect() first"
         states: dict[tuple[str, int, str], FileState] = {}
         async with self._conn.cursor() as cur:
             await cur.execute(self.LOAD_ALL_SQL)
@@ -91,6 +92,9 @@ class StateManager:
     async def _ensure_connected(self) -> None:
         """Reconnect to PostgreSQL if the connection is closed or broken."""
         import psycopg
+        if self._conn is None:
+            self._conn = await psycopg.AsyncConnection.connect(self._db_url)
+            return
         try:
             # Lightweight check — execute a no-op
             async with self._conn.cursor() as cur:
@@ -113,6 +117,7 @@ class StateManager:
         for attempt in range(max_retries):
             try:
                 await self._ensure_connected()
+                assert self._conn is not None
                 async with self._conn.transaction():
                     async with self._conn.cursor() as cur:
                         for state in states:

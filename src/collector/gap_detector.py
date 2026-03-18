@@ -38,6 +38,8 @@ class DepthGapDetector:
         # First diff after sync: find the sync point
         if self._last_u is None:
             lid = self._last_update_id
+            if lid is None:
+                return DiffValidationResult(valid=False, reason="no_sync_point")
             if u < lid:
                 return DiffValidationResult(valid=False, stale=True, reason="stale")
             if U <= lid + 1 and u >= lid + 1:

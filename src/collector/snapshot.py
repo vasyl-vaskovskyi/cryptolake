@@ -83,6 +83,7 @@ class SnapshotScheduler:
 
     async def fetch_snapshot(self, symbol: str, retries: int = 3) -> str | None:
         """Fetch a single depth snapshot. Returns raw_text or None on total failure."""
+        assert self._session is not None, "call start() first"
         url = self.adapter.build_snapshot_url(symbol)
         for attempt in range(retries):
             try:
@@ -108,6 +109,7 @@ class SnapshotScheduler:
         return None
 
     async def _poll_loop(self, symbol: str, interval: int, initial_delay: float) -> None:
+        assert self._stop_event is not None, "call start() first"
         if initial_delay > 0:
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=initial_delay)

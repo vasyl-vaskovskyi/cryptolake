@@ -10,6 +10,7 @@ import websockets
 from src.collector import metrics as collector_metrics
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.base import StreamHandler
+from src.collector.streams.depth import DepthHandler
 from src.common.envelope import create_data_envelope, create_gap_envelope
 from src.exchanges.binance import BinanceAdapter, _PUBLIC_STREAMS, _MARKET_STREAMS
 
@@ -181,9 +182,10 @@ class WebSocketManager:
 
     async def _depth_resync(self, symbol: str) -> None:
         """Depth resync flow per spec Section 7.2."""
-        depth_handler = self.handlers.get("depth")
-        if depth_handler is None:
+        _handler = self.handlers.get("depth")
+        if not isinstance(_handler, DepthHandler):
             return
+        depth_handler: DepthHandler = _handler
 
         logger.info("depth_resync_starting", symbol=symbol)
 

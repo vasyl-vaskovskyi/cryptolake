@@ -45,7 +45,8 @@ class Collector:
         self.symbols = self.exchange_cfg.symbols
 
         # Build handlers
-        self.handlers: dict[str, object] = {}
+        from src.collector.streams.base import StreamHandler
+        self.handlers: dict[str, StreamHandler] = {}
         if "trades" in self.enabled_streams:
             self.handlers["trades"] = TradesHandler("binance", self.session_id, self.producer)
         if "depth" in self.enabled_streams:
@@ -96,6 +97,7 @@ class Collector:
         # Snapshot scheduler
         if "depth" in self.enabled_streams:
             depth_handler = self.handlers["depth"]
+            assert isinstance(depth_handler, DepthHandler)
             self.snapshot_scheduler = SnapshotScheduler(
                 exchange="binance",
                 collector_session_id=self.session_id,

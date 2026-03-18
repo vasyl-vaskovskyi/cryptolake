@@ -56,6 +56,7 @@ class WriterConsumer:
         self._consumer = None
         self._running = False
         self._assigned = False  # True once consumer receives partition assignment
+        self._assigned_partitions: set[tuple[str, int]] = set()
         self._sealed_files: set[Path] = set()  # tracks sealed .jsonl.zst paths
         self._late_seq: dict[Path, int] = {}  # late-arrival sequence counters
         # Track last seen session per (exchange, symbol, stream) for gap detection
@@ -233,6 +234,7 @@ class WriterConsumer:
         # (23→00) we seal the correct previous-day file, not the new day's.
         active_hours: dict[tuple[str, str, str], tuple[int, str]] = {}
 
+        assert self._consumer is not None, "call start() first"
         while self._running:
             # Non-blocking poll via executor (spec 8.2: avoid blocking uvloop)
             msg = await loop.run_in_executor(None, self._consumer.poll, 1.0)
@@ -248,12 +250,19 @@ class WriterConsumer:
                 continue
 
             # Deserialize and stamp broker coordinates
-            envelope = deserialize_envelope(msg.value())
+            # After msg.error() check, these are guaranteed non-None
+            raw_value = msg.value()
+            msg_topic = msg.topic()
+            msg_partition = msg.partition()
+            msg_offset = msg.offset()
+            assert raw_value is not None and msg_topic is not None
+            assert msg_partition is not None and msg_offset is not None
+            envelope = deserialize_envelope(raw_value)
             envelope = add_broker_coordinates(
                 envelope,
-                topic=msg.topic(),
-                partition=msg.partition(),
-                offset=msg.offset(),
+                topic=msg_topic,
+                partition=msg_partition,
+                offset=msg_offset,
             )
 
             writer_metrics.messages_consumed_total.labels(
@@ -269,8 +278,8 @@ class WriterConsumer:
                 if gap_envelope is not None:
                     gap_envelope = add_broker_coordinates(
                         gap_envelope,
-                        topic=msg.topic(),
-                        partition=msg.partition(),
+                        topic=msg_topic,
+                        partition=msg_partition,
                         offset=-1,  # synthetic record, not from Kafka
                     )
                     gap_results = self.buffer_manager.add(gap_envelope)
@@ -434,6 +443,7 @@ class WriterConsumer:
         """Save file states to PG and commit Kafka offsets.
         Called after writes (and optional sealing) are complete."""
         await self.state_manager.save_states(states)
+        assert self._consumer is not None, "call start() first"
         self._consumer.commit(asynchronous=True)
 
         elapsed_ms = (time.monotonic() - start) * 1000

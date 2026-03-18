@@ -240,7 +240,7 @@ def cli():
     """CryptoLake data verification CLI."""
 
 
-@cli.command()
+@cli.command()  # type: ignore[attr-defined]
 @click.option("--date", required=True, help="Date to verify (YYYY-MM-DD)")
 @click.option("--base-dir", default=DEFAULT_ARCHIVE_DIR, help="Archive base directory")
 @click.option("--exchange", default=None, help="Filter by exchange")
@@ -336,7 +336,7 @@ def verify(date, base_dir, exchange, symbol, stream, full, repair_checksums):
         raise SystemExit(1)
 
 
-@cli.command()
+@cli.command()  # type: ignore[attr-defined]
 @click.option("--date", required=True, help="Date (YYYY-MM-DD)")
 @click.option("--base-dir", default=DEFAULT_ARCHIVE_DIR, help="Archive base directory")
 @click.option("--exchange", default="binance", help="Exchange name")
