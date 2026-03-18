@@ -176,6 +176,31 @@ class TestObservabilityAssets:
         assert receiver["send_resolved"] is True
 
 
+class TestAwsDeploymentAssets:
+    def test_cloudformation_template_bootstrap_is_safe_and_architecture_consistent(self) -> None:
+        template = _read_text("infra/aws/cryptolake-ec2.yaml")
+
+        assert "InstanceArchitecture:" in template
+        assert "al2023-ami-kernel-default-arm64" in template
+        assert "al2023-ami-kernel-default-x86_64" in template
+        assert "AvailabilityZone: !Select [0, !GetAZs '']" in template
+        assert "!GetAtt EC2Instance.AvailabilityZone" not in template
+        assert "<< 'ENVFILE'" in template
+        assert 'docker inspect --format \'{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}\'' in template
+        assert 'ERROR: Services failed to become healthy in time' in template
+
+    def test_aws_docs_avoid_plaintext_secrets_and_match_architecture_support(self) -> None:
+        readme = _read_text("infra/aws/README.md")
+        spec = _read_text("docs/superpowers/specs/2026-03-18-aws-ec2-deployment-design.md")
+
+        assert "read -s POSTGRES_PASSWORD" in readme
+        assert "read -s GRAFANA_PASSWORD" in readme
+        assert "PostgresPassword=\"$POSTGRES_PASSWORD\"" in readme
+        assert "GrafanaPassword=\"$GRAFANA_PASSWORD\"" in readme
+        assert "Graviton (ARM) compatible" not in spec
+        assert "Architecture parameter selects x86_64 or arm64 AMIs" in spec
+
+
 class TestChaosScripts:
     def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
         scripts = {

@@ -28,6 +28,12 @@ redpanda:
   brokers:
     - "redpanda:9092"
   retention_hours: 48
+  producer:
+    max_buffer: 100000
+    buffer_caps:
+      depth: 7500
+      trades: 7500
+    default_stream_cap: 7500
 
 writer:
   rotation: "hourly"

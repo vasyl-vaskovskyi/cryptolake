@@ -93,9 +93,16 @@ class ExchangesConfig(BaseModel):
     binance: BinanceExchangeConfig
 
 
+class ProducerConfig(BaseModel):
+    max_buffer: int = 100_000
+    buffer_caps: dict[str, int] = Field(default_factory=lambda: {"depth": 80_000, "trades": 10_000})
+    default_stream_cap: int = 10_000
+
+
 class RedpandaConfig(BaseModel):
     brokers: list[str]
     retention_hours: int = 48
+    producer: ProducerConfig = Field(default_factory=ProducerConfig)
 
     @field_validator("retention_hours")
     @classmethod

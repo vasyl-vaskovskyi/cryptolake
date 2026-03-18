@@ -11,14 +11,6 @@ from src.common.envelope import create_gap_envelope, serialize_envelope
 
 logger = structlog.get_logger()
 
-# Per-stream buffer caps (out of 100k global default)
-_DEFAULT_BUFFER_CAPS = {
-    "depth": 80_000,
-    "trades": 10_000,
-}
-_DEFAULT_OTHER_CAP = 10_000
-
-
 class CryptoLakeProducer:
     """Wraps confluent_kafka.Producer with envelope routing and overflow protection.
 
@@ -34,13 +26,14 @@ class CryptoLakeProducer:
         collector_session_id: str = "",
         max_buffer: int = 100_000,
         buffer_caps: dict[str, int] | None = None,
+        default_stream_cap: int = 10_000,
         on_overflow: Callable[[str, str, str], None] | None = None,
     ):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
         self.max_buffer = max_buffer
-        self.buffer_caps = buffer_caps or _DEFAULT_BUFFER_CAPS
-        self.other_cap = _DEFAULT_OTHER_CAP
+        self.buffer_caps = buffer_caps if buffer_caps is not None else {"depth": 80_000, "trades": 10_000}
+        self.other_cap = default_stream_cap
         self._on_overflow = on_overflow
         self._buffer_counts: dict[str, int] = {}
         self._total_buffered = 0

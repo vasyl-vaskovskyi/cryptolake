@@ -36,10 +36,14 @@ class Collector:
             ws_base=self.exchange_cfg.ws_base,
             rest_base=self.exchange_cfg.rest_base,
         )
+        producer_cfg = self.config.redpanda.producer
         self.producer = CryptoLakeProducer(
             brokers=self.config.redpanda.brokers,
             exchange="binance",
             collector_session_id=self.session_id,
+            max_buffer=producer_cfg.max_buffer,
+            buffer_caps=producer_cfg.buffer_caps,
+            default_stream_cap=producer_cfg.default_stream_cap,
         )
         self.enabled_streams = self.exchange_cfg.get_enabled_streams()
         self.symbols = self.exchange_cfg.symbols
