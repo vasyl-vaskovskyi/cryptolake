@@ -25,7 +25,7 @@
 - Modify: `src/writer/state_manager.py`
   Adds `stream_checkpoint`, `component_runtime_state`, and `maintenance_intent` tables plus typed load/save helpers.
 - Modify: `src/writer/buffer_manager.py`
-  Carries the original flushed envelopes through `FlushResult` so checkpoint writes and restart-gap synthesis can happen at the durable flush boundary.
+  Adds a lightweight `CheckpointMeta` summary to `FlushResult` so checkpoint writes can happen at the durable flush boundary without carrying full envelope dicts in memory.
 - Modify: `src/writer/consumer.py`
   Replaces in-memory-only `collector_restart` logic with durable `restart_gap` synthesis, checkpoint updates, and strict classification.
 - Modify: `src/writer/main.py`
@@ -96,6 +96,7 @@ Expected: FAIL because `restart_gap` is not in `VALID_GAP_REASONS` and the helpe
 Update `src/common/envelope.py` to:
 
 - add `restart_gap` to `VALID_GAP_REASONS`
+- keep `collector_restart` in `VALID_GAP_REASONS` during migration (existing archives contain it; verify CLI must accept both)
 - extend `create_gap_envelope()` with optional keyword-only restart metadata
 - include only provided optional fields in the returned envelope
 
@@ -224,7 +225,9 @@ git commit -m "feat: add durable restart gap persistence tables"
 Cover the strict matrix:
 
 - planned system restart
-- host reboot
+- planned collector restart (clean shutdown + maintenance intent)
+- host reboot (unplanned)
+- host reboot (planned, with maintenance intent)
 - collector unclean exit with same boot ID
 - unknown fallback
 
@@ -307,14 +310,19 @@ Run: `./.venv/bin/pytest tests/unit/test_writer_restart_gap_recovery.py -q`
 
 Expected: FAIL because `FlushResult` does not expose flushed envelopes and the consumer still uses in-memory `collector_restart`.
 
-- [ ] **Step 3: Extend `FlushResult` to carry flushed envelopes**
+- [ ] **Step 3: Add `CheckpointMeta` to `FlushResult`**
 
 Modify `src/writer/buffer_manager.py`:
 
-- add `envelopes: list[dict]` to `FlushResult`
-- preserve the original flushed envelope objects alongside `lines`
+- add a `CheckpointMeta` dataclass with only the fields needed for checkpoint synthesis:
+  - `last_received_at: int`
+  - `last_collector_session_id: str`
+  - `last_session_seq: int`
+  - `stream_key: tuple[str, str, str]`  (exchange, symbol, stream)
+- add `checkpoint_meta: CheckpointMeta` to `FlushResult`
+- extract these fields from the last envelope in `_flush_buffer()` before discarding the envelope dicts
 
-This avoids reparsing bytes when creating durable checkpoints.
+Do NOT carry the full `envelopes: list[dict]` — for a 10K-message buffer, duplicating all envelope dicts alongside serialized `lines` would roughly double memory usage during flush.
 
 - [ ] **Step 4: Replace in-memory-only restart detection in `WriterConsumer`**
 
@@ -327,13 +335,15 @@ In `src/writer/consumer.py`:
   - classify via `restart_gap_classifier`
   - inject a synthetic `restart_gap` envelope before the data envelope
 
+**REST-polled streams** (e.g., `open_interest`): These may not have session ID changes when only the writer restarts. For these streams, also compare `checkpoint.last_received_at` against the incoming envelope — if the time delta exceeds the expected poll interval (from config), treat it as a restart gap. The classifier uses the same classification matrix; the gap cause is determined by boot ID and component state, not by stream type.
+
 - [ ] **Step 5: Persist stream checkpoints only after durable commit**
 
 At the same boundary where file bytes and Kafka offsets become durable:
 
-- derive checkpoint from flushed envelopes:
-  - last `received_at`
-  - last `collector_session_id`
+- derive checkpoint from `FlushResult.checkpoint_meta`:
+  - `last_received_at`
+  - `last_collector_session_id`
 - save checkpoint in the same transaction window as file state
 - only update in-memory checkpoint cache after commit succeeds
 
@@ -408,10 +418,13 @@ Behavior:
 
 Modify `src/collector/main.py` to:
 
-- upsert collector runtime row on start
-- periodically update `last_heartbeat_at`
+- add a lightweight PG connection (same `db_url` from config) for lifecycle writes only
+- upsert collector runtime row on start (with host boot ID from `system_identity`)
+- periodically update `last_heartbeat_at` (every 30s, best-effort — if PG is unreachable, log warning and skip)
 - mark clean shutdown on graceful stop
 - attach any active maintenance intent to the clean shutdown marker
+
+**Note:** This adds a new PG dependency to the collector. The connection is non-critical: if PG is down, the collector continues collecting data normally — classification just falls back to `unknown` on recovery. The PG connection must be handled as best-effort to avoid blocking the collector's main event loop.
 
 - [ ] **Step 5: Run the lifecycle tests**
 
@@ -508,15 +521,17 @@ git commit -m "test: cover planned and unplanned restart gaps"
 
 - [ ] **Step 1: Write failing tests for the lifecycle ledger**
 
-Require a local ledger format persisted under `/data/.cryptolake/lifecycle/ledger.json` or similar, with records for:
+Require a JSONL ledger (one JSON object per line) at `/data/.cryptolake/lifecycle/events.jsonl`, with records for:
 
-- current host boot ID
-- maintenance intents
-- Docker container start/stop events for:
+- current host boot ID (written on agent startup)
+- maintenance intents (copied from PG or CLI)
+- Docker container start/stop/die events for:
   - `collector`
   - `writer`
   - `redpanda`
   - `postgres`
+- each record must include a `ts` (ISO 8601 timestamp) and `event_type` field
+- test that a partial last line (simulating crash mid-write) is discarded gracefully by the reader
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -528,10 +543,12 @@ Expected: FAIL because the host agent does not exist.
 
 The agent should:
 
-- subscribe to Docker events
-- persist append-only lifecycle facts to the local ledger
-- record clean shutdown vs unexpected exit when Docker provides it
+- subscribe to Docker events via `/var/run/docker.sock` (document this privilege requirement)
+- persist append-only JSONL lifecycle facts to the ledger
+- record clean shutdown (exit code 0) vs unexpected exit (non-zero exit code, OOM kill) from Docker container die events
 - record the current host boot ID on startup
+- prune entries older than 7 days on startup to prevent unbounded ledger growth
+- handle partial writes gracefully — use `line + "\n"` atomic writes (single `write()` syscall per record)
 
 - [ ] **Step 4: Run the host-agent tests**
 
@@ -573,9 +590,11 @@ Expected: FAIL because no host reader exists and the classifier has no component
 
 `src/writer/host_lifecycle_reader.py` should:
 
-- load the local ledger
-- expose strict evidence lookup by component and restart window
-- return no evidence when the ledger is incomplete
+- load the JSONL ledger, discarding any malformed trailing line (crash resilience)
+- filter events to only those within the restart window (from last checkpoint `received_at` to now) — do not scan the entire history
+- expose strict evidence lookup by component name and time window
+- return no evidence when the ledger is missing, empty, or has no events in the relevant window
+- cache the parsed result for the lifetime of the writer process (the ledger only matters at recovery time)
 
 - [ ] **Step 4: Extend the classifier conservatively**
 
@@ -609,9 +628,11 @@ git commit -m "feat: promote restart gap classification from host evidence"
 
 The wrapper should:
 
-- call `cryptolake mark-maintenance`
-- stop or restart services only after the maintenance intent is durable
-- store a deterministic maintenance ID
+- generate a deterministic maintenance ID (e.g., `maint-$(date -u +%Y%m%dT%H%M%SZ)`)
+- write maintenance intent to the host lifecycle ledger (always available, no PG dependency)
+- attempt `cryptolake mark-maintenance` to write intent to PG (best-effort — may fail if PG is the maintenance target)
+- stop or restart services only after at least the ledger write succeeds
+- log clearly whether PG write succeeded or fell back to ledger-only
 
 - [ ] **Step 2: Add the systemd unit**
 
@@ -645,11 +666,12 @@ git commit -m "docs: add host lifecycle agent deployment workflow"
 
 Create a chaos/integration test that:
 
-- seeds a previous-boot lifecycle ledger
-- restarts the stack under a new boot ID
+- seeds a previous-boot lifecycle ledger with known events (container stops, boot ID)
+- restarts the stack with `CRYPTOLAKE_TEST_BOOT_ID` set to a new UUID (simulates reboot without actually rebooting)
+- waits for fresh data to flow through
 - verifies archived restart gaps classify as:
-  - `component=host`, `cause=host_reboot`
-  - or promoted component-specific values when strict ledger evidence exists
+  - `component=host`, `cause=host_reboot` (when only boot ID changed)
+  - or promoted component-specific values (e.g., `component=redpanda`) when strict ledger evidence exists (e.g., Docker die event with non-zero exit code for redpanda before the boot ID change)
 
 - [ ] **Step 2: Run focused unit coverage**
 
@@ -685,16 +707,22 @@ git commit -m "test: verify strict host reboot restart gap classification"
 
 - [ ] `restart_gap` envelopes are archived with structured metadata
 - [ ] planned full-stack restart produces `planned=true`
+- [ ] planned collector restart produces `component=collector`, `cause=operator_shutdown`, `planned=true`
 - [ ] abrupt collector restart produces `component=collector`, `cause=unclean_exit`
 - [ ] host boot ID change produces `component=host`, `cause=host_reboot`
 - [ ] REST-only streams get restart gaps on first post-recovery poll
+- [ ] verify CLI accepts both `collector_restart` (legacy archives) and `restart_gap` (new)
 - [ ] verify CLI reports structured restart gap metadata
+- [ ] collector PG lifecycle writes are best-effort (don't block data collection)
 
 ### Phase 2 release criteria
 
-- [ ] host lifecycle agent writes durable evidence to persistent storage
-- [ ] maintenance wrapper writes intent before stopping services
+- [ ] host lifecycle agent writes durable JSONL evidence to persistent storage
+- [ ] host lifecycle agent prunes old entries on startup
+- [ ] maintenance wrapper writes intent to ledger (always) and PG (best-effort) before stopping services
 - [ ] writer upgrades strict classification for `writer|redpanda|postgres` only when proven
 - [ ] fallback remains `component=system`, `cause=unknown` when evidence is incomplete
+- [ ] malformed/partial ledger lines are discarded without crashing
+- [ ] planned postgres restart with ledger-only intent classifies correctly
 
 Plan complete and saved to `docs/superpowers/plans/2026-03-18-restart-gap-classification.md`. Ready to execute?
