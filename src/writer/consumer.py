@@ -22,6 +22,7 @@ from src.writer.compressor import ZstdFrameCompressor
 from src.writer.file_rotator import (
     build_file_path, sidecar_path, write_sha256_sidecar,
 )
+from src.writer.host_lifecycle_reader import HostLifecycleEvidence
 from src.writer.restart_gap_classifier import classify_restart_gap
 from src.writer.state_manager import (
     ComponentRuntimeState,
@@ -58,6 +59,7 @@ class WriterConsumer:
         compressor: ZstdFrameCompressor,
         state_manager: StateManager,
         base_dir: str,
+        host_evidence: HostLifecycleEvidence | None = None,
     ):
         self.brokers = brokers
         self.topics = topics
@@ -85,6 +87,8 @@ class WriterConsumer:
         self._previous_writer_state: ComponentRuntimeState | None = None
         self._previous_collector_state: ComponentRuntimeState | None = None
         self._maintenance_intent = None
+        # Host lifecycle evidence (Phase 2) — loaded once at startup
+        self._host_evidence: HostLifecycleEvidence | None = host_evidence
         # REST-polled stream gap threshold (3x configured poll interval in ns)
         self._rest_poll_interval_ns: int = _DEFAULT_REST_POLL_INTERVAL_NS
 
@@ -299,6 +303,7 @@ class WriterConsumer:
             collector_clean_shutdown=collector_clean_shutdown,
             system_clean_shutdown=system_clean_shutdown,
             maintenance_intent=self._maintenance_intent,
+            host_evidence=self._host_evidence,
         )
 
         # Compute gap_start_ts from checkpoint

@@ -1,7 +1,11 @@
-"""Strict Phase 1 restart gap classifier.
+"""Strict restart gap classifier (Phase 1 + Phase 2 host evidence promotion).
 
 A pure function that classifies restart gaps based on durable evidence.
 No side effects, no I/O -- takes evidence as parameters, returns a classification dict.
+
+Phase 1 classifies using PG-backed state (boot ID, session, shutdown markers).
+Phase 2 optionally promotes to component-specific classification when the host
+lifecycle ledger provides strict evidence (container die events).
 """
 from __future__ import annotations
 
@@ -10,6 +14,11 @@ from datetime import datetime, timezone
 from src.writer.state_manager import MaintenanceIntent
 
 _CLASSIFIER_VERSION = "writer_recovery_v1"
+
+# Components that Phase 2 can promote to via host evidence.
+# Ordered by infrastructure priority: infra components cause cascading restarts,
+# so they should be checked first to identify the root cause.
+_PROMOTABLE_COMPONENTS = ("redpanda", "postgres", "writer")
 
 
 def _is_intent_valid(intent: MaintenanceIntent | None) -> bool:
@@ -35,10 +44,11 @@ def classify_restart_gap(
     collector_clean_shutdown: bool,
     system_clean_shutdown: bool,
     maintenance_intent: MaintenanceIntent | None,
+    host_evidence: object | None = None,
 ) -> dict[str, object]:
     """Classify a restart gap based on durable evidence.
 
-    Classification matrix (evaluated in order):
+    Phase 1 classification matrix (evaluated in order):
 
     1. Planned system restart:
        valid maintenance_intent + prior components show clean_shutdown
@@ -63,6 +73,12 @@ def classify_restart_gap(
     6. Unknown fallback:
        none of the above proved
        -> component=system, cause=unknown, planned=false
+
+    Phase 2 promotion (when host_evidence is provided):
+    After Phase 1 classification, if boot ID is unchanged and host evidence
+    shows a specific non-collector component died, the result is promoted
+    to that component.  Only ``redpanda``, ``postgres``, and ``writer``
+    are promotable — ``collector`` is already handled by Phase 1.
     """
     evidence: list[str] = []
     intent_valid = _is_intent_valid(maintenance_intent)
@@ -97,7 +113,7 @@ def classify_restart_gap(
     if system_clean_shutdown:
         evidence.append("system_clean_shutdown")
 
-    # --- Classification logic (order matters) ---
+    # --- Phase 1 classification logic (order matters) ---
 
     # Case 1: Planned system restart
     # Valid maintenance intent + clean shutdown evidence for prior components
@@ -121,9 +137,9 @@ def classify_restart_gap(
         )
 
     if boot_id_changed:
-        # Cases 2 and 5: Host reboot
+        # Cases 2 and 3: Host reboot
         if intent_valid:
-            # Case 5: Host reboot with maintenance intent
+            # Case 3: Host reboot with maintenance intent
             return _result(
                 component="host",
                 cause="host_reboot",
@@ -141,6 +157,19 @@ def classify_restart_gap(
             )
 
     # Boot ID unchanged -- check for collector-level changes
+    # Phase 2: Try host evidence promotion BEFORE Phase 1 collector logic.
+    # This catches cases like redpanda dying (which causes collector restart)
+    # and writer-only crashes (no session change).
+    promoted = _try_promote(
+        host_evidence=host_evidence,
+        boot_id_changed=boot_id_changed,
+        intent_valid=intent_valid,
+        maintenance_intent=maintenance_intent,
+        evidence=evidence,
+    )
+    if promoted is not None:
+        return promoted
+
     if session_changed is None:
         # Cannot determine session change without both session IDs
         return _result(
@@ -151,9 +180,9 @@ def classify_restart_gap(
         )
 
     if session_changed:
-        # Cases 3 and 4: Collector restart on same host
+        # Cases 4 and 5: Collector restart on same host
         if collector_clean_shutdown and intent_valid:
-            # Case 3: Planned collector restart
+            # Case 4: Planned collector restart
             return _result(
                 component="collector",
                 cause="operator_shutdown",
@@ -162,7 +191,7 @@ def classify_restart_gap(
                 maintenance_id=maintenance_intent.maintenance_id if maintenance_intent else None,
             )
         else:
-            # Case 4: Collector unclean exit (or clean but no intent)
+            # Case 5: Collector unclean exit (or clean but no intent)
             return _result(
                 component="collector",
                 cause="unclean_exit",
@@ -177,6 +206,67 @@ def classify_restart_gap(
         planned=False,
         evidence=evidence,
     )
+
+
+def _try_promote(
+    *,
+    host_evidence: object | None,
+    boot_id_changed: bool | None,
+    intent_valid: bool,
+    maintenance_intent: MaintenanceIntent | None,
+    evidence: list[str],
+) -> dict[str, object] | None:
+    """Try to promote classification using host lifecycle evidence.
+
+    Only promotes when:
+    - host_evidence is provided and non-empty
+    - boot ID is unchanged (host reboot is already specific enough)
+    - a non-collector component died according to the host ledger
+
+    Returns None if no promotion is warranted (Phase 1 logic continues).
+    """
+    if host_evidence is None:
+        return None
+
+    # Import here to avoid circular dependency at module level
+    from src.writer.host_lifecycle_reader import HostLifecycleEvidence
+
+    if not isinstance(host_evidence, HostLifecycleEvidence):
+        return None
+
+    if host_evidence.is_empty:
+        return None
+
+    # Don't promote if boot ID changed — host_reboot is the root cause
+    if boot_id_changed:
+        return None
+
+    # Check promotable components in priority order
+    for component in _PROMOTABLE_COMPONENTS:
+        if host_evidence.has_component_die(component):
+            clean_exit = host_evidence.component_clean_exit(component)
+            evidence.append(f"host_evidence_{component}_die")
+
+            if clean_exit and intent_valid:
+                evidence.append(f"host_evidence_{component}_clean_exit")
+                return _result(
+                    component=component,
+                    cause="operator_shutdown",
+                    planned=True,
+                    evidence=evidence,
+                    maintenance_id=maintenance_intent.maintenance_id if maintenance_intent else None,
+                )
+            else:
+                if clean_exit is False:
+                    evidence.append(f"host_evidence_{component}_unclean_exit")
+                return _result(
+                    component=component,
+                    cause="unclean_exit",
+                    planned=False,
+                    evidence=evidence,
+                )
+
+    return None
 
 
 def _result(

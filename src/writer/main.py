@@ -17,6 +17,10 @@ from src.common.system_identity import get_host_boot_id
 from src.writer.buffer_manager import BufferManager
 from src.writer.compressor import ZstdFrameCompressor
 from src.writer.consumer import WriterConsumer
+from src.writer.host_lifecycle_reader import (
+    DEFAULT_LEDGER_PATH,
+    load_host_evidence,
+)
 from src.writer.state_manager import ComponentRuntimeState, StateManager
 
 logger = structlog.get_logger()
@@ -38,6 +42,19 @@ class Writer:
             flush_messages=self.config.writer.flush_messages,
             flush_interval_seconds=self.config.writer.flush_interval_seconds,
         )
+        # Load host lifecycle evidence (Phase 2) — best-effort
+        ledger_path = Path(
+            os.environ.get("LIFECYCLE_LEDGER_PATH", str(DEFAULT_LEDGER_PATH))
+        )
+        host_evidence = None
+        try:
+            host_evidence = load_host_evidence(ledger_path)
+            if not host_evidence.is_empty:
+                logger.info("host_evidence_loaded", ledger_path=str(ledger_path))
+        except Exception:
+            logger.warning("host_evidence_load_failed", ledger_path=str(ledger_path),
+                           exc_info=True)
+
         self.consumer = WriterConsumer(
             brokers=self.config.redpanda.brokers,
             topics=self.topics,
@@ -46,6 +63,7 @@ class Writer:
             compressor=self.compressor,
             state_manager=self.state_manager,
             base_dir=self.config.writer.base_dir,
+            host_evidence=host_evidence,
         )
 
         # Writer runtime metadata
