@@ -371,8 +371,19 @@ When Binance combined streams are used, `raw_text` is the exact substring of the
 |-------|------|-------------|
 | `gap_start_ts` | int64 | Nanosecond timestamp of the last successfully received message before the gap (same format as `received_at`). |
 | `gap_end_ts` | int64 | Nanosecond timestamp when the gap ended (stream resumed or snapshot re-synced). |
-| `reason` | string | Machine-readable gap cause. One of: `"ws_disconnect"` (WebSocket connection lost), `"pu_chain_break"` (depth diff `pu` validation failed), `"session_seq_skip"` (in-session sequence gap — collector internal drop), `"buffer_overflow"` (Redpanda unavailable, in-memory buffer full), `"snapshot_poll_miss"` (scheduled REST poll failed all retries). |
+| `reason` | string | Machine-readable gap cause. One of: `"ws_disconnect"` (WebSocket connection lost), `"pu_chain_break"` (depth diff `pu` validation failed), `"session_seq_skip"` (in-session sequence gap — collector internal drop), `"buffer_overflow"` (Redpanda unavailable, in-memory buffer full), `"snapshot_poll_miss"` (scheduled REST poll failed all retries), `"restart_gap"` (collector or system restart — see structured metadata fields below). |
 | `detail` | string | Human-readable context: duration, error message, reconnect time, number of messages affected. |
+
+**Restart gap metadata** (present only when `reason: "restart_gap"`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `component` | string | Which component restarted: `"collector"`, `"host"`, or `"system"`. |
+| `cause` | string | Root cause of the restart: `"unclean_exit"` (crash/kill), `"operator_shutdown"` (planned stop), `"host_reboot"`, or `"unknown"`. |
+| `planned` | bool | `true` if a valid, non-expired maintenance intent covered the restart; `false` otherwise. |
+| `classifier` | string | Classifier version that produced this classification (e.g., `"writer_recovery_v1"`). |
+| `evidence` | list[string] | Durable evidence consumed by the classifier (e.g., `["host_boot_id_unchanged", "collector_session_changed"]`). |
+| `maintenance_id` | string? | If `planned=true`, the `maintenance_id` from the matching maintenance intent. Absent when unplanned. |
 
 Gap records share the common envelope fields (`v`, `type`, `exchange`, `symbol`, `stream`, `received_at`, `collector_session_id`, `session_seq`) and receive broker coordinates (`_topic`, `_partition`, `_offset`) when archived by the writer — they flow through Redpanda like any other message. They do not carry `exchange_ts` (no exchange payload to extract it from).
 
@@ -854,6 +865,7 @@ steady state                                |
 | Binance rate limit | HTTP 429 | response status, `Retry-After` header | Back off per header; stagger future polls | None unless a poll fully exhausts retries, then `snapshot_poll_miss` gap record | `SnapshotsFailing` if retries keep failing | Manual rate-limit drill, poll spacing inspection |
 | NTP drift | local clock diverges from exchange timestamps | sustained `received_at - exchange_ts` delta | Alert operator; fix host time sync | None | `NTPDrift` | Chrony check, Grafana latency/drift panels |
 | Binance 24h forced disconnect | connection age approaches limit | proactive timer in connection manager | Reconnect before cutoff, then run depth re-sync on public socket | Archived `ws_disconnect` gap only if an actual downtime window occurs | `ConnectionLost` only if reconnect fails | Long-run soak test, reconnect metrics |
+| Collector or system restart | Collector session ID changed on writer recovery | Writer detects new `collector_session_id` at flush boundary | Classify restart via durable evidence (boot ID, shutdown flags, maintenance intent) and emit structured gap | Archived `gap` record with `reason="restart_gap"`, `component`, `cause`, `planned`, `evidence` | `GapDetected` | Chaos tests `kill_ws_connection.sh` and `full_stack_restart_gap.sh`, unit tests for classifier |
 
 Key principle: **never silently lose data**. Every failure, gap, and anomaly is logged, metricked, and alerted.
 
@@ -1133,8 +1145,8 @@ For Docker: the container inherits the host clock. Ensure the Docker host runs c
 ### 11.7 Deployment Rollout
 
 - **Writer update:** Stop writer → Redpanda buffers traffic → deploy new image → writer catches up from last PostgreSQL offset. Zero data loss (within 48h retention).
-- **Collector update:** Stop collector → connection drops, gap window opens → deploy new image → collector reconnects, re-syncs depth, and automatically emits a gap record.
-- Zero-downtime collection is not a v1 goal; brief planned gaps (~30s) during restarts are acceptable and self-documenting.
+- **Collector update:** Stop collector → connection drops, gap window opens → deploy new image → collector reconnects, re-syncs depth, and the writer automatically emits a `restart_gap` record. To classify the gap as planned, run `cryptolake mark-maintenance` before stopping the collector; the writer will consume the maintenance intent and set `planned=true` in the archived gap.
+- Zero-downtime collection is not a v1 goal; brief planned gaps (~30s) during restarts are acceptable and self-documenting via `restart_gap` records.
 - **Rollback:** Revert to the previous image tag and restart. No schema migrations to undo.
 - **Schema Compatibility:** If an update adds fields to the envelope, writers and consumers are protected by the forward-compatibility rule (Section 4.1.2: ignore unknown fields).
 
