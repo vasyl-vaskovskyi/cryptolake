@@ -26,7 +26,12 @@ class StreamCheckpoint:
 
 @dataclass
 class ComponentRuntimeState:
-    """Latest known lifecycle state per component instance."""
+    """Latest known lifecycle state per component instance.
+
+    instance_id is unique per lifecycle (e.g., "collector-01_2026-03-18T21:00:00Z").
+    Each restart creates a new instance_id, so the (component, instance_id) PK
+    naturally separates lifecycle records without needing to update started_at on conflict.
+    """
 
     component: str
     instance_id: str
@@ -221,6 +226,9 @@ class StateManager:
         self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
         async with self._conn.cursor() as cur:
             await cur.execute(self.CREATE_TABLE_SQL)
+            await cur.execute(self.CREATE_STREAM_CHECKPOINT_SQL)
+            await cur.execute(self.CREATE_COMPONENT_RUNTIME_STATE_SQL)
+            await cur.execute(self.CREATE_MAINTENANCE_INTENT_SQL)
 
     async def close(self) -> None:
         if self._conn:
@@ -313,21 +321,34 @@ class StateManager:
         return checkpoints
 
     async def save_stream_checkpoints(self, checkpoints: list[StreamCheckpoint]) -> None:
-        """Atomically upsert multiple stream checkpoints."""
-        await self._ensure_connected()
-        assert self._conn is not None
-        async with self._conn.transaction():
-            async with self._conn.cursor() as cur:
-                for cp in checkpoints:
-                    await cur.execute(self.UPSERT_STREAM_CHECKPOINT_SQL, {
-                        "exchange": cp.exchange,
-                        "symbol": cp.symbol,
-                        "stream": cp.stream,
-                        "last_received_at": cp.last_received_at,
-                        "last_collector_session_id": cp.last_collector_session_id,
-                        "last_gap_reason": cp.last_gap_reason,
-                    })
-        logger.debug("stream_checkpoints_saved", count=len(checkpoints))
+        """Atomically upsert multiple stream checkpoints.
+
+        Retries up to 3 times on connection errors, matching save_states() behavior.
+        """
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self._ensure_connected()
+                assert self._conn is not None
+                async with self._conn.transaction():
+                    async with self._conn.cursor() as cur:
+                        for cp in checkpoints:
+                            await cur.execute(self.UPSERT_STREAM_CHECKPOINT_SQL, {
+                                "exchange": cp.exchange,
+                                "symbol": cp.symbol,
+                                "stream": cp.stream,
+                                "last_received_at": cp.last_received_at,
+                                "last_collector_session_id": cp.last_collector_session_id,
+                                "last_gap_reason": cp.last_gap_reason,
+                            })
+                logger.debug("stream_checkpoints_saved", count=len(checkpoints))
+                return
+            except Exception as e:
+                logger.warning("pg_checkpoint_save_failed", attempt=attempt + 1, error=str(e))
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    raise
 
     # ── component runtime state methods ──────────────────────────────────
 
