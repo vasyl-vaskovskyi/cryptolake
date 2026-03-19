@@ -183,9 +183,11 @@ class StateManager:
     """
 
     LOAD_LATEST_COMPONENT_STATES_SQL = """
-    SELECT component, instance_id, host_boot_id, started_at, last_heartbeat_at,
+    SELECT DISTINCT ON (component)
+           component, instance_id, host_boot_id, started_at, last_heartbeat_at,
            clean_shutdown_at, planned_shutdown, maintenance_id
-    FROM component_runtime_state;
+    FROM component_runtime_state
+    ORDER BY component, started_at DESC;
     """
 
     # ── maintenance_intent table ─────────────────────────────────────────
@@ -261,7 +263,7 @@ class StateManager:
             # Lightweight check — execute a no-op
             async with self._conn.cursor() as cur:
                 await cur.execute("SELECT 1")
-        except (psycopg.OperationalError, psycopg.InterfaceError, Exception):
+        except (psycopg.OperationalError, psycopg.InterfaceError):
             logger.warning("pg_reconnecting")
             try:
                 await self._conn.close()
@@ -291,6 +293,52 @@ class StateManager:
                                 "file_byte_size": state.file_byte_size,
                             })
                 logger.debug("state_saved", count=len(states))
+                return
+            except Exception as e:
+                logger.warning("pg_save_failed", attempt=attempt + 1, error=str(e))
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    raise
+
+    async def save_states_and_checkpoints(
+        self,
+        states: list[FileState],
+        checkpoints: list[StreamCheckpoint],
+    ) -> None:
+        """Atomically save file states AND stream checkpoints in a single transaction.
+
+        This ensures both are committed together so a crash between them
+        cannot leave the two tables inconsistent.
+
+        Retries up to 3 times on connection errors.
+        """
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self._ensure_connected()
+                assert self._conn is not None
+                async with self._conn.transaction():
+                    async with self._conn.cursor() as cur:
+                        for state in states:
+                            await cur.execute(self.UPSERT_SQL, {
+                                "topic": state.topic,
+                                "partition": state.partition,
+                                "high_water_offset": state.high_water_offset,
+                                "file_path": state.file_path,
+                                "file_byte_size": state.file_byte_size,
+                            })
+                        for cp in checkpoints:
+                            await cur.execute(self.UPSERT_STREAM_CHECKPOINT_SQL, {
+                                "exchange": cp.exchange,
+                                "symbol": cp.symbol,
+                                "stream": cp.stream,
+                                "last_received_at": cp.last_received_at,
+                                "last_collector_session_id": cp.last_collector_session_id,
+                                "last_gap_reason": cp.last_gap_reason,
+                            })
+                logger.debug("states_and_checkpoints_saved",
+                             states=len(states), checkpoints=len(checkpoints))
                 return
             except Exception as e:
                 logger.warning("pg_save_failed", attempt=attempt + 1, error=str(e))

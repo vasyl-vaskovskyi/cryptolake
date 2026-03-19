@@ -110,18 +110,14 @@ class WriterConsumer:
         self._durable_checkpoints = await self.state_manager.load_stream_checkpoints()
         self._recovery_done = set()
 
-        # Load component runtime states to determine previous boot ID and shutdown evidence
+        # Load component runtime states to determine previous boot ID and shutdown evidence.
+        # SQL returns DISTINCT ON (component) ORDER BY started_at DESC — one row per component.
         component_states = await self.state_manager.load_latest_component_states()
         for cs in component_states:
             if cs.component == "writer":
-                # Keep the most recent writer state (by started_at)
-                if (self._previous_writer_state is None or
-                        cs.started_at > self._previous_writer_state.started_at):
-                    self._previous_writer_state = cs
+                self._previous_writer_state = cs
             elif cs.component == "collector":
-                if (self._previous_collector_state is None or
-                        cs.started_at > self._previous_collector_state.started_at):
-                    self._previous_collector_state = cs
+                self._previous_collector_state = cs
 
         logger.info(
             "recovery_state_loaded",
@@ -353,8 +349,8 @@ class WriterConsumer:
         """Detect collector session changes and return a gap envelope if one occurred.
 
         When the collector crashes (SIGKILL), it cannot emit gap records itself.
-        The writer detects the session_id change and injects a collector_restart
-        gap record into the archive to record the data loss window.
+        The writer detects the session_id change and injects a restart_gap
+        record into the archive to record the data loss window.
 
         This is the RUNTIME detection path (after initial recovery is done).
         """
@@ -396,9 +392,14 @@ class WriterConsumer:
             session_seq=-1,
             gap_start_ts=prev_received_at,
             gap_end_ts=received_at,
-            reason="collector_restart",
+            reason="restart_gap",
             detail=f"Collector session changed: {prev_session_id} -> {session_id}",
             received_at=received_at,
+            component="collector",
+            cause="unclean_exit",
+            planned=False,
+            classifier="writer_runtime_v1",
+            evidence=["collector_session_changed_at_runtime"],
         )
 
     def _resolve_file_path(self, file_path: Path) -> Path:
@@ -674,15 +675,12 @@ class WriterConsumer:
         results: list[FlushResult],
         start: float,
     ) -> None:
-        """Save file states and stream checkpoints to PG, then commit Kafka offsets.
+        """Save file states and stream checkpoints to PG atomically, then commit Kafka offsets.
 
-        Stream checkpoints are persisted at the same boundary as file state and
-        Kafka offsets -- after durable write/fsync, in the same commit window.
+        Both file states and stream checkpoints are persisted in a single
+        transaction at the durable flush boundary -- after write/fsync.
         """
-        # Save file states
-        await self.state_manager.save_states(states)
-
-        # Derive and save stream checkpoints from FlushResult checkpoint metadata
+        # Derive stream checkpoints from FlushResult checkpoint metadata
         checkpoints: list[StreamCheckpoint] = []
         for result in results:
             if result.checkpoint_meta is not None:
@@ -701,11 +699,12 @@ class WriterConsumer:
                     last_collector_session_id=meta.last_collector_session_id,
                 ))
 
-        if checkpoints:
-            await self.state_manager.save_stream_checkpoints(checkpoints)
-            # Update in-memory checkpoint cache AFTER successful commit
-            for cp in checkpoints:
-                self._durable_checkpoints[cp.checkpoint_key] = cp
+        # Save both file states and checkpoints in a single atomic transaction
+        await self.state_manager.save_states_and_checkpoints(states, checkpoints)
+
+        # Update in-memory checkpoint cache AFTER successful commit
+        for cp in checkpoints:
+            self._durable_checkpoints[cp.checkpoint_key] = cp
 
         # Commit Kafka offsets
         assert self._consumer is not None, "call start() first"

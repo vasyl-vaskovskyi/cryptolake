@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.host_lifecycle_agent import read_ledger_events
+from src.common.jsonl import read_jsonl
 
 DEFAULT_LEDGER_PATH = Path("/data/.cryptolake/lifecycle/events.jsonl")
 
@@ -82,7 +82,7 @@ def load_host_evidence(
     If no window boundaries are specified, returns all events.
     Returns an empty evidence object if the ledger is missing or empty.
     """
-    all_events = read_ledger_events(ledger_path)
+    all_events = read_jsonl(ledger_path)
 
     if not window_start_iso and not window_end_iso:
         return HostLifecycleEvidence(all_events)

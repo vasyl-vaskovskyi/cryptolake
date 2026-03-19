@@ -558,9 +558,9 @@ class TestCheckpointPersistenceAfterCommit:
 
         await consumer._commit_state(states, [flush_result], time.monotonic())
 
-        # save_stream_checkpoints should have been called
-        state_manager.save_stream_checkpoints.assert_called_once()
-        saved_checkpoints = state_manager.save_stream_checkpoints.call_args[0][0]
+        # save_states_and_checkpoints should have been called (atomic transaction)
+        state_manager.save_states_and_checkpoints.assert_called_once()
+        saved_checkpoints = state_manager.save_states_and_checkpoints.call_args[0][1]
         assert len(saved_checkpoints) == 1
         assert saved_checkpoints[0].exchange == "binance"
         assert saved_checkpoints[0].symbol == "btcusdt"
@@ -662,4 +662,6 @@ class TestRuntimeSessionDetectionPreserved:
         env3 = _make_data_envelope(collector_session_id="session-B")
         result3 = consumer._check_session_change(env3)
         assert result3 is not None
-        assert result3["reason"] == "collector_restart"
+        assert result3["reason"] == "restart_gap"
+        assert result3["component"] == "collector"
+        assert result3["cause"] == "unclean_exit"

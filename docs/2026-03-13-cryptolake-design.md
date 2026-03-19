@@ -378,7 +378,7 @@ When Binance combined streams are used, `raw_text` is the exact substring of the
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `component` | string | Which component restarted: `"collector"`, `"host"`, or `"system"`. |
+| `component` | string | Which component restarted: `"collector"`, `"host"`, `"system"`, `"redpanda"`, `"postgres"`, or `"writer"` (last three require Phase 2 host lifecycle agent). |
 | `cause` | string | Root cause of the restart: `"unclean_exit"` (crash/kill), `"operator_shutdown"` (planned stop), `"host_reboot"`, or `"unknown"`. |
 | `planned` | bool | `true` if a valid, non-expired maintenance intent covered the restart; `false` otherwise. |
 | `classifier` | string | Classifier version that produced this classification (e.g., `"writer_recovery_v1"`). |

@@ -11,6 +11,8 @@ import uvloop
 from aiohttp import web
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
+from datetime import timedelta
+
 from src.common.config import load_config
 from src.common.logging import setup_logging
 from src.common.system_identity import get_host_boot_id
@@ -48,7 +50,14 @@ class Writer:
         )
         host_evidence = None
         try:
-            host_evidence = load_host_evidence(ledger_path)
+            # Filter to events from the last 24 hours — the restart window
+            # cannot exceed the time since the previous writer lifecycle.
+            # The ledger is pruned to 7 days on agent startup, but we only
+            # need recent events for classification.
+            window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            host_evidence = load_host_evidence(
+                ledger_path, window_start_iso=window_start,
+            )
             if not host_evidence.is_empty:
                 logger.info("host_evidence_loaded", ledger_path=str(ledger_path))
         except Exception:

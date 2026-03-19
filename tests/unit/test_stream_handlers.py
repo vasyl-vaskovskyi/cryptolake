@@ -153,7 +153,7 @@ class TestWriterSessionChangeDetection:
         result = consumer._check_session_change(self._make_envelope(session_id="s2", received_at=5000))
         assert result is not None
         assert result["type"] == "gap"
-        assert result["reason"] == "collector_restart"
+        assert result["reason"] == "restart_gap"
         assert result["gap_start_ts"] == 1000
         assert result["gap_end_ts"] == 5000
         assert "s1" in result["detail"]

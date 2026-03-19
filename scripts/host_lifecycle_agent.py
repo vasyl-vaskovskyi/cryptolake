@@ -27,6 +27,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from src.common.jsonl import append_jsonl, read_jsonl
 from src.common.system_identity import get_host_boot_id
 
 # ---------------------------------------------------------------------------
@@ -55,44 +56,18 @@ _OOM_EXIT_CODE = 137
 
 
 # ---------------------------------------------------------------------------
-# Ledger I/O
+# Ledger I/O — delegates to src.common.jsonl
 # ---------------------------------------------------------------------------
 
 
 def read_ledger_events(ledger_path: Path) -> list[dict]:
-    """Read all valid JSONL events from the ledger, discarding bad lines.
-
-    Any line that is not valid JSON is silently dropped.  This makes the
-    reader resilient to partial writes caused by a crash mid-write.
-    """
-    if not ledger_path.exists():
-        return []
-
-    events: list[dict] = []
-    with open(ledger_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except (json.JSONDecodeError, ValueError):
-                # Partial or corrupt line — discard gracefully
-                continue
-    return events
+    """Read all valid JSONL events from the ledger, discarding bad lines."""
+    return read_jsonl(ledger_path)
 
 
 def append_event(ledger_path: Path, event: dict) -> None:
-    """Append a single event record to the JSONL ledger.
-
-    Uses a single ``write()`` syscall per record (``line + "\\n"``) to
-    minimise the window for partial writes on crash.  The parent directory
-    is created if it does not yet exist.
-    """
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event, separators=(",", ":")) + "\n"
-    with open(ledger_path, "a") as f:
-        f.write(line)
+    """Append a single event record to the JSONL ledger."""
+    append_jsonl(ledger_path, event)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +95,8 @@ def prune_ledger(ledger_path: Path, max_age: timedelta | None = None) -> None:
         ts_str = evt.get("ts", "")
         try:
             ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
             if ts >= cutoff:
                 kept.append(evt)
         except (ValueError, TypeError):
@@ -184,11 +161,28 @@ def _match_tracked_container(name: str) -> str | None:
     """Return the canonical tracked container name if *name* matches.
 
     Docker Compose names containers like ``<project>-<service>-<replica>``,
-    so we check whether any tracked name appears as a component.
+    so we check whether the service segment matches exactly.  We also accept
+    a bare service name (e.g. ``collector``) for non-Compose environments.
+
+    Matching is strict: ``cryptolake-collector-1`` matches ``collector``,
+    but ``my-redpanda-proxy`` does NOT match ``redpanda`` because
+    ``redpanda`` is not a standalone hyphen-delimited segment followed
+    by a replica number or end-of-string in the Compose naming convention.
     """
-    for tracked in TRACKED_CONTAINERS:
-        if tracked == name or tracked in name.split("-"):
-            return tracked
+    # Exact match (bare name)
+    if name in TRACKED_CONTAINERS:
+        return name
+    # Docker Compose: <project>-<service>-<replica>
+    # The service name must appear as the second-to-last segment (before replica)
+    # or as any segment when there are exactly 2 parts (project-service).
+    parts = name.split("-")
+    if len(parts) >= 2:
+        # Try second-to-last segment (standard Compose: project-service-replica)
+        if parts[-2] in TRACKED_CONTAINERS:
+            return parts[-2]
+        # Try last segment (project-service, no replica number)
+        if parts[-1] in TRACKED_CONTAINERS:
+            return parts[-1]
     return None
 
 

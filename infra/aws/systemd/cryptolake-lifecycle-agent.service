@@ -6,7 +6,8 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=root
+User=cryptolake
+Group=docker
 Environment=LIFECYCLE_LEDGER_PATH=/data/.cryptolake/lifecycle/events.jsonl
 ExecStart=/opt/cryptolake/.venv/bin/python /opt/cryptolake/scripts/host_lifecycle_agent.py
 Restart=on-failure
