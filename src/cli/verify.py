@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
 import orjson
 import zstandard as zstd
+
+from src.writer.state_manager import MaintenanceIntent, StateManager
 
 _REQUIRED_DATA_FIELDS = {
     "v", "type", "exchange", "symbol", "stream", "received_at",
@@ -218,12 +222,17 @@ def generate_manifest(base_dir: Path, exchange: str, date: str) -> dict:
                     record_count += len(envs)
                     for env in envs:
                         if env.get("type") == "gap":
-                            gaps_list.append({
+                            gap_entry: dict = {
                                 "symbol": env.get("symbol"),
                                 "reason": env.get("reason"),
                                 "gap_start_ts": env.get("gap_start_ts"),
                                 "gap_end_ts": env.get("gap_end_ts"),
-                            })
+                                "component": env.get("component"),
+                                "cause": env.get("cause"),
+                                "planned": env.get("planned"),
+                                "maintenance_id": env.get("maintenance_id"),
+                            }
+                            gaps_list.append(gap_entry)
                 except Exception:
                     pass  # Skip unreadable/corrupt files; they will surface via checksum errors
             if hours:
@@ -356,3 +365,35 @@ def manifest(date, base_dir, exchange):
                     manifest_path.write_text(json.dumps(m, indent=2) + "\n")
                     click.echo(f"Written: {manifest_path}")
     click.echo(json.dumps(m, indent=2))
+
+
+@cli.command("mark-maintenance")  # type: ignore[attr-defined]
+@click.option("--db-url", required=True, help="PostgreSQL connection URL")
+@click.option("--scope", required=True, help="Scope of maintenance (e.g., system, collector)")
+@click.option("--maintenance-id", required=True, help="Unique maintenance identifier")
+@click.option("--reason", required=True, help="Reason for maintenance")
+@click.option("--ttl-minutes", default=60, type=int, help="Minutes until intent expires (default: 60)")
+def mark_maintenance(db_url, scope, maintenance_id, reason, ttl_minutes):
+    """Record a planned maintenance intent without shutting anything down."""
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(minutes=ttl_minutes)
+
+    intent = MaintenanceIntent(
+        maintenance_id=maintenance_id,
+        scope=scope,
+        planned_by="cli",
+        reason=reason,
+        created_at=now.isoformat(),
+        expires_at=expires.isoformat(),
+    )
+
+    async def _write_intent():
+        sm = StateManager(db_url)
+        await sm.connect()
+        try:
+            await sm.create_maintenance_intent(intent)
+        finally:
+            await sm.close()
+
+    asyncio.run(_write_intent())
+    click.echo(f"Maintenance intent recorded: {maintenance_id} (scope={scope}, ttl={ttl_minutes}m)")

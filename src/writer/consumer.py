@@ -15,15 +15,28 @@ from src.common.envelope import (
     deserialize_envelope,
     serialize_envelope,
 )
+from src.common.system_identity import get_host_boot_id
 from src.writer import metrics as writer_metrics
-from src.writer.buffer_manager import BufferManager, FlushResult
+from src.writer.buffer_manager import BufferManager, CheckpointMeta, FlushResult
 from src.writer.compressor import ZstdFrameCompressor
 from src.writer.file_rotator import (
     build_file_path, sidecar_path, write_sha256_sidecar,
 )
-from src.writer.state_manager import FileState, StateManager
+from src.writer.host_lifecycle_reader import HostLifecycleEvidence
+from src.writer.restart_gap_classifier import classify_restart_gap
+from src.writer.state_manager import (
+    ComponentRuntimeState,
+    FileState,
+    StreamCheckpoint,
+    StateManager,
+)
 
 logger = structlog.get_logger()
+
+# Default REST poll interval threshold (3x the configured poll interval)
+# to account for jitter. If time delta > this, it's a restart gap.
+_DEFAULT_REST_POLL_INTERVAL_NS = 5 * 60 * 1_000_000_000  # 5 minutes in nanoseconds
+_REST_POLL_GAP_MULTIPLIER = 3  # Must exceed 3x poll interval to be a gap
 
 
 class WriterConsumer:
@@ -33,7 +46,8 @@ class WriterConsumer:
     - Consumer.poll() runs in run_in_executor to avoid blocking the async event loop (spec 8.2)
     - Hourly rotation seals files with SHA-256 sidecar (spec 8.4)
     - Sealed files are never reopened; late arrivals go to spillover files (spec 8.2)
-    - Flush sequence: write → fsync → PG state → commit offsets (spec 8.3)
+    - Flush sequence: write -> fsync -> PG state -> commit offsets (spec 8.3)
+    - Recovery uses durable stream checkpoints from PG, not in-memory _last_session
     """
 
     def __init__(
@@ -45,6 +59,7 @@ class WriterConsumer:
         compressor: ZstdFrameCompressor,
         state_manager: StateManager,
         base_dir: str,
+        host_evidence: HostLifecycleEvidence | None = None,
     ):
         self.brokers = brokers
         self.topics = topics
@@ -59,8 +74,23 @@ class WriterConsumer:
         self._assigned_partitions: set[tuple[str, int]] = set()
         self._sealed_files: set[Path] = set()  # tracks sealed .jsonl.zst paths
         self._late_seq: dict[Path, int] = {}  # late-arrival sequence counters
-        # Track last seen session per (exchange, symbol, stream) for gap detection
+        # Track last seen session per (exchange, symbol, stream) for RUNTIME gap detection
         self._last_session: dict[tuple[str, str, str], tuple[str, int]] = {}  # -> (session_id, received_at)
+
+        # --- Durable recovery state ---
+        # Loaded from PG on start; updated after each durable commit
+        self._durable_checkpoints: dict[tuple[str, str, str], StreamCheckpoint] = {}
+        # Tracks which streams have completed one-time recovery check
+        self._recovery_done: set[tuple[str, str, str]] = set()
+        # Boot ID and component state for classification
+        self._current_boot_id: str = get_host_boot_id()
+        self._previous_writer_state: ComponentRuntimeState | None = None
+        self._previous_collector_state: ComponentRuntimeState | None = None
+        self._maintenance_intent = None
+        # Host lifecycle evidence (Phase 2) — loaded once at startup
+        self._host_evidence: HostLifecycleEvidence | None = host_evidence
+        # REST-polled stream gap threshold (3x configured poll interval in ns)
+        self._rest_poll_interval_ns: int = _DEFAULT_REST_POLL_INTERVAL_NS
 
     async def start(self) -> None:
         from confluent_kafka import Consumer as KafkaConsumer
@@ -75,6 +105,29 @@ class WriterConsumer:
         # Load state and seek to last known offsets
         states = await self.state_manager.load_all_states()
         self._recover_files(states)
+
+        # Load durable stream checkpoints for recovery gap detection
+        self._durable_checkpoints = await self.state_manager.load_stream_checkpoints()
+        self._recovery_done = set()
+
+        # Load component runtime states to determine previous boot ID and shutdown evidence.
+        # SQL returns DISTINCT ON (component) ORDER BY started_at DESC — one row per component.
+        component_states = await self.state_manager.load_latest_component_states()
+        for cs in component_states:
+            if cs.component == "writer":
+                self._previous_writer_state = cs
+            elif cs.component == "collector":
+                self._previous_collector_state = cs
+
+        logger.info(
+            "recovery_state_loaded",
+            checkpoints=len(self._durable_checkpoints),
+            previous_boot_id=(
+                self._previous_writer_state.host_boot_id
+                if self._previous_writer_state else None
+            ),
+            current_boot_id=self._current_boot_id,
+        )
 
         # Discover already-sealed files (those with .sha256 sidecar)
         self._discover_sealed_files()
@@ -124,7 +177,7 @@ class WriterConsumer:
                         intentional=not self._running)
 
             # Flush any buffered data before losing ownership
-            # (best-effort — we may lose the race)
+            # (best-effort -- we may lose the race)
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._flush_and_commit())
@@ -132,7 +185,7 @@ class WriterConsumer:
                 pass
 
             if self._running:
-                # Spontaneous revocation while we should be running — crash to prevent split-brain
+                # Spontaneous revocation while we should be running -- crash to prevent split-brain
                 self._running = False
                 raise RuntimeError(
                     f"Writer exclusivity violated: partitions {revoked} revoked. "
@@ -163,12 +216,143 @@ class WriterConsumer:
                 data_path = sc.with_suffix("")  # remove .sha256
                 self._sealed_files.add(data_path)
 
+    def _check_recovery_gap(self, envelope: dict) -> dict | None:
+        """One-time per-stream recovery check using durable stream checkpoints.
+
+        On first post-recovery envelope for each stream:
+        1. Compare durable checkpoint vs incoming envelope
+        2. Classify via restart_gap_classifier
+        3. Return a synthetic restart_gap envelope (or None if no gap)
+
+        This replaces the in-memory _last_session dict for recovery detection.
+        The _last_session dict is still used for runtime detection after recovery.
+        """
+        stream_key = (
+            envelope.get("exchange", ""),
+            envelope.get("symbol", ""),
+            envelope.get("stream", ""),
+        )
+
+        # Only run once per stream after startup
+        if stream_key in self._recovery_done:
+            return None
+        self._recovery_done.add(stream_key)
+
+        # No durable checkpoint = first-ever run, no gap to detect
+        checkpoint = self._durable_checkpoints.get(stream_key)
+        if checkpoint is None:
+            return None
+
+        # Extract current envelope data
+        current_session_id = envelope.get("collector_session_id", "")
+        current_received_at = envelope.get("received_at", 0)
+        previous_session_id = checkpoint.last_collector_session_id
+
+        # Determine if there is a session change
+        session_changed = current_session_id != previous_session_id
+
+        # For REST-polled streams (same session), check time delta
+        if not session_changed:
+            # Parse the checkpoint's last_received_at (ISO format from PG)
+            try:
+                cp_dt = datetime.datetime.fromisoformat(checkpoint.last_received_at)
+                if cp_dt.tzinfo is None:
+                    cp_dt = cp_dt.replace(tzinfo=datetime.timezone.utc)
+                cp_received_at_ns = int(cp_dt.timestamp() * 1_000_000_000)
+            except (ValueError, TypeError):
+                cp_received_at_ns = 0
+
+            time_delta_ns = current_received_at - cp_received_at_ns
+            gap_threshold_ns = self._rest_poll_interval_ns * _REST_POLL_GAP_MULTIPLIER
+
+            if time_delta_ns <= gap_threshold_ns:
+                # Within expected interval -- no gap
+                return None
+            # Time delta exceeds threshold -- this is a gap even without session change
+            logger.warning(
+                "rest_poll_time_gap_detected",
+                stream_key=stream_key,
+                delta_seconds=time_delta_ns / 1_000_000_000,
+                threshold_seconds=gap_threshold_ns / 1_000_000_000,
+            )
+
+        # Gather evidence for classifier
+        previous_boot_id = (
+            self._previous_writer_state.host_boot_id
+            if self._previous_writer_state else None
+        )
+        collector_clean_shutdown = (
+            self._previous_collector_state is not None
+            and self._previous_collector_state.clean_shutdown_at is not None
+        )
+        system_clean_shutdown = (
+            self._previous_writer_state is not None
+            and self._previous_writer_state.clean_shutdown_at is not None
+            and collector_clean_shutdown
+        )
+
+        classification = classify_restart_gap(
+            previous_boot_id=previous_boot_id,
+            current_boot_id=self._current_boot_id,
+            previous_session_id=previous_session_id,
+            current_session_id=current_session_id,
+            collector_clean_shutdown=collector_clean_shutdown,
+            system_clean_shutdown=system_clean_shutdown,
+            maintenance_intent=self._maintenance_intent,
+            host_evidence=self._host_evidence,
+        )
+
+        # Compute gap_start_ts from checkpoint
+        try:
+            cp_dt = datetime.datetime.fromisoformat(checkpoint.last_received_at)
+            if cp_dt.tzinfo is None:
+                cp_dt = cp_dt.replace(tzinfo=datetime.timezone.utc)
+            gap_start_ts = int(cp_dt.timestamp() * 1_000_000_000)
+        except (ValueError, TypeError):
+            gap_start_ts = 0
+
+        exchange, symbol, stream = stream_key
+        logger.warning(
+            "recovery_gap_detected",
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            classification=classification,
+        )
+        writer_metrics.session_gaps_detected_total.labels(
+            exchange=exchange, symbol=symbol, stream=stream,
+        ).inc()
+
+        return create_gap_envelope(
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            collector_session_id=current_session_id,
+            session_seq=-1,
+            gap_start_ts=gap_start_ts,
+            gap_end_ts=current_received_at,
+            reason="restart_gap",
+            detail=(
+                f"Writer recovery: {classification.get('cause', 'unknown')} "
+                f"(session {previous_session_id} -> {current_session_id})"
+            ),
+            received_at=current_received_at,
+            component=classification.get("component"),
+            cause=classification.get("cause"),
+            planned=classification.get("planned"),
+            classifier=classification.get("classifier"),
+            evidence=classification.get("evidence"),
+            maintenance_id=classification.get("maintenance_id"),
+        )
+
     def _check_session_change(self, envelope: dict) -> dict | None:
         """Detect collector session changes and return a gap envelope if one occurred.
 
         When the collector crashes (SIGKILL), it cannot emit gap records itself.
-        The writer detects the session_id change and injects a collector_restart
-        gap record into the archive to record the data loss window.
+        The writer detects the session_id change and injects a restart_gap
+        record into the archive to record the data loss window.
+
+        This is the RUNTIME detection path (after initial recovery is done).
         """
         stream_key = (
             envelope.get("exchange", ""),
@@ -208,9 +392,14 @@ class WriterConsumer:
             session_seq=-1,
             gap_start_ts=prev_received_at,
             gap_end_ts=received_at,
-            reason="collector_restart",
+            reason="restart_gap",
             detail=f"Collector session changed: {prev_session_id} -> {session_id}",
             received_at=received_at,
+            component="collector",
+            cause="unclean_exit",
+            planned=False,
+            classifier="writer_runtime_v1",
+            evidence=["collector_session_changed_at_runtime"],
         )
 
     def _resolve_file_path(self, file_path: Path) -> Path:
@@ -241,7 +430,7 @@ class WriterConsumer:
         last_flush_time = time.monotonic()
         # Track active (hour, date) per file key (exchange, symbol, stream).
         # Stores the previous message's hour and date so that at day boundaries
-        # (23→00) we seal the correct previous-day file, not the new day's.
+        # (23->00) we seal the correct previous-day file, not the new day's.
         active_hours: dict[tuple[str, str, str], tuple[int, str]] = {}
 
         assert self._consumer is not None, "call start() first"
@@ -302,9 +491,24 @@ class WriterConsumer:
                 stream=envelope.get("stream", ""),
             ).inc()
 
-            # Detect collector session changes (covers crash/SIGKILL where
-            # the collector could not emit its own gap records)
+            # Detect gaps for data envelopes
             if envelope.get("type") == "data":
+                # One-time recovery gap check (uses durable checkpoints)
+                recovery_gap = self._check_recovery_gap(envelope)
+                if recovery_gap is not None:
+                    recovery_gap = add_broker_coordinates(
+                        recovery_gap,
+                        topic=msg_topic,
+                        partition=msg_partition,
+                        offset=-1,  # synthetic record, not from Kafka
+                    )
+                    gap_results = self.buffer_manager.add(recovery_gap)
+                    if gap_results:
+                        await self._write_and_save(gap_results)
+                        last_flush_time = time.monotonic()
+
+                # Runtime session change detection (covers collector crash/SIGKILL
+                # after initial recovery is done)
                 gap_envelope = self._check_session_change(envelope)
                 if gap_envelope is not None:
                     gap_envelope = add_broker_coordinates(
@@ -333,11 +537,11 @@ class WriterConsumer:
                 prev_hour, prev_date = prev
                 if current_hour != prev_hour or current_date != prev_date:
                     # Seal previous file using the PREVIOUS date/hour,
-                    # not the current message's date (critical at 23→00 day boundary)
+                    # not the current message's date (critical at 23->00 day boundary)
                     await self._rotate_file(file_key, prev_date, prev_hour)
             active_hours[file_key] = (current_hour, current_date)
 
-            # Add to buffer — may trigger flush
+            # Add to buffer -- may trigger flush
             flush_results = self.buffer_manager.add(envelope)
             if flush_results:
                 await self._write_and_save(flush_results)
@@ -350,8 +554,8 @@ class WriterConsumer:
         hour: int,
     ) -> None:
         """Seal files for a specific stream that has crossed an hour boundary.
-        Order per spec 8.4: flush → write to disk → seal (.sha256 sidecar) →
-        save PG state → commit Kafka offsets."""
+        Order per spec 8.4: flush -> write to disk -> seal (.sha256 sidecar) ->
+        save PG state -> commit Kafka offsets."""
         exchange, symbol, stream = file_key
         logger.info("hourly_rotation_triggered", exchange=exchange,
                      symbol=symbol, stream=stream, hour=hour)
@@ -386,14 +590,14 @@ class WriterConsumer:
                 ).inc()
                 logger.info("file_sealed", path=str(file_path))
 
-        # 4. Now safe to commit — sidecar is durable on disk
+        # 4. Now safe to commit -- sidecar is durable on disk
         if results:
             await self._commit_state(states, results, start)
 
     async def _rotate_hour(self) -> None:
         """Seal all active files (used during shutdown). For normal operation,
         use _rotate_file() which seals per-stream files individually.
-        Order: flush → write to disk → seal all → commit offsets (spec 8.4)."""
+        Order: flush -> write to disk -> seal all -> commit offsets (spec 8.4)."""
         logger.info("rotation_seal_all")
         start = time.monotonic()
 
@@ -417,7 +621,7 @@ class WriterConsumer:
                 ).inc()
                 logger.info("file_sealed", path=str(zst_file))
 
-        # 3. Now safe to commit — all sidecars are durable on disk
+        # 3. Now safe to commit -- all sidecars are durable on disk
         if results:
             await self._commit_state(states, results, start)
 
@@ -471,9 +675,38 @@ class WriterConsumer:
         results: list[FlushResult],
         start: float,
     ) -> None:
-        """Save file states to PG and commit Kafka offsets.
-        Called after writes (and optional sealing) are complete."""
-        await self.state_manager.save_states(states)
+        """Save file states and stream checkpoints to PG atomically, then commit Kafka offsets.
+
+        Both file states and stream checkpoints are persisted in a single
+        transaction at the durable flush boundary -- after write/fsync.
+        """
+        # Derive stream checkpoints from FlushResult checkpoint metadata
+        checkpoints: list[StreamCheckpoint] = []
+        for result in results:
+            if result.checkpoint_meta is not None:
+                meta = result.checkpoint_meta
+                exchange, symbol, stream = meta.stream_key
+                # Convert received_at (nanoseconds) to ISO timestamp for PG storage
+                received_dt = datetime.datetime.fromtimestamp(
+                    meta.last_received_at / 1_000_000_000,
+                    tz=datetime.timezone.utc,
+                )
+                checkpoints.append(StreamCheckpoint(
+                    exchange=exchange,
+                    symbol=symbol,
+                    stream=stream,
+                    last_received_at=received_dt.isoformat(),
+                    last_collector_session_id=meta.last_collector_session_id,
+                ))
+
+        # Save both file states and checkpoints in a single atomic transaction
+        await self.state_manager.save_states_and_checkpoints(states, checkpoints)
+
+        # Update in-memory checkpoint cache AFTER successful commit
+        for cp in checkpoints:
+            self._durable_checkpoints[cp.checkpoint_key] = cp
+
+        # Commit Kafka offsets
         assert self._consumer is not None, "call start() first"
         self._consumer.commit(asynchronous=True)
 
@@ -486,7 +719,7 @@ class WriterConsumer:
         logger.debug("flush_complete", files=len(results), elapsed_ms=round(elapsed_ms, 1))
 
     async def _write_and_save(self, results: list[FlushResult]) -> None:
-        """Normal flush: write files → fsync → save state to PG → commit offsets.
+        """Normal flush: write files -> fsync -> save state to PG -> commit offsets.
         For rotation (seal-before-commit), use _write_to_disk + seal + _commit_state."""
         start = time.monotonic()
         states = self._write_to_disk(results)
@@ -525,7 +758,7 @@ class WriterConsumer:
 
     async def stop(self) -> None:
         self._running = False
-        # _rotate_hour handles flush → write → seal → commit in correct order
+        # _rotate_hour handles flush -> write -> seal -> commit in correct order
         await self._rotate_hour()
         if self._consumer:
             self._consumer.close()

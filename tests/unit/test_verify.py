@@ -95,6 +95,50 @@ class TestGapReporting:
         from src.cli.verify import report_gaps
         assert report_gaps([_make_data_envelope(i) for i in range(3)]) == []
 
+    def test_restart_gap_preserves_metadata(self):
+        """report_gaps must preserve restart metadata fields."""
+        from src.cli.verify import report_gaps
+        gap = {"v": 1, "type": "gap", "reason": "restart_gap",
+               "exchange": "binance", "symbol": "btcusdt", "stream": "depth",
+               "received_at": 0, "collector_session_id": "s", "session_seq": 0,
+               "gap_start_ts": 0, "gap_end_ts": 1, "detail": "restart",
+               "component": "ws_collector", "cause": "oom_kill",
+               "planned": False, "maintenance_id": None,
+               "_topic": "t", "_partition": 0, "_offset": 1}
+        gaps = report_gaps([_make_data_envelope(0), gap])
+        assert len(gaps) == 1
+        assert gaps[0]["component"] == "ws_collector"
+        assert gaps[0]["cause"] == "oom_kill"
+        assert gaps[0]["planned"] is False
+
+
+class TestRestartGapEnvelopeValidation:
+    def test_verify_envelopes_accepts_restart_gap(self):
+        """verify_envelopes should not error on restart_gap envelopes with extra fields."""
+        from src.cli.verify import verify_envelopes
+        gap = {"v": 1, "type": "gap", "reason": "restart_gap",
+               "exchange": "binance", "symbol": "btcusdt", "stream": "depth",
+               "received_at": 0, "collector_session_id": "s", "session_seq": 0,
+               "gap_start_ts": 0, "gap_end_ts": 1, "detail": "restart",
+               "component": "ws_collector", "cause": "upgrade",
+               "planned": True, "classifier": "rule:scheduled",
+               "evidence": {"exit_code": 0},
+               "maintenance_id": "maint-001",
+               "_topic": "t", "_partition": 0, "_offset": 1}
+        errors = verify_envelopes([gap])
+        assert errors == []
+
+    def test_verify_envelopes_accepts_restart_gap_without_optional(self):
+        """A restart_gap with only required fields is valid."""
+        from src.cli.verify import verify_envelopes
+        gap = {"v": 1, "type": "gap", "reason": "restart_gap",
+               "exchange": "binance", "symbol": "btcusdt", "stream": "depth",
+               "received_at": 0, "collector_session_id": "s", "session_seq": 0,
+               "gap_start_ts": 0, "gap_end_ts": 1, "detail": "restart",
+               "_topic": "t", "_partition": 0, "_offset": 1}
+        errors = verify_envelopes([gap])
+        assert errors == []
+
 
 class TestDepthReplay:
     """Tests use received_at for cross-topic ordering (not _offset, which is
@@ -213,3 +257,188 @@ class TestGenerateManifest:
         assert stream_info["record_count"] == len(envelopes)
         assert "gaps" in stream_info
         assert stream_info["gaps"] == []
+
+    def test_manifest_includes_restart_gap_metadata(self, tmp_path):
+        """Manifest gap entries must include restart metadata when present."""
+        from src.cli.verify import generate_manifest
+        gap_env = {
+            "v": 1, "type": "gap", "reason": "restart_gap",
+            "exchange": "binance", "symbol": "btcusdt", "stream": "depth",
+            "received_at": 0, "collector_session_id": "s", "session_seq": 0,
+            "gap_start_ts": 100, "gap_end_ts": 200, "detail": "restart",
+            "component": "ws_collector", "cause": "upgrade",
+            "planned": True, "maintenance_id": "maint-001",
+            "_topic": "t", "_partition": 0, "_offset": 0,
+        }
+        _make_archive(tmp_path, [gap_env], exchange="binance", symbol="btcusdt",
+                      stream="depth", date="2026-03-11", hour=10)
+        manifest = generate_manifest(tmp_path, "binance", "2026-03-11")
+        gaps = manifest["symbols"]["btcusdt"]["streams"]["depth"]["gaps"]
+        assert len(gaps) == 1
+        gap = gaps[0]
+        assert gap["reason"] == "restart_gap"
+        assert gap["component"] == "ws_collector"
+        assert gap["cause"] == "upgrade"
+        assert gap["planned"] is True
+        assert gap["maintenance_id"] == "maint-001"
+
+    def test_manifest_non_restart_gap_no_extra_fields(self, tmp_path):
+        """Non-restart gap manifest entries should have None for restart-specific fields."""
+        from src.cli.verify import generate_manifest
+        gap_env = {
+            "v": 1, "type": "gap", "reason": "ws_disconnect",
+            "exchange": "binance", "symbol": "btcusdt", "stream": "trades",
+            "received_at": 0, "collector_session_id": "s", "session_seq": 0,
+            "gap_start_ts": 100, "gap_end_ts": 200, "detail": "disconnect",
+            "_topic": "t", "_partition": 0, "_offset": 0,
+        }
+        _make_archive(tmp_path, [gap_env], exchange="binance", symbol="btcusdt",
+                      stream="trades", date="2026-03-11", hour=10)
+        manifest = generate_manifest(tmp_path, "binance", "2026-03-11")
+        gaps = manifest["symbols"]["btcusdt"]["streams"]["trades"]["gaps"]
+        assert len(gaps) == 1
+        gap = gaps[0]
+        assert gap["reason"] == "ws_disconnect"
+        assert gap.get("component") is None
+        assert gap.get("cause") is None
+        assert gap.get("planned") is None
+        assert gap.get("maintenance_id") is None
+
+
+class TestMarkMaintenanceCLI:
+    """Tests for the `mark-maintenance` CLI command."""
+
+    def test_mark_maintenance_basic(self):
+        """mark-maintenance should write a maintenance_intent row via StateManager."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from click.testing import CliRunner
+        from src.cli.verify import cli
+
+        runner = CliRunner()
+
+        mock_sm_instance = MagicMock()
+        mock_sm_instance.connect = AsyncMock()
+        mock_sm_instance.create_maintenance_intent = AsyncMock()
+        mock_sm_instance.close = AsyncMock()
+
+        with patch("src.cli.verify.StateManager", return_value=mock_sm_instance):
+            result = runner.invoke(cli, [
+                "mark-maintenance",
+                "--db-url", "postgresql://fake:fake@localhost/fake",
+                "--scope", "system",
+                "--maintenance-id", "deploy-2026-03-18T21-00Z",
+                "--reason", "scheduled deploy",
+                "--ttl-minutes", "30",
+            ])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        mock_sm_instance.connect.assert_called_once()
+        mock_sm_instance.create_maintenance_intent.assert_called_once()
+
+        # Verify the intent was created with correct fields
+        intent = mock_sm_instance.create_maintenance_intent.call_args[0][0]
+        assert intent.maintenance_id == "deploy-2026-03-18T21-00Z"
+        assert intent.scope == "system"
+        assert intent.reason == "scheduled deploy"
+        assert intent.planned_by == "cli"
+        # expires_at should be ~30 minutes after created_at
+        assert intent.expires_at > intent.created_at
+
+        mock_sm_instance.close.assert_called_once()
+
+    def test_mark_maintenance_default_ttl(self):
+        """Default TTL should be 60 minutes if not specified."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from click.testing import CliRunner
+        from src.cli.verify import cli
+
+        runner = CliRunner()
+
+        mock_sm_instance = MagicMock()
+        mock_sm_instance.connect = AsyncMock()
+        mock_sm_instance.create_maintenance_intent = AsyncMock()
+        mock_sm_instance.close = AsyncMock()
+
+        with patch("src.cli.verify.StateManager", return_value=mock_sm_instance):
+            result = runner.invoke(cli, [
+                "mark-maintenance",
+                "--db-url", "postgresql://fake:fake@localhost/fake",
+                "--scope", "collector",
+                "--maintenance-id", "maint-001",
+                "--reason", "config change",
+            ])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        intent = mock_sm_instance.create_maintenance_intent.call_args[0][0]
+        # With default TTL of 60 minutes, expires_at should be ~60 min after created_at
+        from datetime import datetime
+        created = datetime.fromisoformat(intent.created_at)
+        expires = datetime.fromisoformat(intent.expires_at)
+        delta = (expires - created).total_seconds()
+        assert 3590 <= delta <= 3610  # ~60 minutes with tolerance
+
+    def test_mark_maintenance_output_message(self):
+        """CLI should output confirmation message."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from click.testing import CliRunner
+        from src.cli.verify import cli
+
+        runner = CliRunner()
+
+        mock_sm_instance = MagicMock()
+        mock_sm_instance.connect = AsyncMock()
+        mock_sm_instance.create_maintenance_intent = AsyncMock()
+        mock_sm_instance.close = AsyncMock()
+
+        with patch("src.cli.verify.StateManager", return_value=mock_sm_instance):
+            result = runner.invoke(cli, [
+                "mark-maintenance",
+                "--db-url", "postgresql://fake:fake@localhost/fake",
+                "--scope", "system",
+                "--maintenance-id", "deploy-001",
+                "--reason", "test",
+            ])
+
+        assert result.exit_code == 0
+        assert "deploy-001" in result.output
+        assert "maintenance" in result.output.lower()
+
+    def test_mark_maintenance_requires_mandatory_args(self):
+        """CLI should fail if required options are missing."""
+        from click.testing import CliRunner
+        from src.cli.verify import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["mark-maintenance"])
+        assert result.exit_code != 0
+
+    def test_mark_maintenance_does_not_shut_anything_down(self):
+        """mark-maintenance should only write intent; it should NOT trigger shutdown."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from click.testing import CliRunner
+        from src.cli.verify import cli
+
+        runner = CliRunner()
+
+        mock_sm_instance = MagicMock()
+        mock_sm_instance.connect = AsyncMock()
+        mock_sm_instance.create_maintenance_intent = AsyncMock()
+        mock_sm_instance.close = AsyncMock()
+
+        with patch("src.cli.verify.StateManager", return_value=mock_sm_instance) as mock_sm_cls:
+            result = runner.invoke(cli, [
+                "mark-maintenance",
+                "--db-url", "postgresql://fake:fake@localhost/fake",
+                "--scope", "system",
+                "--maintenance-id", "deploy-001",
+                "--reason", "test",
+            ])
+
+        assert result.exit_code == 0
+        # Only connect, create_maintenance_intent, and close should be called
+        mock_sm_instance.connect.assert_called_once()
+        mock_sm_instance.create_maintenance_intent.assert_called_once()
+        mock_sm_instance.close.assert_called_once()
+        # No consume, no shutdown methods
+        mock_sm_instance.consume_maintenance_intent.assert_not_called()
+        mock_sm_instance.mark_component_clean_shutdown.assert_not_called()
