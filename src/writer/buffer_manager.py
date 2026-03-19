@@ -13,6 +13,21 @@ logger = structlog.get_logger()
 
 
 @dataclass
+class CheckpointMeta:
+    """Lightweight checkpoint metadata extracted from the last envelope in a flush batch.
+
+    Only carries the fields needed for stream checkpoint synthesis.
+    This avoids duplicating the full envelope dicts alongside serialized lines,
+    which would roughly double memory usage during flush for large buffers.
+    """
+
+    last_received_at: int
+    last_collector_session_id: str
+    last_session_seq: int
+    stream_key: tuple[str, str, str]  # (exchange, symbol, stream)
+
+
+@dataclass
 class FlushResult:
     target: FileTarget
     file_path: Path
@@ -20,6 +35,7 @@ class FlushResult:
     high_water_offset: int
     partition: int
     count: int
+    checkpoint_meta: CheckpointMeta | None = None
 
 
 class BufferManager:
@@ -72,6 +88,19 @@ class BufferManager:
             return []
         self.total_buffered -= len(messages)
 
+        # Extract checkpoint metadata from the last envelope before serialization
+        last_env = messages[-1]
+        checkpoint_meta = CheckpointMeta(
+            last_received_at=last_env.get("received_at", 0),
+            last_collector_session_id=last_env.get("collector_session_id", ""),
+            last_session_seq=last_env.get("session_seq", -1),
+            stream_key=(
+                last_env.get("exchange", ""),
+                last_env.get("symbol", ""),
+                last_env.get("stream", ""),
+            ),
+        )
+
         lines = [orjson.dumps(env) + b"\n" for env in messages]
         # Use default=-1 to handle buffers containing only synthetic records (spec 8.2)
         high_water = max((m["_offset"] for m in messages if m["_offset"] >= 0), default=-1)
@@ -87,6 +116,7 @@ class BufferManager:
             high_water_offset=high_water,
             partition=partition,
             count=len(messages),
+            checkpoint_meta=checkpoint_meta,
         )]
 
     def _route(self, envelope: dict) -> FileTarget:

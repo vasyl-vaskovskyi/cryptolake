@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
@@ -12,10 +13,11 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from src.common.config import load_config
 from src.common.logging import setup_logging
+from src.common.system_identity import get_host_boot_id
 from src.writer.buffer_manager import BufferManager
 from src.writer.compressor import ZstdFrameCompressor
 from src.writer.consumer import WriterConsumer
-from src.writer.state_manager import StateManager
+from src.writer.state_manager import ComponentRuntimeState, StateManager
 
 logger = structlog.get_logger()
 
@@ -46,9 +48,27 @@ class Writer:
             base_dir=self.config.writer.base_dir,
         )
 
+        # Writer runtime metadata
+        self._boot_id = get_host_boot_id()
+        now = datetime.now(timezone.utc)
+        self._instance_id = f"writer_{now.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        self._started_at = now.isoformat()
+
     async def start(self) -> None:
-        logger.info("writer_starting", topics=self.topics)
+        logger.info("writer_starting", topics=self.topics, boot_id=self._boot_id)
         await self.state_manager.connect()
+
+        # Record writer runtime state on start
+        await self.state_manager.upsert_component_runtime(ComponentRuntimeState(
+            component="writer",
+            instance_id=self._instance_id,
+            host_boot_id=self._boot_id,
+            started_at=self._started_at,
+            last_heartbeat_at=self._started_at,
+        ))
+        logger.info("writer_runtime_registered",
+                     instance_id=self._instance_id, boot_id=self._boot_id)
+
         await self.consumer.start()
         await asyncio.gather(
             self.consumer.consume_loop(),
@@ -57,6 +77,17 @@ class Writer:
 
     async def shutdown(self) -> None:
         logger.info("writer_shutting_down")
+
+        # Mark clean shutdown in durable state
+        try:
+            await self.state_manager.mark_component_clean_shutdown(
+                component="writer",
+                instance_id=self._instance_id,
+            )
+            logger.info("writer_clean_shutdown_marked", instance_id=self._instance_id)
+        except Exception:
+            logger.warning("writer_clean_shutdown_mark_failed", exc_info=True)
+
         await self.consumer.stop()
         await self.state_manager.close()
         logger.info("writer_shutdown_complete")
