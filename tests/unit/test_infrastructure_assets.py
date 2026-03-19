@@ -213,6 +213,7 @@ class TestChaosScripts:
             "tests/chaos/4_writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/9_ws_disconnect.sh": ["ws_disconnect", "block_egress", "unblock_egress", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/10_snapshot_poll_miss.sh": ["snapshot_poll_miss", "iptables", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/11_planned_collector_restart.sh": ["collector", "mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
         }
 
         for relative_path, expected_snippets in scripts.items():
