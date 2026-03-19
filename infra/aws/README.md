@@ -73,6 +73,64 @@ ssh -L 3000:localhost:3000 -i ~/.ssh/your-key.pem ec2-user@<ElasticIP>
 - **AWS Backup**: Daily EBS snapshots at 05:00 UTC, 7-day retention
 - **Grafana**: Application-level dashboards via SSH tunnel on port 3000
 
+## Host Lifecycle Agent
+
+The lifecycle agent runs on the host (outside Docker) and records container
+start/stop/die events to a JSONL ledger.  The writer reads this ledger on
+startup to promote restart gap classification from generic Phase 1
+(`collector`/`host`/`system`) to component-specific causes (`redpanda`,
+`postgres`, `writer`).
+
+### Install
+
+```bash
+ssh -i ~/.ssh/your-key.pem ec2-user@<ElasticIP>
+
+# Copy the systemd unit
+sudo cp /opt/cryptolake/infra/aws/systemd/cryptolake-lifecycle-agent.service \
+    /etc/systemd/system/
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable cryptolake-lifecycle-agent
+sudo systemctl start cryptolake-lifecycle-agent
+
+# Verify
+sudo systemctl status cryptolake-lifecycle-agent
+journalctl -u cryptolake-lifecycle-agent -f
+```
+
+### What it provides (Phase 2 strict classification)
+
+Without the lifecycle agent (Phase 1 only):
+- Restart gaps classify as `collector`, `host`, or `system`
+- Writer-only or redpanda crashes show as `collector/unclean_exit` or `system/unknown`
+
+With the lifecycle agent (Phase 2):
+- Container-specific die events are recorded with exit codes
+- Writer can promote to `redpanda/unclean_exit`, `postgres/operator_shutdown`, etc.
+- Maintenance intents written to the ledger survive PG outages
+
+## Planned Maintenance
+
+Use the maintenance wrapper to record intent before stopping services:
+
+```bash
+# Planned restart (records intent, then restarts)
+scripts/cryptolake-maintenance.sh restart --reason "scheduled deploy"
+
+# Planned stop (records intent, then stops)
+scripts/cryptolake-maintenance.sh stop --reason "hardware maintenance"
+```
+
+The wrapper:
+1. Writes maintenance intent to the host lifecycle ledger (always succeeds)
+2. Attempts to write intent to PostgreSQL via CLI (best-effort)
+3. Stops or restarts Docker Compose services
+
+This ensures restart gaps are classified as `planned=true` even if PG is
+the maintenance target.
+
 ## Update
 
 ```bash
