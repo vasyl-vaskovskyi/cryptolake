@@ -302,6 +302,86 @@ wait_service_healthy() {
 }
 
 # ---------------------------------------------------------------------------
+# Network fault injection helpers
+# ---------------------------------------------------------------------------
+
+# Block outbound traffic from a container using iptables inside the container.
+# Requires the container to have NET_ADMIN capability.
+# Usage: block_egress <container_name>
+block_egress() {
+    local container="${1:?Usage: block_egress <container_name>}"
+    docker exec "${container}" iptables -A OUTPUT -j DROP 2>/dev/null || true
+    docker exec "${container}" iptables -A INPUT -j DROP 2>/dev/null || true
+    echo "   Blocked network traffic for ${container}"
+}
+
+# Restore outbound traffic for a container.
+# Usage: unblock_egress <container_name>
+unblock_egress() {
+    local container="${1:?Usage: unblock_egress <container_name>}"
+    docker exec "${container}" iptables -F 2>/dev/null || true
+    echo "   Restored network traffic for ${container}"
+}
+
+# Validate that gap_start_ts and gap_end_ts in archived gap records are within
+# a reasonable tolerance of the actual chaos event times.
+# Usage: validate_gap_window_accuracy <reason> <event_start_epoch_ns> <event_end_epoch_ns> <tolerance_seconds>
+validate_gap_window_accuracy() {
+    local reason="$1"
+    local event_start_ns="$2"
+    local event_end_ns="$3"
+    local tolerance_s="${4:-30}"
+    uv run python -c "
+import zstandard as zstd, orjson
+from pathlib import Path
+
+base = Path('${TEST_DATA_DIR}')
+reason = '${reason}'
+event_start = ${event_start_ns}
+event_end = ${event_end_ns}
+tol_ns = int(${tolerance_s}) * 1_000_000_000
+errors = []
+found = 0
+
+for f in base.rglob('*.zst'):
+    with open(f, 'rb') as fh:
+        data = zstd.ZstdDecompressor().stream_reader(fh).read()
+    for line in data.strip().split(b'\n'):
+        if not line:
+            continue
+        env = orjson.loads(line)
+        if env.get('type') == 'gap' and env.get('reason') == reason:
+            found += 1
+            gs = env.get('gap_start_ts', 0)
+            ge = env.get('gap_end_ts', 0)
+            if gs == 0 or ge == 0:
+                errors.append(f'gap record missing timestamps: gap_start_ts={gs}, gap_end_ts={ge}')
+                continue
+            if ge <= gs:
+                errors.append(f'gap_end_ts ({ge}) <= gap_start_ts ({gs})')
+            if abs(gs - event_start) > tol_ns:
+                errors.append(f'gap_start_ts off by {abs(gs - event_start)/1e9:.1f}s (tolerance: ${tolerance_s}s)')
+            if event_end > 0 and abs(ge - event_end) > tol_ns:
+                errors.append(f'gap_end_ts off by {abs(ge - event_end)/1e9:.1f}s (tolerance: ${tolerance_s}s)')
+
+if found == 0:
+    print(f'ERROR: no {reason} gap records found')
+    exit(1)
+if errors:
+    for e in errors:
+        print(f'ERROR: {e}')
+    exit(1)
+print(f'OK: {found} {reason} gap(s) with valid timestamps (tolerance: ${tolerance_s}s)')
+"
+}
+
+# Capture current time as nanosecond epoch (for gap-window validation).
+# Usage: ts_now_ns  →  prints nanosecond epoch
+ts_now_ns() {
+    python3 -c "import time; print(time.time_ns())"
+}
+
+# ---------------------------------------------------------------------------
 # Reporting helpers
 # ---------------------------------------------------------------------------
 
