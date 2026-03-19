@@ -204,12 +204,12 @@ class TestAwsDeploymentAssets:
 class TestChaosScripts:
     def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
         scripts = {
-            "tests/chaos/kill_writer.sh": ["docker kill", "WRITER_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/kill_ws_connection.sh": ["docker kill", "COLLECTOR_CONTAINER", "collector_restart", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "collector_restart", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/3_kill_writer.sh": ["docker kill", "WRITER_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/1_kill_ws_connection.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/5_fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/6_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "collector_restart", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/2_buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/4_writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
         }
 
         for relative_path, expected_snippets in scripts.items():
