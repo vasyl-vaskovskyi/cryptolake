@@ -13,9 +13,12 @@ VALID_GAP_REASONS = frozenset(
         "session_seq_skip",
         "buffer_overflow",
         "snapshot_poll_miss",
-        "collector_restart",
+        "collector_restart",  # kept for migration: existing archives contain it
+        "restart_gap",
     }
 )
+
+_SENTINEL = object()  # used to distinguish "not provided" from None
 
 
 def create_data_envelope(
@@ -56,11 +59,18 @@ def create_gap_envelope(
     reason: str,
     detail: str,
     received_at: int | None = None,
+    # Optional restart metadata (keyword-only, included only when provided)
+    component: Any = _SENTINEL,
+    cause: Any = _SENTINEL,
+    planned: Any = _SENTINEL,
+    classifier: Any = _SENTINEL,
+    evidence: Any = _SENTINEL,
+    maintenance_id: Any = _SENTINEL,
 ) -> dict[str, Any]:
     if reason not in VALID_GAP_REASONS:
         raise ValueError(f"Invalid gap reason '{reason}'")
 
-    return {
+    env: dict[str, Any] = {
         "v": 1,
         "type": "gap",
         "exchange": exchange,
@@ -74,6 +84,20 @@ def create_gap_envelope(
         "reason": reason,
         "detail": detail,
     }
+
+    # Include only provided optional restart metadata fields
+    for key, value in (
+        ("component", component),
+        ("cause", cause),
+        ("planned", planned),
+        ("classifier", classifier),
+        ("evidence", evidence),
+        ("maintenance_id", maintenance_id),
+    ):
+        if value is not _SENTINEL:
+            env[key] = value
+
+    return env
 
 
 def serialize_envelope(envelope: dict[str, Any]) -> bytes:

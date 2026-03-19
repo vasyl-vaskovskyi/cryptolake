@@ -218,12 +218,17 @@ def generate_manifest(base_dir: Path, exchange: str, date: str) -> dict:
                     record_count += len(envs)
                     for env in envs:
                         if env.get("type") == "gap":
-                            gaps_list.append({
+                            gap_entry: dict = {
                                 "symbol": env.get("symbol"),
                                 "reason": env.get("reason"),
                                 "gap_start_ts": env.get("gap_start_ts"),
                                 "gap_end_ts": env.get("gap_end_ts"),
-                            })
+                                "component": env.get("component"),
+                                "cause": env.get("cause"),
+                                "planned": env.get("planned"),
+                                "maintenance_id": env.get("maintenance_id"),
+                            }
+                            gaps_list.append(gap_entry)
                 except Exception:
                     pass  # Skip unreadable/corrupt files; they will surface via checksum errors
             if hours:

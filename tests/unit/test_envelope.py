@@ -101,6 +101,97 @@ class TestEnvelopeCreation:
         assert "buffer_overflow" in VALID_GAP_REASONS
         assert "snapshot_poll_miss" in VALID_GAP_REASONS
         assert "collector_restart" in VALID_GAP_REASONS
+        assert "restart_gap" in VALID_GAP_REASONS
+
+    def test_create_restart_gap_envelope(self) -> None:
+        from src.common.envelope import create_gap_envelope
+
+        env = create_gap_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="depth",
+            collector_session_id="test_2026-01-01T00:00:00Z",
+            session_seq=100,
+            gap_start_ts=1000000000000000000,
+            gap_end_ts=1000000005000000000,
+            reason="restart_gap",
+            detail="collector restarted for upgrade",
+            component="ws_collector",
+            cause="upgrade",
+            planned=True,
+            classifier="rule:scheduled_restart",
+            evidence={"exit_code": 0, "uptime_seconds": 86400},
+            maintenance_id="maint-2026-01-15-001",
+        )
+        assert env["reason"] == "restart_gap"
+        assert env["component"] == "ws_collector"
+        assert env["cause"] == "upgrade"
+        assert env["planned"] is True
+        assert env["classifier"] == "rule:scheduled_restart"
+        assert env["evidence"] == {"exit_code": 0, "uptime_seconds": 86400}
+        assert env["maintenance_id"] == "maint-2026-01-15-001"
+
+    def test_restart_gap_envelope_optional_fields_omitted(self) -> None:
+        """When optional restart metadata is not provided, those keys must not appear."""
+        from src.common.envelope import create_gap_envelope
+
+        env = create_gap_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="depth",
+            collector_session_id="s",
+            session_seq=0,
+            gap_start_ts=0,
+            gap_end_ts=1,
+            reason="restart_gap",
+            detail="bare restart gap",
+        )
+        assert env["reason"] == "restart_gap"
+        for key in ("component", "cause", "planned", "classifier", "evidence", "maintenance_id"):
+            assert key not in env
+
+    def test_restart_gap_envelope_partial_optional_fields(self) -> None:
+        """Only provided optional fields appear in the envelope."""
+        from src.common.envelope import create_gap_envelope
+
+        env = create_gap_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="depth",
+            collector_session_id="s",
+            session_seq=0,
+            gap_start_ts=0,
+            gap_end_ts=1,
+            reason="restart_gap",
+            detail="partial metadata",
+            component="snapshot_poller",
+            planned=False,
+        )
+        assert env["component"] == "snapshot_poller"
+        assert env["planned"] is False
+        assert "cause" not in env
+        assert "classifier" not in env
+        assert "evidence" not in env
+        assert "maintenance_id" not in env
+
+    def test_non_restart_gap_ignores_extra_fields(self) -> None:
+        """Non-restart gaps should still work and not include restart metadata."""
+        from src.common.envelope import create_gap_envelope
+
+        env = create_gap_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            collector_session_id="s",
+            session_seq=0,
+            gap_start_ts=0,
+            gap_end_ts=1,
+            reason="ws_disconnect",
+            detail="normal disconnect",
+        )
+        assert env["reason"] == "ws_disconnect"
+        for key in ("component", "cause", "planned", "classifier", "evidence", "maintenance_id"):
+            assert key not in env
 
     def test_gap_invalid_reason_raises(self) -> None:
         from src.common.envelope import create_gap_envelope
