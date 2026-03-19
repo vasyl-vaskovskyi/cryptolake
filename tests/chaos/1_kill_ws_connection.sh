@@ -38,6 +38,8 @@ for f in base.rglob('*.zst'):
     with open(f, 'rb') as fh:
         data = zstd.ZstdDecompressor().stream_reader(fh).read()
     for line in data.strip().split(b'\n'):
+        if not line:
+            continue
         env = orjson.loads(line)
         if env.get('type') == 'gap' and env.get('reason') == 'restart_gap':
             found += 1

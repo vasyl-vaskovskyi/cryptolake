@@ -128,6 +128,8 @@ for f in base.rglob('*.zst'):
     with open(f, 'rb') as fh:
         data = zstd.ZstdDecompressor().stream_reader(fh).read()
     for line in data.strip().split(b'\n'):
+        if not line:
+            continue
         env = orjson.loads(line)
         if env.get('type') == 'gap' and env.get('reason') == '${reason}':
             count += 1
@@ -165,6 +167,8 @@ for f in sorted(base.rglob('*.zst')):
         lines = data.strip().split(b'\n')
         offsets = []
         for l in lines:
+            if not l:
+                continue
             env = orjson.loads(l)
             if '_offset' in env and env['_offset'] >= 0:
                 offsets.append(env['_offset'])

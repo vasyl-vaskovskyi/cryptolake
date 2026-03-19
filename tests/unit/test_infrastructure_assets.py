@@ -239,3 +239,7 @@ class TestChaosScripts:
         assert "print_gap_details" in text
         assert "print_test_report" in text
         assert "preflight_checks" in text
+        assert "block_egress" in text
+        assert "unblock_egress" in text
+        assert "validate_gap_window_accuracy" in text
+        assert "ts_now_ns" in text

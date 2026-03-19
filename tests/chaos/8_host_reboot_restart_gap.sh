@@ -17,6 +17,7 @@ echo "New boot ID: $NEW_BOOT_ID"
 export CRYPTOLAKE_TEST_BOOT_ID="${OLD_BOOT_ID}"
 setup_stack
 wait_for_data 30
+event_start_ns=$(ts_now_ns)
 
 echo "1. Stopping all services (simulating host power-off)..."
 # No maintenance intent — this is an unplanned reboot
@@ -25,6 +26,7 @@ $COMPOSE down 2>&1
 echo "2. Bringing stack back up with new boot ID (simulating reboot)..."
 export CRYPTOLAKE_TEST_BOOT_ID="${NEW_BOOT_ID}"
 $COMPOSE up -d 2>&1
+event_end_ns=$(ts_now_ns)
 wait_healthy
 wait_for_data 40
 
@@ -84,6 +86,13 @@ fi
 
 total=$(count_envelopes)
 assert_gt "archive has envelopes from both boot sessions" "$total" 100
+
+# Validate gap timestamps are in the right ballpark
+if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 120; then
+    pass "restart_gap gap timestamps are accurate (within 120s tolerance)"
+else
+    fail "restart_gap gap timestamp accuracy check failed"
+fi
 
 print_test_report
 teardown_stack
