@@ -231,6 +231,61 @@ wait_for_gaps() {
     return 1
 }
 
+# Wait for the archive envelope count to exceed a threshold.
+# Usage: wait_for_envelope_count_gt [threshold] [max_seconds]
+wait_for_envelope_count_gt() {
+    local threshold="$1"
+    local max_wait="${2:-90}"
+    echo "   Polling archive until envelope count exceeds ${threshold}..."
+    for i in $(seq 1 "$max_wait"); do
+        total="$(count_envelopes 2>/dev/null || echo "0")"
+        if [[ "${total}" =~ ^[0-9]+$ ]] && (( total > threshold )); then
+            echo "   Archive count grew after ${i}s (count=${total})"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "   WARNING: Archive count did not exceed ${threshold} after ${max_wait}s"
+    return 1
+}
+
+# Read total writer consumer lag across all streams from the writer metrics endpoint.
+# Prints an integer lag value, or returns non-zero if metrics are not ready yet.
+get_writer_total_lag() {
+    $COMPOSE exec -T writer python -c "
+from urllib.request import urlopen
+
+data = urlopen('http://localhost:8001/metrics', timeout=2).read().decode()
+total = 0.0
+samples = 0
+for line in data.splitlines():
+    if line.startswith('writer_consumer_lag{'):
+        total += float(line.split()[-1])
+        samples += 1
+if samples == 0:
+    raise SystemExit(1)
+print(int(total))
+" 2>/dev/null
+}
+
+# Wait for the writer to drain its Redpanda backlog after restart.
+# Usage: wait_for_writer_lag_below [threshold] [max_seconds]
+wait_for_writer_lag_below() {
+    local threshold="${1:-0}"
+    local max_wait="${2:-120}"
+    echo "   Polling writer lag until <= ${threshold}..."
+    for i in $(seq 1 "$max_wait"); do
+        lag="$(get_writer_total_lag 2>/dev/null || true)"
+        if [[ "${lag}" =~ ^[0-9]+$ ]] && (( lag <= threshold )); then
+            echo "   Writer lag drained after ${i}s (lag=${lag})"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "   WARNING: Writer lag stayed above ${threshold} after ${max_wait}s"
+    return 1
+}
+
 # Wait for a single service to become healthy.
 # Usage: wait_service_healthy "redpanda" [max_seconds]
 wait_service_healthy() {
