@@ -125,6 +125,7 @@ class TestComposeStacks:
         assert any("TEST_DURATION_SECONDS" in item for item in writer_env)
         assert "timeout" in " ".join(services["collector"]["command"])
         assert "timeout" in " ".join(services["writer"]["command"])
+        assert "NET_ADMIN" in services["collector"].get("cap_add", [])
 
 
 class TestObservabilityAssets:
@@ -210,6 +211,7 @@ class TestChaosScripts:
             "tests/chaos/6_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/2_buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/4_writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/9_ws_disconnect.sh": ["ws_disconnect", "block_egress", "unblock_egress", "setup_stack", "teardown_stack", "print_test_report"],
         }
 
         for relative_path, expected_snippets in scripts.items():

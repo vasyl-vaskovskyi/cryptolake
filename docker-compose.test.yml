@@ -35,6 +35,8 @@ services:
       - -c
       - timeout "$${TEST_DURATION_SECONDS}" /app/.venv/bin/python -m src.collector.main
     restart: "no"
+    cap_add:
+      - NET_ADMIN
 
   writer:
     extends:
