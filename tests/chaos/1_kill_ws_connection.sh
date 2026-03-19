@@ -2,13 +2,14 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-echo "=== Chaos: Kill WebSocket Connection ==="
-echo "Verifies that killing the collector produces restart_gap records"
+echo "=== Chaos: Kill Collector (Unclean Exit) ==="
+echo "Verifies that killing the collector process produces restart_gap records"
 echo "in the archive with component=collector and cause=unclean_exit."
 echo ""
 
 setup_stack
 wait_for_data 30
+event_start_ns=$(ts_now_ns)
 
 echo "1. Killing collector to simulate unclean exit..."
 docker kill "${COLLECTOR_CONTAINER}"
@@ -16,6 +17,7 @@ sleep 10
 
 echo "2. Restarting collector..."
 $COMPOSE up -d collector 2>&1
+event_end_ns=$(ts_now_ns)
 wait_for_data 40
 
 echo "3. Verifying results..."
@@ -76,6 +78,13 @@ fi
 # Archive should have data from both sessions
 total=$(count_envelopes)
 assert_gt "archive has envelopes from both sessions" "$total" 100
+
+# Validate gap timestamps are in the right ballpark
+if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 60; then
+    pass "restart_gap gap timestamps are accurate (within 60s tolerance)"
+else
+    fail "restart_gap gap timestamp accuracy check failed"
+fi
 
 print_test_report
 teardown_stack
