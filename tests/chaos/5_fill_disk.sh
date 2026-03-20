@@ -83,18 +83,19 @@ sleep 30
 echo "2. Checking volume usage before fill..."
 $COMPOSE_DISK exec writer df -h "${DISK_DATA_DIR}" 2>&1
 
-echo "3. Filling tmpfs to trigger disk pressure..."
-# Leave only 1MB free so the next writer flush hits ENOSPC
+echo "3. Filling tmpfs to zero free space..."
+# First pass: fill in 1MB blocks to get close
 avail_mb=$($COMPOSE_DISK exec writer \
     df -m "${DISK_DATA_DIR}" | awk 'NR==2{print $4}')
 fill_mb=$((avail_mb - 1))
 if (( fill_mb > 0 )); then
     $COMPOSE_DISK exec writer \
         dd if=/dev/zero of="${DISK_DATA_DIR}/fill_disk.tmp" bs=1M count="${fill_mb}" 2>/dev/null || true
-    echo "   Filled ${fill_mb}MB, leaving ~1MB free"
-else
-    echo "   Volume already near-full (${avail_mb}MB available)"
 fi
+# Second pass: fill remaining bytes until ENOSPC (dd exits non-zero, || true absorbs it)
+$COMPOSE_DISK exec writer \
+    dd if=/dev/zero of="${DISK_DATA_DIR}/fill_disk_last.tmp" bs=4K 2>/dev/null || true
+echo "   Filled to capacity"
 
 echo "4. Checking volume usage after fill..."
 $COMPOSE_DISK exec writer df -h "${DISK_DATA_DIR}" 2>&1
@@ -113,8 +114,11 @@ else
     pass "writer exited under disk pressure (expected — no ENOSPC handling)"
 fi
 
-echo "7. Cleaning up fill file and freeing space..."
-$COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" 2>/dev/null || true
+echo "7. Cleaning up fill files and freeing space..."
+# If the writer crashed, exec won't work — start a temp container to clean the volume.
+$COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" "${DISK_DATA_DIR}/fill_disk_last.tmp" 2>/dev/null \
+    || docker run --rm -v cryptolake-test_disk_test_data:/data/disk_test alpine \
+           rm -f /data/disk_test/fill_disk.tmp /data/disk_test/fill_disk_last.tmp 2>/dev/null || true
 
 echo "8. Restarting writer for recovery..."
 $COMPOSE_DISK up -d writer 2>&1
