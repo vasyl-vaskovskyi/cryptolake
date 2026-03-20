@@ -21,15 +21,15 @@ wait_for_data 30
 event_start_ns=$(ts_now_ns)
 
 echo "1. Stopping all services (simulating host power-off)..."
-# No maintenance intent — this is an unplanned reboot
-# Use 'stop' (not 'down') to preserve containers/volumes so PostgreSQL
-# retains the old boot ID state; 'down' would destroy it and the writer
-# could never detect the boot ID change on restart.
+# No maintenance intent — this is an unplanned reboot.
+# Use 'stop' to preserve volumes (PostgreSQL data with the old boot ID).
+# Then 'up --force-recreate' to create new containers that pick up the
+# changed CRYPTOLAKE_TEST_BOOT_ID env var while keeping the same volumes.
 $COMPOSE stop 2>&1
 
 echo "2. Bringing stack back up with new boot ID (simulating reboot)..."
 export CRYPTOLAKE_TEST_BOOT_ID="${NEW_BOOT_ID}"
-$COMPOSE up -d 2>&1
+$COMPOSE up -d --force-recreate 2>&1
 event_end_ns=$(ts_now_ns)
 wait_healthy
 wait_for_data 40

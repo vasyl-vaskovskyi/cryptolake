@@ -12,6 +12,8 @@ RUN uv sync --frozen --no-dev
 RUN mkdir -p /data /home/cryptolake/.cache/uv && \
     chown -R cryptolake:cryptolake /data /home/cryptolake
 
+RUN apt-get update && apt-get install -y --no-install-recommends iptables && rm -rf /var/lib/apt/lists/*
+
 USER cryptolake
 
 EXPOSE 8000
