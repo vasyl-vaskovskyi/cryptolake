@@ -1,0 +1,19 @@
+services:
+  writer:
+    volumes:
+      - ./config:/app/config:ro
+      - disk_test_data:/data/disk_test
+    environment:
+      - CONFIG_PATH=/app/config/config.test.yaml
+      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
+      - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - HOST_DATA_DIR=/data/disk_test
+      - TEST_DURATION_SECONDS=${TEST_DURATION_SECONDS:-600}
+      - CRYPTOLAKE_TEST_BOOT_ID=${CRYPTOLAKE_TEST_BOOT_ID:-}
+volumes:
+  disk_test_data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=150m"
