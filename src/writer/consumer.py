@@ -82,6 +82,9 @@ class WriterConsumer:
         self._durable_checkpoints: dict[tuple[str, str, str], StreamCheckpoint] = {}
         # Tracks which streams have completed one-time recovery check
         self._recovery_done: set[tuple[str, str, str]] = set()
+        # Streams where recovery emitted a gap — suppress the first runtime
+        # session change detection (it would duplicate the recovery gap).
+        self._recovery_gap_emitted: set[tuple[str, str, str]] = set()
         # Boot ID and component state for classification
         self._current_boot_id: str = get_host_boot_id()
         self._previous_writer_state: ComponentRuntimeState | None = None
@@ -258,8 +261,19 @@ class WriterConsumer:
         # Determine if there is a session change
         session_changed = current_session_id != previous_session_id
 
+        # Check if boot ID changed — if so, always proceed to classification
+        # even when the first message has the same session (re-read from Redpanda).
+        previous_boot_id_early = (
+            self._previous_writer_state.host_boot_id
+            if self._previous_writer_state else None
+        )
+        boot_id_changed = (
+            previous_boot_id_early is not None
+            and previous_boot_id_early != self._current_boot_id
+        )
+
         # For REST-polled streams (same session), check time delta
-        if not session_changed:
+        if not session_changed and not boot_id_changed:
             # Parse the checkpoint's last_received_at (ISO format from PG)
             try:
                 cp_dt = datetime.datetime.fromisoformat(checkpoint.last_received_at)
@@ -330,6 +344,10 @@ class WriterConsumer:
             exchange=exchange, symbol=symbol, stream=stream,
         ).inc()
 
+        # Mark this stream so that the runtime _check_session_change path
+        # suppresses its first session transition (already covered here).
+        self._recovery_gap_emitted.add(stream_key)
+
         return create_gap_envelope(
             exchange=exchange,
             symbol=symbol,
@@ -380,6 +398,14 @@ class WriterConsumer:
 
         prev_session_id, prev_received_at = prev
         if session_id == prev_session_id:
+            return None
+
+        # Suppress the first session change for streams that already had a
+        # recovery gap emitted — the old→new transition is already recorded
+        # by _check_recovery_gap.  This prevents duplicate restart_gap records
+        # when the writer re-reads old-session messages from Redpanda after restart.
+        if stream_key in self._recovery_gap_emitted:
+            self._recovery_gap_emitted.discard(stream_key)
             return None
 
         exchange, symbol, stream = stream_key

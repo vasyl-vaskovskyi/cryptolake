@@ -124,6 +124,7 @@ class TestWriterSessionChangeDetection:
 
         consumer = WriterConsumer.__new__(WriterConsumer)
         consumer._last_session = {}
+        consumer._recovery_gap_emitted = set()
         consumer._current_boot_id = "boot-1"
         consumer._host_evidence = None
         # Mock state_manager for DB queries in _check_session_change
