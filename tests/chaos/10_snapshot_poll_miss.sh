@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Snapshot Poll Miss ==="
 echo "Blocks collector HTTPS egress to trigger snapshot_poll_miss gaps"
@@ -13,6 +14,7 @@ wait_for_data 30
 echo "1. Blocking collector HTTPS egress (port 443 only)..."
 # Block only new HTTPS connections — existing WS connections survive on established sockets.
 # We use OUTPUT chain to block outbound SYN to port 443 (new REST connections).
+event_start_ns=$(ts_now_ns)
 docker exec "${COLLECTOR_CONTAINER}" iptables -A OUTPUT -p tcp --dport 443 --syn -j DROP 2>/dev/null || true
 echo "   Blocked new HTTPS connections from collector"
 
@@ -24,6 +26,7 @@ sleep 120
 
 echo "3. Restoring collector HTTPS egress..."
 docker exec "${COLLECTOR_CONTAINER}" iptables -F 2>/dev/null || true
+event_end_ns=$(ts_now_ns)
 echo "   Restored HTTPS connections"
 
 echo "4. Waiting 60s for next successful poll cycle..."
@@ -94,6 +97,12 @@ fi
 # WebSocket data should still have been flowing during the block
 total=$(count_envelopes)
 assert_gt "archive has envelopes (WS stayed up during REST block)" "$total" 100
+
+if validate_gap_window_accuracy "snapshot_poll_miss" "$event_start_ns" "$event_end_ns" 180; then
+    pass "snapshot_poll_miss gap timestamps are accurate (within 180s tolerance)"
+else
+    fail "snapshot_poll_miss gap timestamp accuracy check failed"
+fi
 
 print_test_report
 teardown_stack

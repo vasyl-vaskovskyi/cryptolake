@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: True WebSocket Disconnect ==="
 echo "Blocks collector network to trigger ws_disconnect gaps while"

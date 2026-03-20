@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Writer Crash Before Commit ==="
 echo "Sends SIGKILL to the writer (simulates crash mid-flush) and verifies"

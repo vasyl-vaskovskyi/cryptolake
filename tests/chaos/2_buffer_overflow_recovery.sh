@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Buffer Overflow Recovery ==="
 echo "Stops Redpanda to force collector buffer growth, then restarts and"
@@ -50,5 +51,5 @@ else
 fi
 
 print_test_report
-test teardown_stack
+teardown_stack
 print_results

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Kill Collector (Unclean Exit) ==="
 echo "Verifies that killing the collector process produces restart_gap records"

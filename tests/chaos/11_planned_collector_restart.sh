@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Planned Collector-Only Restart ==="
 echo "Stops only the collector with maintenance intent, restarts it,"
 echo "and verifies restart_gap with component=collector, cause=operator_shutdown, planned=true."
 echo ""
 
-DB_URL="${DB_URL:-postgresql://cryptolake:cryptolake@localhost:5432/cryptolake}"
+DB_URL="${DB_URL:-postgresql://cryptolake:postgres@localhost:5432/cryptolake}"
 
 setup_stack
 wait_for_data 30
@@ -23,6 +24,7 @@ uv run cryptolake mark-maintenance \
   --ttl-minutes 30
 
 echo "2. Gracefully stopping collector..."
+event_start_ns=$(ts_now_ns)
 $COMPOSE stop collector 2>&1
 
 echo "3. Waiting 10s (writer continues, Redpanda buffers)..."
@@ -30,12 +32,14 @@ sleep 10
 
 echo "4. Restarting collector..."
 $COMPOSE up -d collector 2>&1
+event_end_ns=$(ts_now_ns)
 wait_healthy
 wait_for_data 40
 
 echo "5. Verifying results..."
 
 # Writer should detect the session change and emit restart_gap records
+wait_for_gaps "restart_gap" 90
 gaps=$(count_gaps "restart_gap")
 assert_gt "restart_gap records exist in archive" "$gaps" 0
 
@@ -95,6 +99,12 @@ fi
 
 total=$(count_envelopes)
 assert_gt "archive has envelopes from both sessions" "$total" 100
+
+if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 120; then
+    pass "restart_gap gap timestamps are accurate (within 120s tolerance)"
+else
+    fail "restart_gap gap timestamp accuracy check failed"
+fi
 
 print_test_report
 teardown_stack

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Depth Reconnect Inflight ==="
 echo "Kills the collector during active depth flow and verifies that depth"
@@ -13,11 +14,13 @@ echo "1. Letting collector stream depth updates for 30s..."
 wait_for_data 30
 
 echo "2. Killing collector during active depth flow..."
+event_start_ns=$(ts_now_ns)
 docker kill "${COLLECTOR_CONTAINER}"
 sleep 5
 
 echo "3. Restarting collector..."
 $COMPOSE up -d collector 2>&1
+event_end_ns=$(ts_now_ns)
 
 echo "4. Waiting 60s for depth snapshot resync..."
 sleep 60
@@ -79,6 +82,12 @@ fi
 # Archive should have depth data
 total=$(count_envelopes)
 assert_gt "archive has envelopes" "$total" 0
+
+if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 120; then
+    pass "restart_gap gap timestamps are accurate (within 120s tolerance)"
+else
+    fail "restart_gap gap timestamp accuracy check failed"
+fi
 
 print_test_report
 teardown_stack

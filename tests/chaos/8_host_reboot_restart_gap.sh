@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+trap teardown_stack EXIT
 
 echo "=== Chaos: Host Reboot Restart Gap ==="
 echo "Simulates a host reboot by restarting the stack with a new boot ID."
@@ -21,7 +22,10 @@ event_start_ns=$(ts_now_ns)
 
 echo "1. Stopping all services (simulating host power-off)..."
 # No maintenance intent — this is an unplanned reboot
-$COMPOSE down 2>&1
+# Use 'stop' (not 'down') to preserve containers/volumes so PostgreSQL
+# retains the old boot ID state; 'down' would destroy it and the writer
+# could never detect the boot ID change on restart.
+$COMPOSE stop 2>&1
 
 echo "2. Bringing stack back up with new boot ID (simulating reboot)..."
 export CRYPTOLAKE_TEST_BOOT_ID="${NEW_BOOT_ID}"
