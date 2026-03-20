@@ -272,31 +272,17 @@ class WriterConsumer:
             and previous_boot_id_early != self._current_boot_id
         )
 
-        # For REST-polled streams (same session), check time delta.
-        # Skip this short-circuit when boot ID changed (host reboot).
-        if not session_changed and not boot_id_changed:
-            # Parse the checkpoint's last_received_at (ISO format from PG)
-            try:
-                cp_dt = datetime.datetime.fromisoformat(checkpoint.last_received_at)
-                if cp_dt.tzinfo is None:
-                    cp_dt = cp_dt.replace(tzinfo=datetime.timezone.utc)
-                cp_received_at_ns = int(cp_dt.timestamp() * 1_000_000_000)
-            except (ValueError, TypeError):
-                cp_received_at_ns = 0
-
-            time_delta_ns = current_received_at - cp_received_at_ns
-            gap_threshold_ns = self._rest_poll_interval_ns * _REST_POLL_GAP_MULTIPLIER
-
-            if time_delta_ns <= gap_threshold_ns:
-                # Within expected interval -- no gap
-                return None
-            # Time delta exceeds threshold -- this is a gap even without session change
-            logger.warning(
-                "rest_poll_time_gap_detected",
-                stream_key=stream_key,
-                delta_seconds=time_delta_ns / 1_000_000_000,
-                threshold_seconds=gap_threshold_ns / 1_000_000_000,
-            )
+        # If the writer previously ran (has durable state in PG), it restarted.
+        # A restart always means a potential data gap — even when the first
+        # message has the same session (re-read from Redpanda) and a small
+        # time delta.  Always proceed to classification so the gap is recorded.
+        #
+        # The time-delta check is only valid on first-ever run (no previous
+        # writer state), which never reaches here because there would be no
+        # durable checkpoints either.
+        if not session_changed and not boot_id_changed and self._previous_writer_state is None:
+            # First-ever run with a stale checkpoint — no gap expected
+            return None
 
         # Gather evidence for classifier
         previous_boot_id = (

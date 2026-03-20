@@ -407,9 +407,11 @@ class TestRestPolledStreamRecovery:
         assert gap is not None
         assert gap["reason"] == "restart_gap"
 
-    def test_no_gap_when_within_poll_interval(self):
-        """When time delta is within the expected poll interval, no gap should be emitted
-        even if session_id is the same (normal REST poll behavior)."""
+    def test_gap_emitted_after_writer_restart_even_within_poll_interval(self):
+        """After a writer restart, a recovery gap should ALWAYS be emitted —
+        even for REST-polled streams within the normal poll interval.
+        A writer restart means potential data loss; silent gaps violate the
+        system invariant 'no data lost silently'."""
         from src.writer.consumer import WriterConsumer
 
         state_manager = MagicMock(spec=StateManager)
@@ -450,7 +452,9 @@ class TestRestPolledStreamRecovery:
         )
         gap = consumer._check_recovery_gap(envelope)
 
-        assert gap is None
+        # Writer restarted → gap must be recorded regardless of poll interval
+        assert gap is not None
+        assert gap["reason"] == "restart_gap"
 
 
 class TestCheckpointMetaInFlushResult:
