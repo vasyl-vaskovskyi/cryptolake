@@ -206,7 +206,7 @@ class TestChaosScripts:
     def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
         scripts = {
             "tests/chaos/3_kill_writer.sh": ["docker kill", "WRITER_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/1_kill_ws_connection.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/1_collector_unclean_exit§.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/5_fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/6_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/7_full_stack_restart_gap.sh": ["mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],

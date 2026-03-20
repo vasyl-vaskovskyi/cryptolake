@@ -937,13 +937,13 @@ git commit -m "feat(chaos): rewrite test 8 as real docker-based host reboot inte
 ### Task 9: Rename Test 1 and add gap-window timestamp validation
 
 **Files:**
-- Modify: `tests/chaos/1_kill_ws_connection.sh`
+- Modify: `tests/chaos/1_collector_unclean_exit.sh`
 
 Test 1 is misnamed — it says "Kill WebSocket Connection" but actually kills the collector process. Now that we have Test 9 for the true `ws_disconnect` scenario, rename Test 1's header to accurately describe what it tests and add gap-window timestamp validation.
 
 - [ ] **Step 1: Update the test header**
 
-In `tests/chaos/1_kill_ws_connection.sh`, replace:
+In `tests/chaos/1_collector_unclean_exit.sh`, replace:
 
 ```bash
 echo "=== Chaos: Kill WebSocket Connection ==="
@@ -961,7 +961,7 @@ echo "in the archive with component=collector and cause=unclean_exit."
 
 - [ ] **Step 2: Add gap-window timestamp validation**
 
-In `tests/chaos/1_kill_ws_connection.sh`, before `setup_stack`, add:
+In `tests/chaos/1_collector_unclean_exit.sh`, before `setup_stack`, add:
 
 ```bash
 # We'll capture timestamps around the kill event for gap-window validation
@@ -992,13 +992,13 @@ fi
 
 - [ ] **Step 3: Verify script syntax**
 
-Run: `bash -n tests/chaos/1_kill_ws_connection.sh`
+Run: `bash -n tests/chaos/1_collector_unclean_exit.sh`
 Expected: no output, exit 0
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tests/chaos/1_kill_ws_connection.sh
+git add tests/chaos/1_collector_unclean_exit.sh
 git commit -m "fix(chaos): rename test 1 header to 'Kill Collector' and add gap-window timestamp validation"
 ```
 
