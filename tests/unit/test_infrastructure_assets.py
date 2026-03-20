@@ -209,6 +209,7 @@ class TestChaosScripts:
             "tests/chaos/1_kill_ws_connection.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/5_fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/6_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/7_full_stack_restart_gap.sh": ["mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/2_buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/4_writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/8_host_reboot_restart_gap.sh": ["host", "reboot", "restart_gap", "BOOT_ID", "setup_stack", "teardown_stack", "print_test_report"],
