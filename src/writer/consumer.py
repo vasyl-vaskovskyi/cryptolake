@@ -119,6 +119,9 @@ class WriterConsumer:
             elif cs.component == "collector":
                 self._previous_collector_state = cs
 
+        # Load active maintenance intent (if any) for gap classification.
+        self._maintenance_intent = await self.state_manager.load_active_maintenance_intent()
+
         logger.info(
             "recovery_state_loaded",
             checkpoints=len(self._durable_checkpoints),
@@ -127,6 +130,10 @@ class WriterConsumer:
                 if self._previous_writer_state else None
             ),
             current_boot_id=self._current_boot_id,
+            maintenance_intent=(
+                self._maintenance_intent.maintenance_id
+                if self._maintenance_intent else None
+            ),
         )
 
         # Discover already-sealed files (those with .sha256 sidecar)

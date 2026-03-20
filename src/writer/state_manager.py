@@ -479,6 +479,32 @@ class StateManager:
             })
         logger.debug("maintenance_intent_created", maintenance_id=intent.maintenance_id)
 
+    async def load_active_maintenance_intent(self) -> MaintenanceIntent | None:
+        """Load the most recent unconsumed, unexpired maintenance intent."""
+        await self._ensure_connected()
+        assert self._conn is not None
+        async with self._conn.cursor() as cur:
+            await cur.execute("""
+                SELECT maintenance_id, scope, planned_by, reason,
+                       created_at, expires_at, consumed_at
+                FROM maintenance_intent
+                WHERE consumed_at IS NULL AND expires_at > NOW()
+                ORDER BY created_at DESC
+                LIMIT 1;
+            """)
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            return MaintenanceIntent(
+                maintenance_id=row[0],
+                scope=row[1],
+                planned_by=row[2],
+                reason=row[3],
+                created_at=str(row[4]),
+                expires_at=str(row[5]),
+                consumed_at=str(row[6]) if row[6] else None,
+            )
+
     async def consume_maintenance_intent(self, maintenance_id: str) -> None:
         """Mark a maintenance intent as consumed (set consumed_at = NOW())."""
         await self._ensure_connected()

@@ -12,11 +12,14 @@ setup_stack
 wait_for_data 30
 
 echo "1. Blocking collector HTTPS egress (port 443 only)..."
-# Block only new HTTPS connections — existing WS connections survive on established sockets.
-# We use OUTPUT chain to block outbound SYN to port 443 (new REST connections).
+# Block ALL outbound TCP to port 443 (not just SYN). The --syn filter would only
+# block new connections, but aiohttp reuses keepalive connections for REST polls.
+# Blocking all port-443 traffic will also break WebSocket streams, but that's
+# acceptable — the test verifies snapshot_poll_miss gaps, and WS will reconnect
+# after the block is lifted.
 event_start_ns=$(ts_now_ns)
-docker exec -u root "${COLLECTOR_CONTAINER}" iptables -A OUTPUT -p tcp --dport 443 --syn -j DROP 2>/dev/null || true
-echo "   Blocked new HTTPS connections from collector"
+docker exec -u root "${COLLECTOR_CONTAINER}" iptables -A OUTPUT -p tcp --dport 443 -j DROP 2>/dev/null || true
+echo "   Blocked all HTTPS traffic from collector"
 
 echo "2. Waiting 120s for snapshot poll retries to exhaust..."
 # Test config: snapshot_interval=30s, open_interest.poll_interval=30s
