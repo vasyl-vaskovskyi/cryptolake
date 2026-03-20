@@ -272,7 +272,8 @@ class WriterConsumer:
             and previous_boot_id_early != self._current_boot_id
         )
 
-        # For REST-polled streams (same session), check time delta
+        # For REST-polled streams (same session), check time delta.
+        # Skip this short-circuit when boot ID changed (host reboot).
         if not session_changed and not boot_id_changed:
             # Parse the checkpoint's last_received_at (ISO format from PG)
             try:
@@ -439,13 +440,21 @@ class WriterConsumer:
             logger.warning("runtime_gap_classification_db_fallback",
                            detail="Could not load DB state; defaulting to unclean_exit")
 
+        # system_clean_shutdown is true when BOTH previous writer AND previous
+        # collector had clean shutdowns (full-stack planned restart).
+        writer_clean_shutdown = (
+            self._previous_writer_state is not None
+            and self._previous_writer_state.clean_shutdown_at is not None
+        )
+        system_clean_shutdown = writer_clean_shutdown and collector_clean_shutdown
+
         classification = classify_restart_gap(
             previous_boot_id=self._current_boot_id,
             current_boot_id=self._current_boot_id,
             previous_session_id=prev_session_id,
             current_session_id=session_id,
             collector_clean_shutdown=collector_clean_shutdown,
-            system_clean_shutdown=False,  # writer is still running
+            system_clean_shutdown=system_clean_shutdown,
             maintenance_intent=maintenance_intent,
             host_evidence=self._host_evidence,
         )

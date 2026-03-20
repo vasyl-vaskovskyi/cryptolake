@@ -187,7 +187,9 @@ class StateManager:
            component, instance_id, host_boot_id, started_at, last_heartbeat_at,
            clean_shutdown_at, planned_shutdown, maintenance_id
     FROM component_runtime_state
-    ORDER BY component, started_at DESC;
+    ORDER BY component,
+             CASE WHEN clean_shutdown_at IS NOT NULL THEN 0 ELSE 1 END,
+             started_at DESC;
     """
 
     # ── maintenance_intent table ─────────────────────────────────────────
