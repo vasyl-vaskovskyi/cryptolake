@@ -39,7 +39,9 @@ class OpenInterestPoller:
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15, sock_connect=5),
+        )
         self._running = True
         self._stop_event = asyncio.Event()
         self._tasks = []
