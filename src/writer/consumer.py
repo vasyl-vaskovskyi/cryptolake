@@ -352,14 +352,17 @@ class WriterConsumer:
             maintenance_id=classification.get("maintenance_id"),
         )
 
-    def _check_session_change(self, envelope: dict) -> dict | None:
+    async def _check_session_change(self, envelope: dict) -> dict | None:
         """Detect collector session changes and return a gap envelope if one occurred.
 
-        When the collector crashes (SIGKILL), it cannot emit gap records itself.
-        The writer detects the session_id change and injects a restart_gap
-        record into the archive to record the data loss window.
+        When the collector restarts (gracefully or via crash/SIGKILL), it cannot
+        emit gap records itself. The writer detects the session_id change and
+        injects a restart_gap record into the archive to record the data loss
+        window.
 
         This is the RUNTIME detection path (after initial recovery is done).
+        It queries the DB for fresh collector shutdown state and maintenance
+        intent so that planned collector restarts are correctly classified.
         """
         stream_key = (
             envelope.get("exchange", ""),
@@ -391,6 +394,36 @@ class WriterConsumer:
         writer_metrics.session_gaps_detected_total.labels(
             exchange=exchange, symbol=symbol, stream=stream,
         ).inc()
+
+        # Load the PREVIOUS collector's state (by its instance_id/session_id)
+        # and the active maintenance intent from DB so that planned
+        # collector-only restarts are classified correctly.
+        # We must look up the specific previous instance because the new
+        # collector has already registered itself with clean_shutdown_at=NULL.
+        collector_clean_shutdown = False
+        maintenance_intent = None
+        try:
+            prev_state = await self.state_manager.load_component_state_by_instance(
+                "collector", prev_session_id,
+            )
+            if prev_state is not None:
+                collector_clean_shutdown = prev_state.clean_shutdown_at is not None
+            maintenance_intent = await self.state_manager.load_active_maintenance_intent()
+        except Exception:
+            logger.warning("runtime_gap_classification_db_fallback",
+                           detail="Could not load DB state; defaulting to unclean_exit")
+
+        classification = classify_restart_gap(
+            previous_boot_id=self._current_boot_id,
+            current_boot_id=self._current_boot_id,
+            previous_session_id=prev_session_id,
+            current_session_id=session_id,
+            collector_clean_shutdown=collector_clean_shutdown,
+            system_clean_shutdown=False,  # writer is still running
+            maintenance_intent=maintenance_intent,
+            host_evidence=self._host_evidence,
+        )
+
         return create_gap_envelope(
             exchange=exchange,
             symbol=symbol,
@@ -402,11 +435,12 @@ class WriterConsumer:
             reason="restart_gap",
             detail=f"Collector session changed: {prev_session_id} -> {session_id}",
             received_at=received_at,
-            component="collector",
-            cause="unclean_exit",
-            planned=False,
+            component=classification.get("component"),
+            cause=classification.get("cause"),
+            planned=classification.get("planned"),
             classifier="writer_runtime_v1",
-            evidence=["collector_session_changed_at_runtime"],
+            evidence=classification.get("evidence"),
+            maintenance_id=classification.get("maintenance_id"),
         )
 
     def _resolve_file_path(self, file_path: Path) -> Path:
@@ -516,7 +550,7 @@ class WriterConsumer:
 
                 # Runtime session change detection (covers collector crash/SIGKILL
                 # after initial recovery is done)
-                gap_envelope = self._check_session_change(envelope)
+                gap_envelope = await self._check_session_change(envelope)
                 if gap_envelope is not None:
                     gap_envelope = add_broker_coordinates(
                         gap_envelope,

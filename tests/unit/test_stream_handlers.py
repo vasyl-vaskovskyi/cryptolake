@@ -119,10 +119,17 @@ class TestWriterSessionChangeDetection:
     """Writer-side detection of collector session changes (crash/SIGKILL coverage)."""
 
     def _make_consumer(self):
+        from unittest.mock import AsyncMock
         from src.writer.consumer import WriterConsumer
 
         consumer = WriterConsumer.__new__(WriterConsumer)
         consumer._last_session = {}
+        consumer._current_boot_id = "boot-1"
+        consumer._host_evidence = None
+        # Mock state_manager for DB queries in _check_session_change
+        consumer.state_manager = AsyncMock()
+        consumer.state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
+        consumer.state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
         return consumer
 
     def _make_envelope(self, session_id="s1", received_at=1000, stream="trades"):
@@ -135,22 +142,25 @@ class TestWriterSessionChangeDetection:
             "received_at": received_at,
         }
 
-    def test_first_message_no_gap(self):
+    @pytest.mark.asyncio
+    async def test_first_message_no_gap(self):
         consumer = self._make_consumer()
         env = self._make_envelope()
-        result = consumer._check_session_change(env)
+        result = await consumer._check_session_change(env)
         assert result is None
 
-    def test_same_session_no_gap(self):
+    @pytest.mark.asyncio
+    async def test_same_session_no_gap(self):
         consumer = self._make_consumer()
-        consumer._check_session_change(self._make_envelope(session_id="s1", received_at=1000))
-        result = consumer._check_session_change(self._make_envelope(session_id="s1", received_at=2000))
+        await consumer._check_session_change(self._make_envelope(session_id="s1", received_at=1000))
+        result = await consumer._check_session_change(self._make_envelope(session_id="s1", received_at=2000))
         assert result is None
 
-    def test_session_change_emits_gap(self):
+    @pytest.mark.asyncio
+    async def test_session_change_emits_gap(self):
         consumer = self._make_consumer()
-        consumer._check_session_change(self._make_envelope(session_id="s1", received_at=1000))
-        result = consumer._check_session_change(self._make_envelope(session_id="s2", received_at=5000))
+        await consumer._check_session_change(self._make_envelope(session_id="s1", received_at=1000))
+        result = await consumer._check_session_change(self._make_envelope(session_id="s2", received_at=5000))
         assert result is not None
         assert result["type"] == "gap"
         assert result["reason"] == "restart_gap"
@@ -159,16 +169,17 @@ class TestWriterSessionChangeDetection:
         assert "s1" in result["detail"]
         assert "s2" in result["detail"]
 
-    def test_session_change_per_stream(self):
+    @pytest.mark.asyncio
+    async def test_session_change_per_stream(self):
         """Session tracking is per (exchange, symbol, stream) — different streams are independent."""
         consumer = self._make_consumer()
-        consumer._check_session_change(self._make_envelope(session_id="s1", stream="trades"))
-        consumer._check_session_change(self._make_envelope(session_id="s1", stream="depth"))
+        await consumer._check_session_change(self._make_envelope(session_id="s1", stream="trades"))
+        await consumer._check_session_change(self._make_envelope(session_id="s1", stream="depth"))
         # Change session for trades only
-        result_trades = consumer._check_session_change(
+        result_trades = await consumer._check_session_change(
             self._make_envelope(session_id="s2", stream="trades", received_at=2000)
         )
-        result_depth = consumer._check_session_change(
+        result_depth = await consumer._check_session_change(
             self._make_envelope(session_id="s1", stream="depth", received_at=2000)
         )
         assert result_trades is not None

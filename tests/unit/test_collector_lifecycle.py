@@ -53,6 +53,7 @@ def _make_collector_with_mocked_deps():
     sm_mock.mark_component_clean_shutdown = AsyncMock()
     sm_mock.create_maintenance_intent = AsyncMock()
     sm_mock.consume_maintenance_intent = AsyncMock()
+    sm_mock.load_active_maintenance_intent = AsyncMock(return_value=None)
 
     collector._state_manager = sm_mock
 

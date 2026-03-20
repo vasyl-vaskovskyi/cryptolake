@@ -110,9 +110,10 @@ class Collector:
         try:
             self._state_manager = StateManager(self._db_url)
             await self._state_manager.connect()
-        except Exception:
+        except Exception as exc:
             logger.warning("lifecycle_pg_connect_failed",
-                           msg="Collector will continue without lifecycle tracking")
+                           msg="Collector will continue without lifecycle tracking",
+                           error=str(exc))
             self._state_manager = None
 
     async def _register_lifecycle_start(self) -> None:
@@ -162,18 +163,29 @@ class Collector:
     async def _mark_lifecycle_shutdown(self) -> None:
         """Mark this collector instance as cleanly shut down.
 
-        If an active maintenance intent is set, attach it and mark as planned.
+        Loads the active maintenance intent from PG at shutdown time (the intent
+        is typically recorded by the operator *after* the collector starts).
         """
         if self._state_manager is None:
             return
 
-        planned = self._active_maintenance_id is not None
+        # Load the maintenance intent now — it may have been created after startup.
+        maintenance_id = self._active_maintenance_id
+        if maintenance_id is None:
+            try:
+                intent = await self._state_manager.load_active_maintenance_intent()
+                if intent is not None:
+                    maintenance_id = intent.maintenance_id
+            except Exception:
+                pass  # best-effort; fall through with maintenance_id=None
+
+        planned = maintenance_id is not None
         try:
             await self._state_manager.mark_component_clean_shutdown(
                 component="collector",
                 instance_id=self.session_id,
                 planned_shutdown=planned,
-                maintenance_id=self._active_maintenance_id,
+                maintenance_id=maintenance_id,
             )
             logger.info("lifecycle_clean_shutdown_marked",
                         instance_id=self.session_id, planned=planned)
@@ -313,8 +325,12 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    shutdown_task = None
+
     def _signal_handler():
-        loop.create_task(collector.shutdown())
+        nonlocal shutdown_task
+        if shutdown_task is None:
+            shutdown_task = loop.create_task(collector.shutdown())
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _signal_handler)
@@ -322,6 +338,10 @@ def main():
     try:
         loop.run_until_complete(collector.start())
     finally:
+        # Ensure the shutdown task completes before closing the loop,
+        # so that clean_shutdown_at is written to the database.
+        if shutdown_task is not None and not shutdown_task.done():
+            loop.run_until_complete(shutdown_task)
         loop.close()
 
 

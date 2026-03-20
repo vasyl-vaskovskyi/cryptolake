@@ -235,8 +235,9 @@ class StateManager:
             try:
                 async with self._conn.cursor() as cur:
                     await cur.execute(sql)
-            except psycopg.errors.DuplicateObject:
-                pass  # Table/type already exists from a previous run
+            except (psycopg.errors.DuplicateObject, psycopg.errors.UniqueViolation,
+                    psycopg.errors.DuplicateTable):
+                pass  # Table/type already exists or concurrent CREATE race
 
     async def close(self) -> None:
         if self._conn:
@@ -463,6 +464,37 @@ class StateManager:
                     maintenance_id=row[7],
                 ))
         return states
+
+    async def load_component_state_by_instance(
+        self, component: str, instance_id: str,
+    ) -> ComponentRuntimeState | None:
+        """Load a single component runtime state by its instance_id."""
+        await self._ensure_connected()
+        assert self._conn is not None
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT component, instance_id, host_boot_id, started_at,
+                       last_heartbeat_at, clean_shutdown_at,
+                       planned_shutdown, maintenance_id
+                FROM component_runtime_state
+                WHERE component = %(component)s AND instance_id = %(instance_id)s;
+                """,
+                {"component": component, "instance_id": instance_id},
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            return ComponentRuntimeState(
+                component=row[0],
+                instance_id=row[1],
+                host_boot_id=row[2],
+                started_at=str(row[3]),
+                last_heartbeat_at=str(row[4]),
+                clean_shutdown_at=str(row[5]) if row[5] else None,
+                planned_shutdown=row[6],
+                maintenance_id=row[7],
+            )
 
     # ── maintenance intent methods ───────────────────────────────────────
 

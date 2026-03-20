@@ -629,12 +629,16 @@ class TestRuntimeSessionDetectionPreserved:
     """The existing _check_session_change() should still work for detecting
     session changes during normal (non-recovery) operation."""
 
-    def test_runtime_session_change_still_works(self):
+    @pytest.mark.asyncio
+    async def test_runtime_session_change_still_works(self):
         """After recovery, _check_session_change should still detect collector
         session changes during normal runtime."""
         from src.writer.consumer import WriterConsumer
 
         state_manager = MagicMock(spec=StateManager)
+        # Mock async DB calls used by the runtime path
+        state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
+        state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
         buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
         compressor = MagicMock()
 
@@ -650,18 +654,77 @@ class TestRuntimeSessionDetectionPreserved:
 
         # Simulate normal runtime -- first envelope sets session
         env1 = _make_data_envelope(collector_session_id="session-A")
-        result1 = consumer._check_session_change(env1)
+        result1 = await consumer._check_session_change(env1)
         assert result1 is None  # first message, no prior session
 
         # Same session -- no gap
         env2 = _make_data_envelope(collector_session_id="session-A")
-        result2 = consumer._check_session_change(env2)
+        result2 = await consumer._check_session_change(env2)
         assert result2 is None
 
-        # Session change during runtime
+        # Session change during runtime (no clean shutdown, no intent → unclean_exit)
         env3 = _make_data_envelope(collector_session_id="session-B")
-        result3 = consumer._check_session_change(env3)
+        result3 = await consumer._check_session_change(env3)
         assert result3 is not None
         assert result3["reason"] == "restart_gap"
         assert result3["component"] == "collector"
         assert result3["cause"] == "unclean_exit"
+
+    @pytest.mark.asyncio
+    async def test_runtime_planned_collector_restart(self):
+        """When collector does a graceful shutdown with maintenance intent,
+        runtime session change should be classified as planned."""
+        from src.writer.consumer import WriterConsumer
+
+        intent = MaintenanceIntent(
+            maintenance_id="maint-1",
+            scope="collector",
+            planned_by="cli",
+            reason="chaos test",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expires_at=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+            consumed_at=None,
+        )
+        collector_state = ComponentRuntimeState(
+            component="collector",
+            instance_id="collector-A",
+            host_boot_id="boot-1",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            last_heartbeat_at=datetime.now(timezone.utc).isoformat(),
+            clean_shutdown_at=datetime.now(timezone.utc).isoformat(),
+            planned_shutdown=True,
+            maintenance_id="maint-1",
+        )
+
+        state_manager = MagicMock(spec=StateManager)
+        state_manager.load_component_state_by_instance = AsyncMock(
+            return_value=collector_state,
+        )
+        state_manager.load_active_maintenance_intent = AsyncMock(
+            return_value=intent,
+        )
+        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
+        compressor = MagicMock()
+
+        consumer = WriterConsumer(
+            brokers=["localhost:9092"],
+            topics=["binance.trades"],
+            group_id="test",
+            buffer_manager=buffer_manager,
+            compressor=compressor,
+            state_manager=state_manager,
+            base_dir="/data",
+        )
+
+        env1 = _make_data_envelope(collector_session_id="session-A")
+        await consumer._check_session_change(env1)
+
+        env2 = _make_data_envelope(collector_session_id="session-B")
+        result = await consumer._check_session_change(env2)
+
+        assert result is not None
+        assert result["reason"] == "restart_gap"
+        assert result["component"] == "collector"
+        assert result["cause"] == "operator_shutdown"
+        assert result["planned"] is True
+        assert result["maintenance_id"] == "maint-1"
