@@ -141,22 +141,18 @@ class StateManager:
     # ── component_runtime_state table ────────────────────────────────────
 
     CREATE_COMPONENT_RUNTIME_STATE_SQL = """
-    DO $$ BEGIN
-        CREATE TABLE IF NOT EXISTS component_runtime_state (
-            component TEXT NOT NULL,
-            instance_id TEXT NOT NULL,
-            host_boot_id TEXT NOT NULL,
-            started_at TIMESTAMPTZ NOT NULL,
-            last_heartbeat_at TIMESTAMPTZ NOT NULL,
-            clean_shutdown_at TIMESTAMPTZ,
-            planned_shutdown BOOLEAN NOT NULL DEFAULT FALSE,
-            maintenance_id TEXT,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (component, instance_id)
-        );
-    EXCEPTION
-        WHEN duplicate_object THEN null;
-    END $$;
+    CREATE TABLE IF NOT EXISTS component_runtime_state (
+        component TEXT NOT NULL,
+        instance_id TEXT NOT NULL,
+        host_boot_id TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        last_heartbeat_at TIMESTAMPTZ NOT NULL,
+        clean_shutdown_at TIMESTAMPTZ,
+        planned_shutdown BOOLEAN NOT NULL DEFAULT FALSE,
+        maintenance_id TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (component, instance_id)
+    );
     """
 
     UPSERT_COMPONENT_RUNTIME_SQL = """
@@ -230,11 +226,17 @@ class StateManager:
         import psycopg
 
         self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
-        async with self._conn.cursor() as cur:
-            await cur.execute(self.CREATE_TABLE_SQL)
-            await cur.execute(self.CREATE_STREAM_CHECKPOINT_SQL)
-            await cur.execute(self.CREATE_COMPONENT_RUNTIME_STATE_SQL)
-            await cur.execute(self.CREATE_MAINTENANCE_INTENT_SQL)
+        for sql in (
+            self.CREATE_TABLE_SQL,
+            self.CREATE_STREAM_CHECKPOINT_SQL,
+            self.CREATE_COMPONENT_RUNTIME_STATE_SQL,
+            self.CREATE_MAINTENANCE_INTENT_SQL,
+        ):
+            try:
+                async with self._conn.cursor() as cur:
+                    await cur.execute(sql)
+            except psycopg.errors.DuplicateObject:
+                pass  # Table/type already exists from a previous run
 
     async def close(self) -> None:
         if self._conn:

@@ -4,6 +4,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Source .env so tests have the same env vars as Docker Compose
+# (e.g. POSTGRES_PASSWORD for mark-maintenance CLI).
+# shellcheck disable=SC1091
+[[ -f "${REPO_ROOT}/.env" ]] && set -a && source "${REPO_ROOT}/.env" && set +a
+
 COMPOSE_FILE="${REPO_ROOT}/docker-compose.test.yml"
 COMPOSE="docker compose -f ${COMPOSE_FILE}"
 PROD_COMPOSE="docker compose -f ${REPO_ROOT}/docker-compose.yml"
