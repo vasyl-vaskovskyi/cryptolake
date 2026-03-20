@@ -8,7 +8,7 @@ echo "Verifies that a planned full-stack restart (docker compose down/up)"
 echo "with a maintenance intent produces restart_gap records with planned=true."
 echo ""
 
-DB_URL="${DB_URL:-postgresql://cryptolake:postgres@localhost:5432/cryptolake}"
+DB_URL="${DB_URL:-postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@localhost:5432/cryptolake}"
 
 setup_stack
 wait_for_data 30

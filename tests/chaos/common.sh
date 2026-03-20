@@ -314,8 +314,8 @@ wait_service_healthy() {
 # Usage: block_egress <container_name>
 block_egress() {
     local container="${1:?Usage: block_egress <container_name>}"
-    docker exec "${container}" iptables -A OUTPUT -j DROP 2>/dev/null || true
-    docker exec "${container}" iptables -A INPUT -j DROP 2>/dev/null || true
+    docker exec -u root "${container}" iptables -A OUTPUT -j DROP 2>/dev/null || true
+    docker exec -u root "${container}" iptables -A INPUT -j DROP 2>/dev/null || true
     echo "   Blocked network traffic for ${container}"
 }
 
@@ -323,7 +323,7 @@ block_egress() {
 # Usage: unblock_egress <container_name>
 unblock_egress() {
     local container="${1:?Usage: unblock_egress <container_name>}"
-    docker exec "${container}" iptables -F 2>/dev/null || true
+    docker exec -u root "${container}" iptables -F 2>/dev/null || true
     echo "   Restored network traffic for ${container}"
 }
 

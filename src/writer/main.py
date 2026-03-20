@@ -85,7 +85,11 @@ class Writer:
         logger.info("writer_starting", topics=self.topics, boot_id=self._boot_id)
         await self.state_manager.connect()
 
-        # Record writer runtime state on start
+        # Start the consumer FIRST so it loads previous component state
+        # (including the old boot ID) before we overwrite it with the current run.
+        await self.consumer.start()
+
+        # Now record the current writer runtime state
         await self.state_manager.upsert_component_runtime(ComponentRuntimeState(
             component="writer",
             instance_id=self._instance_id,
@@ -95,8 +99,6 @@ class Writer:
         ))
         logger.info("writer_runtime_registered",
                      instance_id=self._instance_id, boot_id=self._boot_id)
-
-        await self.consumer.start()
         await asyncio.gather(
             self.consumer.consume_loop(),
             self._start_http(),

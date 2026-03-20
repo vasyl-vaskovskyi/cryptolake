@@ -8,7 +8,7 @@ echo "Stops only the collector with maintenance intent, restarts it,"
 echo "and verifies restart_gap with component=collector, cause=operator_shutdown, planned=true."
 echo ""
 
-DB_URL="${DB_URL:-postgresql://cryptolake:postgres@localhost:5432/cryptolake}"
+DB_URL="${DB_URL:-postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@localhost:5432/cryptolake}"
 
 setup_stack
 wait_for_data 30

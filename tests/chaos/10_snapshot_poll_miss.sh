@@ -15,7 +15,7 @@ echo "1. Blocking collector HTTPS egress (port 443 only)..."
 # Block only new HTTPS connections — existing WS connections survive on established sockets.
 # We use OUTPUT chain to block outbound SYN to port 443 (new REST connections).
 event_start_ns=$(ts_now_ns)
-docker exec "${COLLECTOR_CONTAINER}" iptables -A OUTPUT -p tcp --dport 443 --syn -j DROP 2>/dev/null || true
+docker exec -u root "${COLLECTOR_CONTAINER}" iptables -A OUTPUT -p tcp --dport 443 --syn -j DROP 2>/dev/null || true
 echo "   Blocked new HTTPS connections from collector"
 
 echo "2. Waiting 120s for snapshot poll retries to exhaust..."
@@ -25,7 +25,7 @@ echo "2. Waiting 120s for snapshot poll retries to exhaust..."
 sleep 120
 
 echo "3. Restoring collector HTTPS egress..."
-docker exec "${COLLECTOR_CONTAINER}" iptables -F 2>/dev/null || true
+docker exec -u root "${COLLECTOR_CONTAINER}" iptables -F 2>/dev/null || true
 event_end_ns=$(ts_now_ns)
 echo "   Restored HTTPS connections"
 
