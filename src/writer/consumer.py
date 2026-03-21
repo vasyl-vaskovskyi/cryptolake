@@ -98,11 +98,17 @@ class WriterConsumer:
     async def start(self) -> None:
         from confluent_kafka import Consumer as KafkaConsumer
 
+        def _on_commit(err, partitions):
+            if err is not None:
+                logger.error("kafka_commit_failed", error=str(err))
+                writer_metrics.kafka_commit_failures_total.inc()
+
         self._consumer = KafkaConsumer({
             "bootstrap.servers": ",".join(self.brokers),
             "group.id": self.group_id,
             "enable.auto.commit": False,
             "auto.offset.reset": "earliest",
+            "on_commit": _on_commit,
         })
 
         # Load state and seek to last known offsets

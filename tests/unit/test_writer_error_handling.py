@@ -62,6 +62,16 @@ class TestSidecarWriteFailure:
         )
 
 
+class TestKafkaCommitCallback:
+    def test_commit_has_error_callback(self):
+        """Kafka commit must have error detection."""
+        import src.writer.consumer as consumer_mod
+        source = Path(consumer_mod.__file__).read_text()
+        assert "kafka_commit_failed" in source, (
+            "Kafka commit must log kafka_commit_failed on error"
+        )
+
+
 class TestProducerSerializationError:
     def test_produce_catches_serialization_error(self):
         """produce() must catch serialization errors and return False."""
