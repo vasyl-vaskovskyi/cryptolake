@@ -846,6 +846,21 @@ class WriterConsumer:
                 checkpoints=len(checkpoints),
             )
             writer_metrics.pg_commit_failures_total.inc()
+            # Emit gap for each affected stream so archive knows data may be inconsistent
+            now_ns = time.time_ns()
+            for result in results:
+                gap = create_gap_envelope(
+                    exchange=result.target.exchange,
+                    symbol=result.target.symbol,
+                    stream=result.target.stream,
+                    collector_session_id="",
+                    session_seq=-1,
+                    gap_start_ts=now_ns,
+                    gap_end_ts=now_ns,
+                    reason="write_error",
+                    detail=f"PostgreSQL commit failed: {e}",
+                )
+                self.buffer_manager.add(gap)
             # Do NOT commit Kafka offsets — messages will be re-consumed
             # and re-written on next flush (dedup handles duplicates).
             return

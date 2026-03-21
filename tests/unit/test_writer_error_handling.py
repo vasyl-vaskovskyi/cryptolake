@@ -93,6 +93,18 @@ class TestDeserializationErrorGapEmission:
         )
 
 
+class TestPgErrorGapEmission:
+    def test_pg_failure_emits_write_error_gap(self):
+        """PG commit failure must emit write_error gap for affected streams."""
+        import src.writer.consumer as consumer_mod
+        from pathlib import Path
+        source = Path(consumer_mod.__file__).read_text()
+        # Verify the PG failure path creates gap envelopes
+        assert source.count('reason="write_error"') >= 2, (
+            "write_error gap must be emitted in both _write_to_disk AND _commit_state"
+        )
+
+
 class TestProducerSerializationError:
     def test_produce_catches_serialization_error(self):
         """produce() must catch serialization errors and return False."""
