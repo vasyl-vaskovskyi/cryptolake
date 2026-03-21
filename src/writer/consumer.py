@@ -440,8 +440,12 @@ class WriterConsumer:
         )
         system_clean_shutdown = writer_clean_shutdown and collector_clean_shutdown
 
+        previous_boot_id = (
+            self._previous_writer_state.host_boot_id
+            if self._previous_writer_state else self._current_boot_id
+        )
         classification = classify_restart_gap(
-            previous_boot_id=self._current_boot_id,
+            previous_boot_id=previous_boot_id,
             current_boot_id=self._current_boot_id,
             previous_session_id=prev_session_id,
             current_session_id=session_id,
@@ -556,7 +560,9 @@ class WriterConsumer:
                 gap = add_broker_coordinates(
                     gap, topic=msg_topic, partition=msg_partition, offset=-1,
                 )
-                self.buffer_manager.add(gap)
+                gap_results = self.buffer_manager.add(gap)
+                if gap_results:
+                    await self._write_and_save(gap_results)
                 continue
             envelope = add_broker_coordinates(
                 envelope,
@@ -797,9 +803,20 @@ class WriterConsumer:
 
                 compressed = self.compressor.compress_frame(result.lines)
                 with open(file_path, "ab") as f:
-                    f.write(compressed)
-                    f.flush()
-                    os.fsync(f.fileno())
+                    pos_before = f.tell()
+                    try:
+                        f.write(compressed)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    except OSError:
+                        # Truncate back to remove partial frame
+                        try:
+                            f.truncate(pos_before)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        except OSError:
+                            pass  # best-effort truncation
+                        raise
             except OSError as e:
                 logger.error(
                     "write_to_disk_failed",

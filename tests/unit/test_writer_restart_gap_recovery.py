@@ -732,3 +732,45 @@ class TestRuntimeSessionDetectionPreserved:
         assert result["cause"] == "operator_shutdown"
         assert result["planned"] is True
         assert result["maintenance_id"] == "maint-1"
+
+    @pytest.mark.asyncio
+    async def test_runtime_session_change_detects_boot_id_change(self):
+        """When boot ID changed, runtime session-change path should classify
+        as component=host, cause=host_reboot — not collector/unclean_exit."""
+        from src.writer.consumer import WriterConsumer
+
+        state_manager = MagicMock(spec=StateManager)
+        state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
+        state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
+        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
+        compressor = MagicMock()
+
+        consumer = WriterConsumer(
+            brokers=["localhost:9092"],
+            topics=["binance.trades"],
+            group_id="test",
+            buffer_manager=buffer_manager,
+            compressor=compressor,
+            state_manager=state_manager,
+            base_dir="/data",
+        )
+
+        # Previous writer ran with old boot ID
+        consumer._current_boot_id = "boot-new"
+        consumer._previous_writer_state = _make_component_state(
+            component="writer", host_boot_id="boot-old"
+        )
+
+        # First message establishes session
+        env1 = _make_data_envelope(collector_session_id="session-old")
+        await consumer._check_session_change(env1)
+
+        # Session change detected at runtime (after host reboot)
+        env2 = _make_data_envelope(collector_session_id="session-new")
+        result = await consumer._check_session_change(env2)
+
+        assert result is not None
+        assert result["reason"] == "restart_gap"
+        assert result["component"] == "host"
+        assert result["cause"] == "host_reboot"
+        assert result["planned"] is False

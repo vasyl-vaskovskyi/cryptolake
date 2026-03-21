@@ -77,6 +77,7 @@ class OpenInterestPoller:
 
     async def _poll_once(self, symbol: str, retries: int = 3) -> None:
         assert self._session is not None, "call start() first"
+        poll_start_ns = time.time_ns()
         url = self.adapter.build_open_interest_url(symbol)
         for attempt in range(retries):
             try:
@@ -117,4 +118,5 @@ class OpenInterestPoller:
             symbol=symbol, stream="open_interest", session_seq=seq,
             reason="snapshot_poll_miss",
             detail=f"Open interest poll failed after {retries} retries",
+            gap_start_ts=poll_start_ns,
         )

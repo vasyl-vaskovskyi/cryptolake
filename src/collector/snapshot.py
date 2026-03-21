@@ -123,6 +123,7 @@ class SnapshotScheduler:
                 pass
 
     async def _take_snapshot(self, symbol: str) -> None:
+        poll_start_ns = time.time_ns()
         raw_text = await self.fetch_snapshot(symbol)
         if raw_text is None:
             # All retries exhausted
@@ -132,6 +133,7 @@ class SnapshotScheduler:
                 symbol=symbol, stream="depth_snapshot", session_seq=seq,
                 reason="snapshot_poll_miss",
                 detail="Depth snapshot poll failed after all retries",
+                gap_start_ts=poll_start_ns,
             )
             return
 
