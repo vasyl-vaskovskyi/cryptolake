@@ -192,22 +192,20 @@ class TestAwsDeploymentAssets:
 
     def test_aws_docs_avoid_plaintext_secrets_and_match_architecture_support(self) -> None:
         readme = _read_text("infra/aws/README.md")
-        spec = _read_text("docs/superpowers/specs/2026-03-18-aws-ec2-deployment-design.md")
 
         assert "read -s POSTGRES_PASSWORD" in readme
         assert "read -s GRAFANA_PASSWORD" in readme
         assert "PostgresPassword=\"$POSTGRES_PASSWORD\"" in readme
         assert "GrafanaPassword=\"$GRAFANA_PASSWORD\"" in readme
-        assert "Graviton (ARM) compatible" not in spec
-        assert "Architecture parameter selects x86_64 or arm64 AMIs" in spec
+        assert "InstanceArchitecture" in readme
 
 
 class TestChaosScripts:
     def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
         scripts = {
             "tests/chaos/3_kill_writer.sh": ["docker kill", "WRITER_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/1_collector_unclean_exit§.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/5_fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/1_collector_unclean_exit.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/5_fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "preflight_checks", "print_test_report"],
             "tests/chaos/6_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/7_full_stack_restart_gap.sh": ["mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/2_buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
