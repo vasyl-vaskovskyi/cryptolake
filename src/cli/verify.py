@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,21 +11,15 @@ import click
 import orjson
 import zstandard as zstd
 
+from src.common.config import default_archive_dir
+from src.common.envelope import BROKER_COORD_FIELDS, DATA_ENVELOPE_FIELDS, GAP_ENVELOPE_FIELDS
+from src.writer.file_rotator import compute_sha256
 from src.writer.state_manager import MaintenanceIntent, StateManager
 
-_REQUIRED_DATA_FIELDS = {
-    "v", "type", "exchange", "symbol", "stream", "received_at",
-    "exchange_ts", "collector_session_id", "session_seq", "raw_text",
-    "raw_sha256", "_topic", "_partition", "_offset",
-}
-_REQUIRED_GAP_FIELDS = {
-    "v", "type", "exchange", "symbol", "stream", "received_at",
-    "collector_session_id", "session_seq", "gap_start_ts", "gap_end_ts",
-    "reason", "detail", "_topic", "_partition", "_offset",
-}
+_REQUIRED_DATA_FIELDS = DATA_ENVELOPE_FIELDS | BROKER_COORD_FIELDS
+_REQUIRED_GAP_FIELDS = GAP_ENVELOPE_FIELDS | BROKER_COORD_FIELDS
 
-
-DEFAULT_ARCHIVE_DIR = os.getenv("HOST_DATA_DIR", "/data")
+DEFAULT_ARCHIVE_DIR = default_archive_dir()
 
 
 def verify_checksum(data_path: Path, sidecar_path: Path) -> list[str]:
@@ -34,11 +27,7 @@ def verify_checksum(data_path: Path, sidecar_path: Path) -> list[str]:
     if not sidecar_path.exists():
         return [f"Sidecar not found: {sidecar_path}"]
     expected = sidecar_path.read_text().strip().split()[0]
-    h = hashlib.sha256()
-    with open(data_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    if h.hexdigest() != expected:
+    if compute_sha256(data_path) != expected:
         return [f"Checksum mismatch for {data_path.name}"]
     return []
 

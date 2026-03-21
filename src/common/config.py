@@ -116,8 +116,13 @@ class DatabaseConfig(BaseModel):
     url: str
 
 
-def _default_archive_dir() -> str:
+def default_archive_dir() -> str:
+    """Return the archive directory from HOST_DATA_DIR or default /data."""
     return os.environ.get("HOST_DATA_DIR", "/data")
+
+
+def _default_archive_dir() -> str:
+    return default_archive_dir()
 
 
 class WriterConfig(BaseModel):

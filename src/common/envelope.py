@@ -20,6 +20,19 @@ VALID_GAP_REASONS = frozenset(
     }
 )
 
+DATA_ENVELOPE_FIELDS = frozenset({
+    "v", "type", "exchange", "symbol", "stream", "received_at",
+    "exchange_ts", "collector_session_id", "session_seq", "raw_text", "raw_sha256",
+})
+
+GAP_ENVELOPE_FIELDS = frozenset({
+    "v", "type", "exchange", "symbol", "stream", "received_at",
+    "collector_session_id", "session_seq", "gap_start_ts", "gap_end_ts",
+    "reason", "detail",
+})
+
+BROKER_COORD_FIELDS = frozenset({"_topic", "_partition", "_offset"})
+
 _SENTINEL = object()  # used to distinguish "not provided" from None
 
 
