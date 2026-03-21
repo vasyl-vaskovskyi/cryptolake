@@ -5,11 +5,11 @@ from unittest.mock import MagicMock
 class TestTradesHandler:
     @pytest.mark.asyncio
     async def test_produces_data_envelope(self):
-        from src.collector.streams.trades import TradesHandler
+        from src.collector.streams.simple import SimpleStreamHandler
 
         producer = MagicMock()
         producer.produce = MagicMock(return_value=True)
-        handler = TradesHandler("binance", "session_1", producer)
+        handler = SimpleStreamHandler("binance", "session_1", producer, "trades")
 
         await handler.handle("btcusdt", '{"e":"aggTrade"}', 100, 0)
         producer.produce.assert_called_once()

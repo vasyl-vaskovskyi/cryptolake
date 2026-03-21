@@ -19,11 +19,9 @@ from src.common.system_identity import get_host_boot_id
 from src.collector.connection import WebSocketManager
 from src.collector.producer import CryptoLakeProducer
 from src.collector.snapshot import SnapshotScheduler, parse_interval_seconds
-from src.collector.streams.trades import TradesHandler
+from src.collector.streams.base import StreamHandler
 from src.collector.streams.depth import DepthHandler
-from src.collector.streams.bookticker import BookTickerHandler
-from src.collector.streams.funding_rate import FundingRateHandler
-from src.collector.streams.liquidations import LiquidationsHandler
+from src.collector.streams.simple import SimpleStreamHandler
 from src.collector.streams.open_interest import OpenInterestPoller
 from src.exchanges.binance import BinanceAdapter
 from src.writer.state_manager import ComponentRuntimeState, StateManager
@@ -53,20 +51,16 @@ class Collector:
         self.symbols = self.exchange_cfg.symbols
 
         # Build handlers
-        from src.collector.streams.base import StreamHandler
         self.handlers: dict[str, StreamHandler] = {}
-        if "trades" in self.enabled_streams:
-            self.handlers["trades"] = TradesHandler("binance", self.session_id, self.producer)
+        _SIMPLE_STREAMS = ("trades", "bookticker", "funding_rate", "liquidations")
+        for stream_name in _SIMPLE_STREAMS:
+            if stream_name in self.enabled_streams:
+                self.handlers[stream_name] = SimpleStreamHandler(
+                    "binance", self.session_id, self.producer, stream_name)
         if "depth" in self.enabled_streams:
             self.handlers["depth"] = DepthHandler(
                 "binance", self.session_id, self.producer, self.adapter, self.symbols,
                 on_pu_chain_break=self._on_pu_chain_break)
-        if "bookticker" in self.enabled_streams:
-            self.handlers["bookticker"] = BookTickerHandler("binance", self.session_id, self.producer)
-        if "funding_rate" in self.enabled_streams:
-            self.handlers["funding_rate"] = FundingRateHandler("binance", self.session_id, self.producer)
-        if "liquidations" in self.enabled_streams:
-            self.handlers["liquidations"] = LiquidationsHandler("binance", self.session_id, self.producer)
 
         # Initialize optional components to None (created conditionally in start())
         self.snapshot_scheduler = None
