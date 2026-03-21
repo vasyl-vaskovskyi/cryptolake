@@ -666,7 +666,9 @@ class WriterConsumer:
 
         # 2. Write to disk + fsync (no offset commit yet)
         if results:
-            states = self._write_to_disk(results)
+            states, gap_envelopes = self._write_to_disk(results)
+            for gap in gap_envelopes:
+                self.buffer_manager.add(gap)
 
         # 3. Seal all flushed file paths BEFORE committing offsets.
         # Use actual written paths from states (may differ from FlushResult
@@ -706,7 +708,9 @@ class WriterConsumer:
         results = self.buffer_manager.flush_all()
         states: list[FileState] = []
         if results:
-            states = self._write_to_disk(results)
+            states, gap_envelopes = self._write_to_disk(results)
+            for gap in gap_envelopes:
+                self.buffer_manager.add(gap)
 
         # 2. Seal all active files BEFORE committing offsets
         base = Path(self.base_dir)
@@ -736,10 +740,12 @@ class WriterConsumer:
         self._update_disk_metrics()
         self._update_consumer_lag()
 
-    def _write_to_disk(self, results: list[FlushResult]) -> list[FileState]:
-        """Write compressed frames to disk and fsync. Returns FileState list
-        for later commit. Does NOT save PG state or commit Kafka offsets."""
+    def _write_to_disk(self, results: list[FlushResult]) -> tuple[list[FileState], list[dict]]:
+        """Write compressed frames to disk and fsync. Returns (FileState list, gap envelopes).
+        Gap envelopes are emitted for any files that failed to write.
+        Does NOT save PG state or commit Kafka offsets."""
         states: list[FileState] = []
+        gap_envelopes: list[dict] = []
         for result in results:
             file_path = self._resolve_file_path(result.file_path)
             try:
@@ -761,6 +767,19 @@ class WriterConsumer:
                     exchange=result.target.exchange,
                     stream=result.target.stream,
                 ).inc()
+                # Emit gap envelope for the lost data window
+                now_ns = time.time_ns()
+                gap_envelopes.append(create_gap_envelope(
+                    exchange=result.target.exchange,
+                    symbol=result.target.symbol,
+                    stream=result.target.stream,
+                    collector_session_id="",
+                    session_seq=-1,
+                    gap_start_ts=now_ns,
+                    gap_end_ts=now_ns,
+                    reason="write_error",
+                    detail=f"Disk write failed: {e}",
+                ))
                 continue  # skip this file, data in buffer is lost
 
             file_size = file_path.stat().st_size
@@ -784,7 +803,7 @@ class WriterConsumer:
                 file_path=str(file_path),
                 file_byte_size=file_size,
             ))
-        return states
+        return (states, gap_envelopes)
 
     async def _commit_state(
         self,
@@ -851,7 +870,9 @@ class WriterConsumer:
         """Normal flush: write files -> fsync -> save state to PG -> commit offsets.
         For rotation (seal-before-commit), use _write_to_disk + seal + _commit_state."""
         start = time.monotonic()
-        states = self._write_to_disk(results)
+        states, gap_envelopes = self._write_to_disk(results)
+        for gap in gap_envelopes:
+            self.buffer_manager.add(gap)
         await self._commit_state(states, results, start)
 
     def _update_disk_metrics(self) -> None:

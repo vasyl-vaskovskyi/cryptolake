@@ -72,6 +72,16 @@ class TestKafkaCommitCallback:
         )
 
 
+class TestWriteErrorGapEmission:
+    def test_write_error_emits_gap_envelope(self):
+        """When _write_to_disk catches OSError, it must create a write_error gap."""
+        import src.writer.consumer as consumer_mod
+        source = Path(consumer_mod.__file__).read_text()
+        assert 'reason="write_error"' in source, (
+            "_write_to_disk OSError handler must emit write_error gap"
+        )
+
+
 class TestDeserializationErrorGapEmission:
     def test_corrupt_message_emits_deserialization_error_gap(self):
         """Corrupt message skip must emit a deserialization_error gap."""
