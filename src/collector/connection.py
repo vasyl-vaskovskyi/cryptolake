@@ -11,6 +11,7 @@ from src.collector import metrics as collector_metrics
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.base import StreamHandler
 from src.collector.streams.depth import DepthHandler
+from src.common.async_utils import cancel_tasks
 from src.common.envelope import create_data_envelope
 from src.exchanges.binance import BinanceAdapter, _PUBLIC_STREAMS, _MARKET_STREAMS
 
@@ -87,12 +88,7 @@ class WebSocketManager:
 
     async def stop(self) -> None:
         self._running = False
-        for t in self._tasks:
-            if not t.done():
-                t.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
+        await cancel_tasks(self._tasks)
 
     async def _connection_loop(self, socket_name: str, url: str) -> None:
         backoff = 1

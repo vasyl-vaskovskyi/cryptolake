@@ -9,6 +9,7 @@ import structlog
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.depth import DepthHandler
 from src.collector import metrics as collector_metrics
+from src.common.async_utils import cancel_tasks
 from src.common.envelope import create_data_envelope
 from src.exchanges.binance import BinanceAdapter
 
@@ -74,12 +75,7 @@ class SnapshotScheduler:
         self._running = False
         if self._stop_event:
             self._stop_event.set()
-        for t in self._tasks:
-            if not t.done():
-                t.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
+        await cancel_tasks(self._tasks)
         if self._session:
             await self._session.close()
 

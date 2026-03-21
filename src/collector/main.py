@@ -12,6 +12,7 @@ import uvloop
 from aiohttp import web
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
+from src.common.async_utils import cancel_tasks
 from src.common.config import load_config
 from src.common.logging import setup_logging
 from src.common.system_identity import get_host_boot_id
@@ -277,12 +278,7 @@ class Collector:
         await self._close_state_manager()
 
         # Cancel any remaining top-level tasks
-        for t in self._tasks:
-            if not t.done():
-                t.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
+        await cancel_tasks(self._tasks)
         logger.info("collector_shutdown_complete")
 
     async def _start_http(self) -> None:
