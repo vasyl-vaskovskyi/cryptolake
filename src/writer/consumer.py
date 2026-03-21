@@ -7,6 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
+import orjson
 import structlog
 
 from src.common.envelope import (
@@ -777,16 +778,26 @@ class WriterConsumer:
                     exchange=result.target.exchange,
                     stream=result.target.stream,
                 ).inc()
-                # Emit gap envelope for the lost data window
+                # Emit gap envelope covering the batch's time range
                 now_ns = time.time_ns()
+                first_ts = now_ns
+                last_ts = now_ns
+                if result.lines:
+                    try:
+                        first_env = orjson.loads(result.lines[0])
+                        last_env = orjson.loads(result.lines[-1])
+                        first_ts = first_env.get("received_at", now_ns)
+                        last_ts = last_env.get("received_at", now_ns)
+                    except Exception:
+                        pass
                 gap = create_gap_envelope(
                     exchange=result.target.exchange,
                     symbol=result.target.symbol,
                     stream=result.target.stream,
                     collector_session_id="",
                     session_seq=-1,
-                    gap_start_ts=now_ns,
-                    gap_end_ts=now_ns,
+                    gap_start_ts=first_ts,
+                    gap_end_ts=max(last_ts, first_ts),
                     reason="write_error",
                     detail=f"Disk write failed: {e}",
                 )
@@ -863,17 +874,28 @@ class WriterConsumer:
                 checkpoints=len(checkpoints),
             )
             writer_metrics.pg_commit_failures_total.inc()
-            # Emit gap for each affected stream so archive knows data may be inconsistent
+            # Emit gap for each affected stream covering the batch's time range
             now_ns = time.time_ns()
             for result in results:
+                # Derive batch time range from serialized lines
+                first_ts = now_ns
+                last_ts = now_ns
+                if result.lines:
+                    try:
+                        first_env = orjson.loads(result.lines[0])
+                        last_env = orjson.loads(result.lines[-1])
+                        first_ts = first_env.get("received_at", now_ns)
+                        last_ts = last_env.get("received_at", now_ns)
+                    except Exception:
+                        pass
                 gap = create_gap_envelope(
                     exchange=result.target.exchange,
                     symbol=result.target.symbol,
                     stream=result.target.stream,
                     collector_session_id="",
                     session_seq=-1,
-                    gap_start_ts=now_ns,
-                    gap_end_ts=now_ns,
+                    gap_start_ts=first_ts,
+                    gap_end_ts=max(last_ts, first_ts),
                     reason="write_error",
                     detail=f"PostgreSQL commit failed: {e}",
                 )
