@@ -43,17 +43,6 @@ snapshots_failed_total = Counter(
     ["exchange", "symbol"],
 )
 
-ntp_drift_ms = Gauge(
-    "collector_ntp_drift_ms",
-    "Estimated NTP clock drift in ms",
-)
-
-producer_buffer_size = Gauge(
-    "collector_producer_buffer_size",
-    "In-memory buffer size (messages) when Redpanda unavailable",
-    ["exchange"],
-)
-
 messages_dropped_total = Counter(
     "collector_messages_dropped_total",
     "Messages dropped due to buffer overflow",

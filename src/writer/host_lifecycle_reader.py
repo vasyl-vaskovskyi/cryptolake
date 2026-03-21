@@ -14,10 +14,6 @@ from src.common.jsonl import read_jsonl
 
 DEFAULT_LEDGER_PATH = Path("/data/.cryptolake/lifecycle/events.jsonl")
 
-# Components that Phase 2 can promote to (not collector — Phase 1 handles it).
-# Ordered by infrastructure priority: infra components cause cascading restarts.
-PROMOTABLE_COMPONENTS = ("redpanda", "postgres", "writer")
-
 
 class HostLifecycleEvidence:
     """Parsed host lifecycle evidence for a specific restart window.

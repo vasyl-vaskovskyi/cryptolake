@@ -14,11 +14,10 @@ from src.common.envelope import (
     add_broker_coordinates,
     create_gap_envelope,
     deserialize_envelope,
-    serialize_envelope,
 )
 from src.common.system_identity import get_host_boot_id
 from src.writer import metrics as writer_metrics
-from src.writer.buffer_manager import BufferManager, CheckpointMeta, FlushResult
+from src.writer.buffer_manager import BufferManager, FlushResult
 from src.writer.compressor import ZstdFrameCompressor
 from src.writer.file_rotator import (
     build_file_path, sidecar_path, write_sha256_sidecar,
@@ -568,7 +567,6 @@ class WriterConsumer:
 
             # De-duplication during recovery: skip messages already in the archive (spec 8.2)
             target = self.buffer_manager._route(envelope)
-            from src.writer.file_rotator import build_file_path
             base_path = build_file_path(
                 self.buffer_manager.base_dir, target.exchange, target.symbol,
                 target.stream, target.date, target.hour,

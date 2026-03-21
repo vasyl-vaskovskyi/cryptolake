@@ -36,7 +36,6 @@ class CryptoLakeProducer:
         self.other_cap = default_stream_cap
         self._on_overflow = on_overflow
         self._buffer_counts: dict[str, int] = {}
-        self._total_buffered = 0
         self._lock = threading.Lock()
         # Overflow window tracking: {(symbol, stream): start_ts_ns}
         self._overflow_start: dict[tuple[str, str], int] = {}

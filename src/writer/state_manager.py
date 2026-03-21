@@ -280,36 +280,6 @@ class StateManager:
                 pass
             self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
 
-    async def save_states(self, states: list[FileState]) -> None:
-        """Atomically save multiple file states in a single transaction.
-
-        Retries up to 3 times on connection errors. If all retries fail,
-        raises the exception — the writer will crash and resume from PG state on restart.
-        """
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                await self._ensure_connected()
-                assert self._conn is not None
-                async with self._conn.transaction():
-                    async with self._conn.cursor() as cur:
-                        for state in states:
-                            await cur.execute(self.UPSERT_SQL, {
-                                "topic": state.topic,
-                                "partition": state.partition,
-                                "high_water_offset": state.high_water_offset,
-                                "file_path": state.file_path,
-                                "file_byte_size": state.file_byte_size,
-                            })
-                logger.debug("state_saved", count=len(states))
-                return
-            except Exception as e:
-                logger.warning("pg_save_failed", attempt=attempt + 1, error=str(e))
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)
-                else:
-                    raise
-
     async def save_states_and_checkpoints(
         self,
         states: list[FileState],
@@ -376,36 +346,6 @@ class StateManager:
                 )
                 checkpoints[cp.checkpoint_key] = cp
         return checkpoints
-
-    async def save_stream_checkpoints(self, checkpoints: list[StreamCheckpoint]) -> None:
-        """Atomically upsert multiple stream checkpoints.
-
-        Retries up to 3 times on connection errors, matching save_states() behavior.
-        """
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                await self._ensure_connected()
-                assert self._conn is not None
-                async with self._conn.transaction():
-                    async with self._conn.cursor() as cur:
-                        for cp in checkpoints:
-                            await cur.execute(self.UPSERT_STREAM_CHECKPOINT_SQL, {
-                                "exchange": cp.exchange,
-                                "symbol": cp.symbol,
-                                "stream": cp.stream,
-                                "last_received_at": cp.last_received_at,
-                                "last_collector_session_id": cp.last_collector_session_id,
-                                "last_gap_reason": cp.last_gap_reason,
-                            })
-                logger.debug("stream_checkpoints_saved", count=len(checkpoints))
-                return
-            except Exception as e:
-                logger.warning("pg_checkpoint_save_failed", attempt=attempt + 1, error=str(e))
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)
-                else:
-                    raise
 
     # ── component runtime state methods ──────────────────────────────────
 
