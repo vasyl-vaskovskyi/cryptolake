@@ -90,11 +90,7 @@ class CryptoLakeProducer:
                 collector_metrics.messages_dropped_total.labels(
                     exchange=self.exchange, symbol=symbol, stream=stream,
                 ).inc()
-                overflow_key = (symbol, stream)
-                if overflow_key not in self._overflow_start:
-                    self._overflow_start[overflow_key] = time.time_ns()
-                if self._on_overflow:
-                    self._on_overflow(self.exchange, symbol, stream)
+                self._record_overflow(symbol, stream)
                 return False
             # Optimistically increment before produce; delivery callback decrements
             self._buffer_counts[stream] = current + 1
@@ -124,13 +120,16 @@ class CryptoLakeProducer:
             collector_metrics.messages_dropped_total.labels(
                 exchange=self.exchange, symbol=symbol, stream=stream,
             ).inc()
-            # Track overflow window start
-            overflow_key = (symbol, stream)
-            if overflow_key not in self._overflow_start:
-                self._overflow_start[overflow_key] = time.time_ns()
-            if self._on_overflow:
-                self._on_overflow(self.exchange, symbol, stream)
+            self._record_overflow(symbol, stream)
             return False
+
+    def _record_overflow(self, symbol: str, stream: str) -> None:
+        """Track overflow start and notify callback."""
+        overflow_key = (symbol, stream)
+        if overflow_key not in self._overflow_start:
+            self._overflow_start[overflow_key] = time.time_ns()
+        if self._on_overflow:
+            self._on_overflow(self.exchange, symbol, stream)
 
     def _make_delivery_cb(self, stream: str):
         """Create a delivery callback that decrements per-stream buffer count."""
