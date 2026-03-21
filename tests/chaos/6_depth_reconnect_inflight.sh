@@ -11,7 +11,7 @@ echo ""
 setup_stack
 
 echo "1. Letting collector stream depth updates for 30s..."
-wait_for_data 20
+wait_for_data 30
 
 echo "2. Killing collector during active depth flow..."
 event_start_ns=$(ts_now_ns)
