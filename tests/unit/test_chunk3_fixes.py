@@ -167,16 +167,16 @@ class TestDepthReplayGapDetection:
 
         handler.set_sync_point("btcusdt", 1000)
 
-        # First diff should be replayed (valid sync diff)
-        # Second diff has pu=1008 but expected pu=1002 → gap
+        # First diff should be replayed (valid sync diff) via produce()
         calls = producer.produce.call_args_list
-        assert len(calls) == 2  # one data envelope + one gap envelope
+        assert len(calls) == 1  # one data envelope
+        assert calls[0][0][0]["type"] == "data"
 
-        # Second call should be a gap envelope
-        gap_env = calls[1][0][0]
-        assert gap_env["type"] == "gap"
-        assert gap_env["reason"] == "pu_chain_break"
-        assert "replay" in gap_env["detail"]
+        # Gap emitted via emit_gap() helper
+        producer.emit_gap.assert_called_once()
+        gap_kwargs = producer.emit_gap.call_args[1]
+        assert gap_kwargs["reason"] == "pu_chain_break"
+        assert "replay" in gap_kwargs["detail"]
 
         # on_pu_chain_break should have been called
         assert resync_called == ["btcusdt"]

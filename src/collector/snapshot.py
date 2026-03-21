@@ -9,7 +9,7 @@ import structlog
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.depth import DepthHandler
 from src.collector import metrics as collector_metrics
-from src.common.envelope import create_data_envelope, create_gap_envelope
+from src.common.envelope import create_data_envelope
 from src.exchanges.binance import BinanceAdapter
 
 logger = structlog.get_logger()
@@ -130,23 +130,13 @@ class SnapshotScheduler:
         raw_text = await self.fetch_snapshot(symbol)
         if raw_text is None:
             # All retries exhausted
-            collector_metrics.gaps_detected_total.labels(
-                exchange=self.exchange, symbol=symbol, stream="depth_snapshot",
-            ).inc()
             seq = self._seq_counters[symbol]
             self._seq_counters[symbol] += 1
-            gap = create_gap_envelope(
-                exchange=self.exchange,
-                symbol=symbol,
-                stream="depth_snapshot",
-                collector_session_id=self.collector_session_id,
-                session_seq=seq,
-                gap_start_ts=time.time_ns(),
-                gap_end_ts=time.time_ns(),
+            self.producer.emit_gap(
+                symbol=symbol, stream="depth_snapshot", session_seq=seq,
                 reason="snapshot_poll_miss",
                 detail="Depth snapshot poll failed after all retries",
             )
-            self.producer.produce(gap)
             return
 
         received_at = time.time_ns()

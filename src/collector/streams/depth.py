@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Callable
 
 import structlog
@@ -8,8 +7,7 @@ import structlog
 from src.collector.gap_detector import DepthGapDetector
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.base import StreamHandler
-from src.collector import metrics as collector_metrics
-from src.common.envelope import create_data_envelope, create_gap_envelope
+from src.common.envelope import create_data_envelope
 from src.exchanges.binance import BinanceAdapter
 
 logger = structlog.get_logger()
@@ -55,19 +53,11 @@ class DepthHandler(StreamHandler):
         if result.gap:
             logger.warning("depth_pu_chain_break", symbol=symbol,
                            expected_pu=detector._last_u, actual_pu=pu)
-            collector_metrics.gaps_detected_total.labels(
-                exchange=self.exchange, symbol=symbol, stream="depth",
-            ).inc()
-            now = time.time_ns()
-            gap = create_gap_envelope(
-                exchange=self.exchange, symbol=symbol, stream="depth",
-                collector_session_id=self.collector_session_id,
-                session_seq=session_seq,
-                gap_start_ts=now, gap_end_ts=now,
+            self.producer.emit_gap(
+                symbol=symbol, stream="depth", session_seq=session_seq,
                 reason="pu_chain_break",
                 detail=f"pu chain break: expected pu={detector._last_u}, got pu={pu}",
             )
-            self.producer.produce(gap)
             if self._on_pu_chain_break:
                 self._on_pu_chain_break(symbol)
             return
@@ -79,19 +69,11 @@ class DepthHandler(StreamHandler):
                 pending.append((raw_text, exchange_ts, session_seq))
             else:
                 logger.warning("depth_pending_buffer_full", symbol=symbol)
-                collector_metrics.gaps_detected_total.labels(
-                    exchange=self.exchange, symbol=symbol, stream="depth",
-                ).inc()
-                now = time.time_ns()
-                gap = create_gap_envelope(
-                    exchange=self.exchange, symbol=symbol, stream="depth",
-                    collector_session_id=self.collector_session_id,
-                    session_seq=session_seq,
-                    gap_start_ts=now, gap_end_ts=now,
+                self.producer.emit_gap(
+                    symbol=symbol, stream="depth", session_seq=session_seq,
                     reason="buffer_overflow",
                     detail=f"Depth pending-diff buffer full ({_MAX_PENDING_DIFFS}), diffs dropped while awaiting snapshot",
                 )
-                self.producer.produce(gap)
                 detector.reset()
                 if pending is not None:
                     pending.clear()
@@ -129,19 +111,11 @@ class DepthHandler(StreamHandler):
             if result.gap:
                 logger.warning("depth_replay_pu_chain_break", symbol=symbol,
                                expected_pu=detector._last_u, actual_pu=pu)
-                collector_metrics.gaps_detected_total.labels(
-                    exchange=self.exchange, symbol=symbol, stream="depth",
-                ).inc()
-                now = time.time_ns()
-                gap = create_gap_envelope(
-                    exchange=self.exchange, symbol=symbol, stream="depth",
-                    collector_session_id=self.collector_session_id,
-                    session_seq=session_seq,
-                    gap_start_ts=now, gap_end_ts=now,
+                self.producer.emit_gap(
+                    symbol=symbol, stream="depth", session_seq=session_seq,
                     reason="pu_chain_break",
                     detail=f"pu chain break during replay: expected pu={detector._last_u}, got pu={pu}",
                 )
-                self.producer.produce(gap)
                 if self._on_pu_chain_break:
                     self._on_pu_chain_break(symbol)
                 return

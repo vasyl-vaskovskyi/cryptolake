@@ -171,6 +171,35 @@ class CryptoLakeProducer:
         except BufferError:
             logger.error("buffer_overflow_gap_emit_failed", symbol=symbol, stream=stream)
 
+    def emit_gap(
+        self,
+        *,
+        symbol: str,
+        stream: str,
+        session_seq: int,
+        reason: str,
+        detail: str,
+        gap_start_ts: int | None = None,
+        gap_end_ts: int | None = None,
+    ) -> None:
+        """Emit a gap envelope and increment the gap metric. Convenience for callers."""
+        now = time.time_ns()
+        collector_metrics.gaps_detected_total.labels(
+            exchange=self.exchange, symbol=symbol, stream=stream,
+        ).inc()
+        gap = create_gap_envelope(
+            exchange=self.exchange,
+            symbol=symbol,
+            stream=stream,
+            collector_session_id=self.collector_session_id,
+            session_seq=session_seq,
+            gap_start_ts=gap_start_ts if gap_start_ts is not None else now,
+            gap_end_ts=gap_end_ts if gap_end_ts is not None else now,
+            reason=reason,
+            detail=detail,
+        )
+        self.produce(gap)
+
     def is_connected(self) -> bool:
         """Check if the producer can reach the broker via metadata query."""
         try:

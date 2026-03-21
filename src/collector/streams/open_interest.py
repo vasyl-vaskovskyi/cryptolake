@@ -7,8 +7,7 @@ import aiohttp
 import structlog
 
 from src.collector.producer import CryptoLakeProducer
-from src.collector import metrics as collector_metrics
-from src.common.envelope import create_data_envelope, create_gap_envelope
+from src.common.envelope import create_data_envelope
 from src.exchanges.binance import BinanceAdapter
 
 logger = structlog.get_logger()
@@ -116,20 +115,10 @@ class OpenInterestPoller:
 
         # All retries exhausted — emit gap
         logger.error("open_interest_poll_exhausted", symbol=symbol)
-        collector_metrics.gaps_detected_total.labels(
-            exchange=self.exchange, symbol=symbol, stream="open_interest",
-        ).inc()
         seq = self._seq_counters[symbol]
         self._seq_counters[symbol] += 1
-        gap = create_gap_envelope(
-            exchange=self.exchange,
-            symbol=symbol,
-            stream="open_interest",
-            collector_session_id=self.collector_session_id,
-            session_seq=seq,
-            gap_start_ts=time.time_ns(),
-            gap_end_ts=time.time_ns(),
+        self.producer.emit_gap(
+            symbol=symbol, stream="open_interest", session_seq=seq,
             reason="snapshot_poll_miss",
             detail=f"Open interest poll failed after {retries} retries",
         )
-        self.producer.produce(gap)

@@ -11,7 +11,7 @@ from src.collector import metrics as collector_metrics
 from src.collector.producer import CryptoLakeProducer
 from src.collector.streams.base import StreamHandler
 from src.collector.streams.depth import DepthHandler
-from src.common.envelope import create_data_envelope, create_gap_envelope
+from src.common.envelope import create_data_envelope
 from src.exchanges.binance import BinanceAdapter, _PUBLIC_STREAMS, _MARKET_STREAMS
 
 logger = structlog.get_logger()
@@ -199,15 +199,12 @@ class WebSocketManager:
             _waited += 2
         if not self.producer.is_healthy_for_resync():
             logger.error("depth_resync_aborted_producer_unhealthy", symbol=symbol)
-            gap = create_gap_envelope(
-                exchange=self.exchange, symbol=symbol, stream="depth",
-                collector_session_id=self.collector_session_id,
+            self.producer.emit_gap(
+                symbol=symbol, stream="depth",
                 session_seq=self._next_seq(symbol, "depth"),
-                gap_start_ts=time.time_ns(), gap_end_ts=time.time_ns(),
                 reason="pu_chain_break",
                 detail=f"Depth resync aborted: producer unhealthy after {_max_wait}s wait",
             )
-            self.producer.produce(gap)
             return
 
         depth_handler.reset(symbol)
@@ -248,15 +245,12 @@ class WebSocketManager:
 
         # All retries exhausted
         logger.error("depth_resync_exhausted", symbol=symbol)
-        gap = create_gap_envelope(
-            exchange=self.exchange, symbol=symbol, stream="depth",
-            collector_session_id=self.collector_session_id,
+        self.producer.emit_gap(
+            symbol=symbol, stream="depth",
             session_seq=self._next_seq(symbol, "depth"),
-            gap_start_ts=time.time_ns(), gap_end_ts=time.time_ns(),
             reason="pu_chain_break",
             detail=f"Depth resync failed after {retries} retries, waiting for periodic snapshot",
         )
-        self.producer.produce(gap)
 
     def _emit_disconnect_gaps(self, socket_name: str) -> None:
         """Emit gap records for all symbol/stream combos on this socket."""
@@ -274,18 +268,9 @@ class WebSocketManager:
                     continue
                 gap_start = self._last_received_at.get((symbol, stream), now)
                 seq = self._next_seq(symbol, stream)
-                gap = create_gap_envelope(
-                    exchange=self.exchange,
-                    symbol=symbol,
-                    stream=stream,
-                    collector_session_id=self.collector_session_id,
-                    session_seq=seq,
-                    gap_start_ts=gap_start,
-                    gap_end_ts=now,
+                self.producer.emit_gap(
+                    symbol=symbol, stream=stream, session_seq=seq,
                     reason="ws_disconnect",
                     detail=f"WebSocket {socket_name} disconnected",
+                    gap_start_ts=gap_start, gap_end_ts=now,
                 )
-                self.producer.produce(gap)
-                collector_metrics.gaps_detected_total.labels(
-                    exchange=self.exchange, symbol=symbol, stream=stream,
-                ).inc()

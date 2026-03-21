@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import time
 from abc import ABC, abstractmethod
 
 import structlog
 
 from src.collector.gap_detector import SessionSeqTracker
-from src.collector import metrics as collector_metrics
-from src.common.envelope import create_gap_envelope
 
 logger = structlog.get_logger()
 
@@ -39,21 +36,12 @@ class StreamHandler(ABC):
             logger.warning("session_seq_skip", symbol=symbol,
                            stream=self._seq_stream,
                            expected=gap.expected, actual=gap.actual)
-            collector_metrics.gaps_detected_total.labels(
-                exchange=self._seq_exchange, symbol=symbol,
-                stream=self._seq_stream,
-            ).inc()
-            now = time.time_ns()
-            gap_env = create_gap_envelope(
-                exchange=self._seq_exchange, symbol=symbol,
-                stream=self._seq_stream,
-                collector_session_id=self._seq_collector_session_id,
+            self._seq_producer.emit_gap(
+                symbol=symbol, stream=self._seq_stream,
                 session_seq=session_seq,
-                gap_start_ts=now, gap_end_ts=now,
                 reason="session_seq_skip",
                 detail=f"session_seq skip: expected {gap.expected}, got {gap.actual}",
             )
-            self._seq_producer.produce(gap_env)
 
     @abstractmethod
     async def handle(
