@@ -72,6 +72,17 @@ class TestKafkaCommitCallback:
         )
 
 
+class TestDeserializationErrorGapEmission:
+    def test_corrupt_message_emits_deserialization_error_gap(self):
+        """Corrupt message skip must emit a deserialization_error gap."""
+        import src.writer.consumer as consumer_mod
+        from pathlib import Path
+        source = Path(consumer_mod.__file__).read_text()
+        assert 'reason="deserialization_error"' in source, (
+            "corrupt message handler must emit deserialization_error gap"
+        )
+
+
 class TestProducerSerializationError:
     def test_produce_catches_serialization_error(self):
         """produce() must catch serialization errors and return False."""

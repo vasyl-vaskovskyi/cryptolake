@@ -537,6 +537,23 @@ class WriterConsumer:
                 writer_metrics.messages_skipped_total.labels(
                     exchange="unknown", symbol="unknown", stream="unknown",
                 ).inc()
+                # Emit gap so archive documents the skipped message
+                now_ns = time.time_ns()
+                parts = msg_topic.split(".", 1) if msg_topic else ["unknown", "unknown"]
+                gap_exchange = parts[0] if len(parts) > 0 else "unknown"
+                gap_stream = parts[1] if len(parts) > 1 else "unknown"
+                gap = create_gap_envelope(
+                    exchange=gap_exchange,
+                    symbol="unknown",
+                    stream=gap_stream,
+                    collector_session_id="",
+                    session_seq=-1,
+                    gap_start_ts=now_ns,
+                    gap_end_ts=now_ns,
+                    reason="deserialization_error",
+                    detail=f"Corrupt message at offset {msg_offset} (size={len(raw_value)})",
+                )
+                self.buffer_manager.add(gap)
                 continue
             envelope = add_broker_coordinates(
                 envelope,
