@@ -553,6 +553,9 @@ class WriterConsumer:
                     reason="deserialization_error",
                     detail=f"Corrupt message at offset {msg_offset} (size={len(raw_value)})",
                 )
+                gap = add_broker_coordinates(
+                    gap, topic=msg_topic, partition=msg_partition, offset=-1,
+                )
                 self.buffer_manager.add(gap)
                 continue
             envelope = add_broker_coordinates(
@@ -776,7 +779,7 @@ class WriterConsumer:
                 ).inc()
                 # Emit gap envelope for the lost data window
                 now_ns = time.time_ns()
-                gap_envelopes.append(create_gap_envelope(
+                gap = create_gap_envelope(
                     exchange=result.target.exchange,
                     symbol=result.target.symbol,
                     stream=result.target.stream,
@@ -786,7 +789,14 @@ class WriterConsumer:
                     gap_end_ts=now_ns,
                     reason="write_error",
                     detail=f"Disk write failed: {e}",
-                ))
+                )
+                gap = add_broker_coordinates(
+                    gap,
+                    topic=f"{result.target.exchange}.{result.target.stream}",
+                    partition=result.partition,
+                    offset=-1,
+                )
+                gap_envelopes.append(gap)
                 continue  # skip this file, data in buffer is lost
 
             file_size = file_path.stat().st_size
@@ -866,6 +876,12 @@ class WriterConsumer:
                     gap_end_ts=now_ns,
                     reason="write_error",
                     detail=f"PostgreSQL commit failed: {e}",
+                )
+                gap = add_broker_coordinates(
+                    gap,
+                    topic=f"{result.target.exchange}.{result.target.stream}",
+                    partition=result.partition,
+                    offset=-1,
                 )
                 self.buffer_manager.add(gap)
             # Do NOT commit Kafka offsets — messages will be re-consumed

@@ -25,7 +25,11 @@ else
     fail "writer stopped processing after corrupt messages"
 fi
 
-echo "4. Verifying results..."
+echo "4. Waiting for deserialization_error gaps to flush to archive..."
+# The gap envelopes are in the buffer — wait for the timer-based flush (10s)
+wait_for_gaps "deserialization_error" 30
+
+echo "5. Verifying results..."
 assert_container_healthy "writer"
 assert_container_healthy "collector"
 
@@ -37,6 +41,53 @@ fi
 
 post_inject=$(count_envelopes)
 assert_gt "archive grew after corrupt injection" "$post_inject" "$pre_inject"
+
+# Verify deserialization_error gaps were emitted for the corrupt messages
+deser_gaps=$(count_gaps "deserialization_error")
+assert_gt "deserialization_error gaps exist for corrupt messages" "$deser_gaps" 0
+
+# Validate gap record details
+validate_deserialization_gaps() {
+    uv run python -c "
+import zstandard as zstd, orjson
+from pathlib import Path
+base = Path('${TEST_DATA_DIR}')
+found = 0
+errors = []
+for f in base.rglob('*.zst'):
+    with open(f, 'rb') as fh:
+        data = zstd.ZstdDecompressor().stream_reader(fh).read()
+    for line in data.strip().split(b'\n'):
+        if not line:
+            continue
+        env = orjson.loads(line)
+        if env.get('type') == 'gap' and env.get('reason') == 'deserialization_error':
+            found += 1
+            gs = env.get('gap_start_ts', 0)
+            ge = env.get('gap_end_ts', 0)
+            if gs <= 0:
+                errors.append(f'gap_start_ts invalid: {gs}')
+            if ge <= 0:
+                errors.append(f'gap_end_ts invalid: {ge}')
+            detail = env.get('detail', '')
+            if 'Corrupt message' not in detail:
+                errors.append(f'unexpected detail: {detail}')
+if errors:
+    for e in errors:
+        print(f'ERROR: {e}')
+    exit(1)
+if found == 0:
+    print('ERROR: no deserialization_error gaps found')
+    exit(1)
+print(f'OK: {found} deserialization_error gap(s) with valid metadata')
+"
+}
+
+if validate_deserialization_gaps; then
+    pass "deserialization_error gap metadata valid"
+else
+    fail "deserialization_error gap validation failed"
+fi
 
 print_test_report
 teardown_stack
