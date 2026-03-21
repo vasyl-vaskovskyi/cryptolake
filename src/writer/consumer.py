@@ -148,6 +148,11 @@ class WriterConsumer:
         # Discover already-sealed files (those with .sha256 sidecar)
         self._discover_sealed_files()
 
+        # Remove uncommitted .zst files that may have corrupt partial frames
+        # from a crash during ENOSPC or similar disk failures. Data in these
+        # files was never committed to PG, so Kafka will re-deliver it.
+        self._cleanup_uncommitted_files(states)
+
         # Compute seek targets from PG state BEFORE subscribe so they're
         # available when on_assign fires during the first poll().
         # We take the MINIMUM offset across all files for a (topic, partition)
@@ -223,6 +228,27 @@ class WriterConsumer:
                                    actual=actual_size, expected=state.file_byte_size)
                     with open(path, "r+b") as f:
                         f.truncate(state.file_byte_size)
+
+    def _cleanup_uncommitted_files(self, states: dict) -> None:
+        """Remove unsealed .zst files not tracked in PG state.
+
+        Files created but never durably committed may contain corrupt partial
+        zstd frames from crashes during disk-full or similar failures.
+        Since PG has no record of them, Kafka offsets were never committed
+        either — the data will be re-consumed from Kafka on restart.
+        """
+        known_paths = {Path(s.file_path) for s in states.values()}
+        base = Path(self.base_dir)
+        if not base.exists():
+            return
+        for zst_file in base.rglob("*.jsonl.zst"):
+            if zst_file in known_paths or zst_file in self._sealed_files:
+                continue
+            logger.warning("removing_uncommitted_file", path=str(zst_file))
+            try:
+                zst_file.unlink()
+            except OSError:
+                pass
 
     def _discover_sealed_files(self) -> None:
         """Scan base_dir for files that already have .sha256 sidecars."""
