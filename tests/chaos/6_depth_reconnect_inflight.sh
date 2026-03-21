@@ -53,7 +53,11 @@ if ! $depth_found; then
     echo "   WARNING: no depth_snapshot records after 120s polling"
 fi
 
-echo "5. Verifying results..."
+echo "5. Waiting for collector to recover and produce new data..."
+if ! wait_service_healthy collector 30; then :; fi
+wait_for_data 30
+
+echo "6. Verifying results..."
 
 assert_container_healthy "collector"
 assert_container_healthy "writer"

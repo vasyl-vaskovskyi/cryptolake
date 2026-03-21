@@ -603,7 +603,6 @@ class WriterConsumer:
                     gap_results = self.buffer_manager.add(recovery_gap)
                     if gap_results:
                         await self._write_and_save(gap_results)
-                        last_flush_time = time.monotonic()
 
                 # Runtime session change detection (covers collector crash/SIGKILL
                 # after initial recovery is done)
@@ -618,7 +617,6 @@ class WriterConsumer:
                     gap_results = self.buffer_manager.add(gap_envelope)
                     if gap_results:
                         await self._write_and_save(gap_results)
-                        last_flush_time = time.monotonic()
 
             # Per-file hourly rotation (spec 8.2: file routing by message received_at)
             msg_dt = datetime.datetime.fromtimestamp(
@@ -639,10 +637,19 @@ class WriterConsumer:
                     await self._rotate_file(file_key, prev_date, prev_hour)
             active_hours[file_key] = (current_hour, current_date)
 
-            # Add to buffer -- may trigger flush
+            # Add to buffer -- may trigger per-key flush (high-volume streams only)
             flush_results = self.buffer_manager.add(envelope)
             if flush_results:
                 await self._write_and_save(flush_results)
+                # Note: do NOT reset last_flush_time here — count-based flushes
+                # only flush the single key that hit the threshold. The timer
+                # must still fire to flush low-volume streams.
+
+            # Timer-based flush: flush ALL buffers periodically to ensure
+            # low-volume streams (depth_snapshot, open_interest) reach disk
+            # even when high-volume streams keep poll() busy.
+            if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
+                await self._flush_and_commit()
                 last_flush_time = time.monotonic()
 
     async def _rotate_file(
