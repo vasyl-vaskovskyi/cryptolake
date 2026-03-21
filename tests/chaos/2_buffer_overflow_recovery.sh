@@ -11,14 +11,14 @@ echo "verifies the collector recovers with buffer_overflow gaps recorded."
 echo ""
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Stopping redpanda to force collector buffer growth..."
 event_start_ns=$(ts_now_ns)
 $COMPOSE stop redpanda 2>&1
 
 echo "2. Waiting for collector buffer to overflow..."
-wait_for_overflow 120
+wait_for_overflow 60
 
 echo "3. Restarting redpanda..."
 $COMPOSE up -d redpanda 2>&1
@@ -35,7 +35,7 @@ echo "   Waiting for all services to become healthy..."
 wait_healthy
 
 echo "5. Waiting for buffer_overflow gaps to appear in archive..."
-wait_for_gaps "buffer_overflow" 90
+wait_for_gaps "buffer_overflow" 60
 
 echo "6. Verifying results..."
 

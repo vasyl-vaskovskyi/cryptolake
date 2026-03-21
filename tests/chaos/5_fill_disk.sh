@@ -77,8 +77,8 @@ if ! $all_healthy; then
 fi
 echo "--- Stack is ready (150MB tmpfs data volume) ---"
 
-echo "1. Letting data flow for 30s..."
-sleep 30
+echo "1. Letting data flow for 20s..."
+sleep 20
 
 echo "2. Checking volume usage before fill..."
 $COMPOSE_DISK exec writer df -h "${DISK_DATA_DIR}" 2>&1
@@ -100,8 +100,8 @@ echo "   Filled to capacity"
 echo "4. Checking volume usage after fill..."
 $COMPOSE_DISK exec writer df -h "${DISK_DATA_DIR}" 2>&1
 
-echo "5. Waiting 30s for writer to encounter ENOSPC..."
-sleep 30
+echo "5. Waiting 20s for writer to encounter ENOSPC..."
+sleep 20
 
 echo "6. Checking writer status under disk pressure..."
 writer_status=$($COMPOSE_DISK ps writer --format '{{.Status}}' 2>/dev/null || echo "missing")
@@ -122,7 +122,7 @@ $COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" "${DISK_DATA_DI
 
 echo "8. Restarting writer for recovery..."
 $COMPOSE_DISK up -d writer 2>&1
-sleep 30
+sleep 20
 
 echo "9. Verifying recovery..."
 
@@ -160,7 +160,7 @@ assert_gt "archive has envelopes (data survived disk pressure)" "$total" 0
 
 # Writer crashed and restarted — a restart_gap MUST be recorded.
 # "No data lost silently" — the crash window is a real data gap.
-wait_for_gaps "restart_gap" 60
+wait_for_gaps "restart_gap" 45
 gaps=$(count_gaps "restart_gap")
 assert_gt "restart_gap records exist (writer crash gap recorded)" "$gaps" 0
 

@@ -9,7 +9,7 @@ echo "the collector process stays alive, then restores and verifies."
 echo ""
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Recording pre-disconnect timestamps..."
 event_start_ns=$(ts_now_ns)
@@ -24,8 +24,8 @@ echo "4. Restoring collector network..."
 unblock_egress "${COLLECTOR_CONTAINER}"
 event_end_ns=$(ts_now_ns)
 
-echo "5. Waiting 60s for reconnection and data flow..."
-sleep 60
+echo "5. Waiting 45s for reconnection and data flow..."
+sleep 45
 
 echo "6. Verifying results..."
 
@@ -34,7 +34,7 @@ assert_container_healthy "collector"
 assert_container_healthy "writer"
 
 # ws_disconnect gaps should exist in archive
-wait_for_gaps "ws_disconnect" 90
+wait_for_gaps "ws_disconnect" 60
 ws_gaps=$(count_gaps "ws_disconnect")
 assert_gt "ws_disconnect gaps exist in archive" "$ws_gaps" 0
 

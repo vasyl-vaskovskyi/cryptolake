@@ -11,7 +11,7 @@ echo ""
 DB_URL="${DB_URL:-postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@localhost:5432/cryptolake}"
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 MAINT_ID="chaos-collector-$(date -u '+%Y%m%dT%H%M%SZ')"
 
@@ -34,12 +34,12 @@ echo "4. Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
 wait_healthy
-wait_for_data 40
+wait_for_data 30
 
 echo "5. Verifying results..."
 
 # Writer should detect the session change and emit restart_gap records
-wait_for_gaps "restart_gap" 90
+wait_for_gaps "restart_gap" 60
 gaps=$(count_gaps "restart_gap")
 assert_gt "restart_gap records exist in archive" "$gaps" 0
 

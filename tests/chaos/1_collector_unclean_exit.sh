@@ -11,7 +11,7 @@ echo "in the archive with component=collector and cause=unclean_exit."
 echo ""
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Recording pre-kill state..."
 pre_kill=$(count_envelopes)
@@ -19,14 +19,14 @@ event_start_ns=$(ts_now_ns)
 
 echo "2. Killing collector to simulate unclean exit..."
 docker kill "${COLLECTOR_CONTAINER}"
-sleep 10
+sleep 5
 
 echo "3. Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
 
 echo "4. Waiting for restart_gap records to appear in archive..."
-wait_for_gaps "restart_gap" 90
+wait_for_gaps "restart_gap" 60
 
 echo "5. Waiting for collector healthcheck..."
 if ! wait_service_healthy collector 30; then

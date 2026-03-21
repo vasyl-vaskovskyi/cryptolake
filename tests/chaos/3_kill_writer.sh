@@ -11,7 +11,7 @@ echo "accumulates in Redpanda, and runs cryptolake verify successfully."
 echo ""
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Recording pre-kill envelope count..."
 pre_kill=$(count_envelopes)
@@ -20,15 +20,15 @@ echo "2. Killing writer container..."
 event_start_ns=$(ts_now_ns)
 docker kill "${WRITER_CONTAINER}"
 
-echo "3. Waiting 30s (data accumulates in Redpanda)..."
-sleep 30
+echo "3. Waiting 20s (data accumulates in Redpanda)..."
+sleep 20
 
 echo "4. Restarting writer..."
 $COMPOSE up -d writer 2>&1
 event_end_ns=$(ts_now_ns)
 
 echo "5. Waiting for archive writes to resume..."
-if wait_for_envelope_count_gt "$pre_kill" 90; then
+if wait_for_envelope_count_gt "$pre_kill" 60; then
     pass "writer resumed writing after restart"
 else
     fail "writer did not resume writing after restart"

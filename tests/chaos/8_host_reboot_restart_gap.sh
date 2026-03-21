@@ -17,7 +17,7 @@ echo "New boot ID: $NEW_BOOT_ID"
 # Start stack with the old boot ID
 export CRYPTOLAKE_TEST_BOOT_ID="${OLD_BOOT_ID}"
 setup_stack
-wait_for_data 30
+wait_for_data 20
 event_start_ns=$(ts_now_ns)
 
 echo "1. Stopping all services (simulating host power-off)..."
@@ -32,7 +32,7 @@ export CRYPTOLAKE_TEST_BOOT_ID="${NEW_BOOT_ID}"
 $COMPOSE up -d --force-recreate 2>&1
 event_end_ns=$(ts_now_ns)
 wait_healthy
-wait_for_data 40
+wait_for_data 30
 
 echo "3. Verifying results..."
 

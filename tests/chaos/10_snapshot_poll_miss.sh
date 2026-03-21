@@ -9,7 +9,7 @@ echo "while WebSocket streams continue via existing connections."
 echo ""
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Blocking collector HTTPS egress (port 443 only)..."
 # Block ALL outbound TCP to port 443 (not just SYN). The --syn filter would only
@@ -32,8 +32,8 @@ docker exec -u root "${COLLECTOR_CONTAINER}" iptables -F 2>/dev/null || true
 event_end_ns=$(ts_now_ns)
 echo "   Restored HTTPS connections"
 
-echo "4. Waiting 60s for next successful poll cycle..."
-sleep 60
+echo "4. Waiting 45s for next successful poll cycle..."
+sleep 45
 
 echo "5. Verifying results..."
 
@@ -41,7 +41,7 @@ assert_container_healthy "collector"
 assert_container_healthy "writer"
 
 # Wait for snapshot_poll_miss gaps to appear in archive
-wait_for_gaps "snapshot_poll_miss" 90
+wait_for_gaps "snapshot_poll_miss" 60
 poll_gaps=$(count_gaps "snapshot_poll_miss")
 assert_gt "snapshot_poll_miss gaps exist in archive" "$poll_gaps" 0
 

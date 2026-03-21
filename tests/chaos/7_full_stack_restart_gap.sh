@@ -11,7 +11,7 @@ echo ""
 DB_URL="${DB_URL:-postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@localhost:5432/cryptolake}"
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Recording maintenance intent before shutdown..."
 uv run cryptolake mark-maintenance \
@@ -27,7 +27,7 @@ $COMPOSE down 2>&1
 echo "3. Bringing stack back up..."
 $COMPOSE up -d 2>&1
 wait_healthy
-wait_for_data 40
+wait_for_data 30
 
 echo "4. Verifying results..."
 

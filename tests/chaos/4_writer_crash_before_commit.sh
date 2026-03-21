@@ -11,7 +11,7 @@ echo "no duplicates, no corrupt zstd frames after recovery."
 echo ""
 
 setup_stack
-wait_for_data 30
+wait_for_data 20
 
 echo "1. Recording pre-crash envelope count..."
 pre_kill=$(count_envelopes)
@@ -25,7 +25,7 @@ $COMPOSE up -d writer 2>&1
 event_end_ns=$(ts_now_ns)
 
 echo "4. Waiting for writer to recover and resume writing..."
-if wait_for_envelope_count_gt "$pre_kill" 90; then
+if wait_for_envelope_count_gt "$pre_kill" 60; then
     pass "writer resumed writing after crash recovery"
 else
     fail "writer did not resume writing after crash recovery"
