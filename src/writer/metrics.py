@@ -58,3 +58,19 @@ flush_duration_ms = Histogram(
     ["exchange", "stream"],
     buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
 )
+
+write_errors_total = Counter(
+    "writer_write_errors_total",
+    "Disk write failures (ENOSPC, permission, etc.)",
+    ["exchange", "stream"],
+)
+
+pg_commit_failures_total = Counter(
+    "writer_pg_commit_failures_total",
+    "PostgreSQL state commit failures",
+)
+
+kafka_commit_failures_total = Counter(
+    "writer_kafka_commit_failures_total",
+    "Kafka async offset commit failures",
+)
