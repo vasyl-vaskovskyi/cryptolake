@@ -22,8 +22,36 @@ echo "3. Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
 
-echo "4. Waiting 60s for depth snapshot resync..."
-sleep 60
+echo "4. Waiting for depth snapshot data to appear in archive..."
+# Poll until depth_snapshot records are written (snapshot_interval=30s + REST latency + flush)
+depth_found=false
+for _attempt in $(seq 1 40); do
+    count=$(uv run python -c "
+import zstandard as zstd, orjson
+from pathlib import Path
+base = Path('${TEST_DATA_DIR}')
+found = 0
+for f in base.rglob('*.zst'):
+    with open(f, 'rb') as fh:
+        data = zstd.ZstdDecompressor().stream_reader(fh).read()
+    for line in data.strip().split(b'\n'):
+        if not line:
+            continue
+        env = orjson.loads(line)
+        if env.get('type') == 'data' and env.get('stream') == 'depth_snapshot':
+            found += 1
+print(found)
+" 2>/dev/null || echo "0")
+    if [[ "${count}" =~ ^[0-9]+$ ]] && (( count > 0 )); then
+        echo "   Found ${count} depth_snapshot record(s) after ${_attempt}x3s"
+        depth_found=true
+        break
+    fi
+    sleep 3
+done
+if ! $depth_found; then
+    echo "   WARNING: no depth_snapshot records after 120s polling"
+fi
 
 echo "5. Verifying results..."
 
@@ -118,9 +146,7 @@ print(f'OK: {found} depth_snapshot record(s) in archive')
 if validate_depth_snapshots_exist; then
     pass "depth_snapshot records present in archive"
 else
-    # depth_snapshot topic may not be discovered by the writer in time
-    # (Kafka metadata refresh interval). This is a known limitation, not a test failure.
-    pass "no depth_snapshot records in archive (topic discovery timing — not a failure)"
+    fail "no depth_snapshot records in archive"
 fi
 
 # 2. Bookticker data (public socket, same as depth) resumed after reconnect
