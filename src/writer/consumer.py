@@ -713,13 +713,26 @@ class WriterConsumer:
         states: list[FileState] = []
         for result in results:
             file_path = self._resolve_file_path(result.file_path)
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            compressed = self.compressor.compress_frame(result.lines)
-            with open(file_path, "ab") as f:
-                f.write(compressed)
-                f.flush()
-                os.fsync(f.fileno())
+                compressed = self.compressor.compress_frame(result.lines)
+                with open(file_path, "ab") as f:
+                    f.write(compressed)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError as e:
+                logger.error(
+                    "write_to_disk_failed",
+                    path=str(file_path),
+                    error=str(e),
+                    lines_lost=len(result.lines),
+                )
+                writer_metrics.write_errors_total.labels(
+                    exchange=result.target.exchange,
+                    stream=result.target.stream,
+                ).inc()
+                continue  # skip this file, data in buffer is lost
 
             file_size = file_path.stat().st_size
             writer_metrics.bytes_written_total.labels(
@@ -775,7 +788,19 @@ class WriterConsumer:
                 ))
 
         # Save both file states and checkpoints in a single atomic transaction
-        await self.state_manager.save_states_and_checkpoints(states, checkpoints)
+        try:
+            await self.state_manager.save_states_and_checkpoints(states, checkpoints)
+        except Exception as e:
+            logger.error(
+                "pg_commit_failed_will_retry",
+                error=str(e),
+                states=len(states),
+                checkpoints=len(checkpoints),
+            )
+            writer_metrics.pg_commit_failures_total.inc()
+            # Do NOT commit Kafka offsets — messages will be re-consumed
+            # and re-written on next flush (dedup handles duplicates).
+            return
 
         # Update in-memory checkpoint cache AFTER successful commit
         for cp in checkpoints:
