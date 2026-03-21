@@ -164,8 +164,12 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    shutdown_task = None
+
     def _signal_handler():
-        loop.create_task(writer.shutdown())
+        nonlocal shutdown_task
+        if shutdown_task is None:
+            shutdown_task = loop.create_task(writer.shutdown())
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _signal_handler)
@@ -173,6 +177,8 @@ def main():
     try:
         loop.run_until_complete(writer.start())
     finally:
+        if shutdown_task is not None and not shutdown_task.done():
+            loop.run_until_complete(shutdown_task)
         loop.close()
 
 
