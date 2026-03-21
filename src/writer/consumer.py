@@ -566,7 +566,7 @@ class WriterConsumer:
             )
 
             # De-duplication during recovery: skip messages already in the archive (spec 8.2)
-            target = self.buffer_manager._route(envelope)
+            target = self.buffer_manager.route(envelope)
             base_path = build_file_path(
                 self.buffer_manager.base_dir, target.exchange, target.symbol,
                 target.stream, target.date, target.hour,

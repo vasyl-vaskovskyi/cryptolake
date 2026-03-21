@@ -51,7 +51,7 @@ class BufferManager:
 
     def add(self, envelope: dict) -> list[FlushResult] | None:
         """Add an envelope to the appropriate buffer. Returns flush results if threshold hit."""
-        target = self._route(envelope)
+        target = self.route(envelope)
         key = target.key
         if key not in self._buffers:
             self._buffers[key] = []
@@ -119,7 +119,7 @@ class BufferManager:
             checkpoint_meta=checkpoint_meta,
         )]
 
-    def _route(self, envelope: dict) -> FileTarget:
+    def route(self, envelope: dict) -> FileTarget:
         received_at_ns = envelope["received_at"]
         dt = datetime.datetime.fromtimestamp(
             received_at_ns / 1_000_000_000, tz=datetime.timezone.utc
