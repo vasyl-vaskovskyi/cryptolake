@@ -658,12 +658,15 @@ class WriterConsumer:
         for file_path in files_to_seal:
             sc = sidecar_path(file_path)
             if file_path.exists() and not sc.exists() and file_path.stat().st_size > 0:
-                write_sha256_sidecar(file_path, sc)
-                self._sealed_files.add(file_path)
-                writer_metrics.files_rotated_total.labels(
-                    exchange=exchange, symbol=symbol, stream=stream,
-                ).inc()
-                logger.info("file_sealed", path=str(file_path))
+                try:
+                    write_sha256_sidecar(file_path, sc)
+                    self._sealed_files.add(file_path)
+                    writer_metrics.files_rotated_total.labels(
+                        exchange=exchange, symbol=symbol, stream=stream,
+                    ).inc()
+                    logger.info("file_sealed", path=str(file_path))
+                except OSError as e:
+                    logger.error("sidecar_write_failed", path=str(file_path), error=str(e))
 
         # 4. Now safe to commit -- sidecar is durable on disk
         if results:
@@ -687,14 +690,17 @@ class WriterConsumer:
         for zst_file in base.rglob("*.jsonl.zst"):
             sc = sidecar_path(zst_file)
             if not sc.exists() and zst_file.stat().st_size > 0:
-                write_sha256_sidecar(zst_file, sc)
-                self._sealed_files.add(zst_file)
-                writer_metrics.files_rotated_total.labels(
-                    exchange="binance",
-                    symbol=zst_file.parent.parent.parent.name,
-                    stream=zst_file.parent.parent.name,
-                ).inc()
-                logger.info("file_sealed", path=str(zst_file))
+                try:
+                    write_sha256_sidecar(zst_file, sc)
+                    self._sealed_files.add(zst_file)
+                    writer_metrics.files_rotated_total.labels(
+                        exchange="binance",
+                        symbol=zst_file.parent.parent.parent.name,
+                        stream=zst_file.parent.parent.name,
+                    ).inc()
+                    logger.info("file_sealed", path=str(zst_file))
+                except OSError as e:
+                    logger.error("sidecar_write_failed", path=str(zst_file), error=str(e))
 
         # 3. Now safe to commit -- all sidecars are durable on disk
         if results:

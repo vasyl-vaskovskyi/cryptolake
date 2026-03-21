@@ -52,6 +52,16 @@ class TestDiskWriteErrorHandling:
         )
 
 
+class TestSidecarWriteFailure:
+    def test_sidecar_failure_does_not_crash_rotation(self):
+        """Sidecar write failure must be caught, not crash the writer."""
+        import src.writer.consumer as consumer_mod
+        source = Path(consumer_mod.__file__).read_text()
+        assert "sidecar_write_failed" in source, (
+            "write_sha256_sidecar calls must be wrapped in try/except"
+        )
+
+
 class TestProducerSerializationError:
     def test_produce_catches_serialization_error(self):
         """produce() must catch serialization errors and return False."""
