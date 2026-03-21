@@ -392,6 +392,19 @@ ts_now_ns() {
 }
 
 # ---------------------------------------------------------------------------
+# Message injection helpers
+# ---------------------------------------------------------------------------
+
+# Inject a corrupt (non-JSON) message into a Redpanda topic.
+# Usage: inject_corrupt_message <topic> [message]
+inject_corrupt_message() {
+    local topic="${1:?Usage: inject_corrupt_message <topic> [message]}"
+    local msg="${2:-NOT_VALID_JSON{{{corrupt}}}"
+    $COMPOSE exec -T redpanda rpk topic produce "$topic" <<< "$msg"
+    echo "   Injected corrupt message into ${topic}"
+}
+
+# ---------------------------------------------------------------------------
 # Reporting helpers
 # ---------------------------------------------------------------------------
 
