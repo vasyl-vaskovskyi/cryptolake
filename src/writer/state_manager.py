@@ -280,18 +280,8 @@ class StateManager:
                 pass
             self._conn = await psycopg.AsyncConnection.connect(self._db_url, autocommit=True)
 
-    async def save_states_and_checkpoints(
-        self,
-        states: list[FileState],
-        checkpoints: list[StreamCheckpoint],
-    ) -> None:
-        """Atomically save file states AND stream checkpoints in a single transaction.
-
-        This ensures both are committed together so a crash between them
-        cannot leave the two tables inconsistent.
-
-        Retries up to 3 times on connection errors.
-        """
+    async def _retry_transaction(self, operation, log_label: str = "pg_save_failed") -> None:
+        """Execute operation(cursor) inside a transaction with retry-on-failure."""
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -299,32 +289,42 @@ class StateManager:
                 assert self._conn is not None
                 async with self._conn.transaction():
                     async with self._conn.cursor() as cur:
-                        for state in states:
-                            await cur.execute(self.UPSERT_SQL, {
-                                "topic": state.topic,
-                                "partition": state.partition,
-                                "high_water_offset": state.high_water_offset,
-                                "file_path": state.file_path,
-                                "file_byte_size": state.file_byte_size,
-                            })
-                        for cp in checkpoints:
-                            await cur.execute(self.UPSERT_STREAM_CHECKPOINT_SQL, {
-                                "exchange": cp.exchange,
-                                "symbol": cp.symbol,
-                                "stream": cp.stream,
-                                "last_received_at": cp.last_received_at,
-                                "last_collector_session_id": cp.last_collector_session_id,
-                                "last_gap_reason": cp.last_gap_reason,
-                            })
-                logger.debug("states_and_checkpoints_saved",
-                             states=len(states), checkpoints=len(checkpoints))
+                        await operation(cur)
                 return
             except Exception as e:
-                logger.warning("pg_save_failed", attempt=attempt + 1, error=str(e))
+                logger.warning(log_label, attempt=attempt + 1, error=str(e))
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
                 else:
                     raise
+
+    async def save_states_and_checkpoints(
+        self,
+        states: list[FileState],
+        checkpoints: list[StreamCheckpoint],
+    ) -> None:
+        """Atomically save file states AND stream checkpoints in a single transaction."""
+        async def _op(cur):
+            for state in states:
+                await cur.execute(self.UPSERT_SQL, {
+                    "topic": state.topic,
+                    "partition": state.partition,
+                    "high_water_offset": state.high_water_offset,
+                    "file_path": state.file_path,
+                    "file_byte_size": state.file_byte_size,
+                })
+            for cp in checkpoints:
+                await cur.execute(self.UPSERT_STREAM_CHECKPOINT_SQL, {
+                    "exchange": cp.exchange,
+                    "symbol": cp.symbol,
+                    "stream": cp.stream,
+                    "last_received_at": cp.last_received_at,
+                    "last_collector_session_id": cp.last_collector_session_id,
+                    "last_gap_reason": cp.last_gap_reason,
+                })
+        await self._retry_transaction(_op)
+        logger.debug("states_and_checkpoints_saved",
+                     states=len(states), checkpoints=len(checkpoints))
 
     # ── stream checkpoint methods ────────────────────────────────────────
 
@@ -387,6 +387,19 @@ class StateManager:
         logger.debug("component_clean_shutdown_marked",
                       component=component, instance_id=instance_id)
 
+    @staticmethod
+    def _row_to_component_state(row) -> ComponentRuntimeState:
+        return ComponentRuntimeState(
+            component=row[0],
+            instance_id=row[1],
+            host_boot_id=row[2],
+            started_at=str(row[3]),
+            last_heartbeat_at=str(row[4]),
+            clean_shutdown_at=str(row[5]) if row[5] else None,
+            planned_shutdown=row[6],
+            maintenance_id=row[7],
+        )
+
     async def load_latest_component_states(self) -> list[ComponentRuntimeState]:
         """Load all component runtime state rows."""
         assert self._conn is not None, "call connect() first"
@@ -395,16 +408,7 @@ class StateManager:
             await cur.execute(self.LOAD_LATEST_COMPONENT_STATES_SQL)
             rows = await cur.fetchall()
             for row in rows:
-                states.append(ComponentRuntimeState(
-                    component=row[0],
-                    instance_id=row[1],
-                    host_boot_id=row[2],
-                    started_at=str(row[3]),
-                    last_heartbeat_at=str(row[4]),
-                    clean_shutdown_at=str(row[5]) if row[5] else None,
-                    planned_shutdown=row[6],
-                    maintenance_id=row[7],
-                ))
+                states.append(self._row_to_component_state(row))
         return states
 
     async def load_component_state_by_instance(
@@ -427,16 +431,7 @@ class StateManager:
             row = await cur.fetchone()
             if row is None:
                 return None
-            return ComponentRuntimeState(
-                component=row[0],
-                instance_id=row[1],
-                host_boot_id=row[2],
-                started_at=str(row[3]),
-                last_heartbeat_at=str(row[4]),
-                clean_shutdown_at=str(row[5]) if row[5] else None,
-                planned_shutdown=row[6],
-                maintenance_id=row[7],
-            )
+            return self._row_to_component_state(row)
 
     # ── maintenance intent methods ───────────────────────────────────────
 
