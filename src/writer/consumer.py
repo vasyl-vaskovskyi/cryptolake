@@ -518,7 +518,20 @@ class WriterConsumer:
             msg_offset = msg.offset()
             assert raw_value is not None and msg_topic is not None
             assert msg_partition is not None and msg_offset is not None
-            envelope = deserialize_envelope(raw_value)
+            try:
+                envelope = deserialize_envelope(raw_value)
+            except Exception:
+                logger.error(
+                    "corrupt_message_skipped",
+                    topic=msg_topic,
+                    partition=msg_partition,
+                    offset=msg_offset,
+                    raw_size=len(raw_value),
+                )
+                writer_metrics.messages_skipped_total.labels(
+                    exchange="unknown", symbol="unknown", stream="unknown",
+                ).inc()
+                continue
             envelope = add_broker_coordinates(
                 envelope,
                 topic=msg_topic,
