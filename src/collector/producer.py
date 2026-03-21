@@ -68,7 +68,18 @@ class CryptoLakeProducer:
         symbol = envelope["symbol"]
         topic = f"{self.exchange}.{stream}"
         key = symbol.encode()
-        value = serialize_envelope(envelope)
+        try:
+            value = serialize_envelope(envelope)
+        except Exception:
+            logger.error(
+                "serialization_failed",
+                stream=stream,
+                symbol=symbol,
+            )
+            collector_metrics.messages_dropped_total.labels(
+                exchange=self.exchange, symbol=symbol, stream=stream,
+            ).inc()
+            return False
 
         # Check per-stream cap and optimistically increment under a single lock
         # to avoid TOCTOU between cap check and count update (spec 7.5)

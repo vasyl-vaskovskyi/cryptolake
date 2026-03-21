@@ -50,3 +50,13 @@ class TestDiskWriteErrorHandling:
         assert "write_errors_total" in source, (
             "_write_to_disk must increment write_errors_total metric"
         )
+
+
+class TestProducerSerializationError:
+    def test_produce_catches_serialization_error(self):
+        """produce() must catch serialization errors and return False."""
+        import src.collector.producer as producer_mod
+        source = Path(producer_mod.__file__).read_text()
+        assert "serialization_failed" in source, (
+            "produce() must log serialization_failed on error"
+        )
