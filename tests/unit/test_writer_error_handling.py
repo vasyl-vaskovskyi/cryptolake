@@ -99,9 +99,13 @@ class TestPgErrorGapEmission:
         import src.writer.consumer as consumer_mod
         from pathlib import Path
         source = Path(consumer_mod.__file__).read_text()
-        # Verify the PG failure path creates gap envelopes
-        assert source.count('reason="write_error"') >= 2, (
-            "write_error gap must be emitted in both _write_to_disk AND _commit_state"
+        # After refactoring, reason="write_error" lives in _make_error_gap helper;
+        # both _write_to_disk and _commit_state call _make_error_gap.
+        assert 'reason="write_error"' in source, (
+            "write_error gap must be defined in _make_error_gap helper"
+        )
+        assert source.count("_make_error_gap") >= 3, (
+            "_make_error_gap must be defined once and called in both _write_to_disk AND _commit_state"
         )
 
 

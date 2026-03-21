@@ -749,6 +749,41 @@ class WriterConsumer:
         self._update_disk_metrics()
         self._update_consumer_lag()
 
+    @staticmethod
+    def _extract_batch_time_range(lines: list[bytes]) -> tuple[int, int]:
+        """Extract (first_ts, last_ts) from serialized envelope lines."""
+        now = time.time_ns()
+        if not lines:
+            return (now, now)
+        try:
+            first_ts = orjson.loads(lines[0]).get("received_at", now)
+            last_ts = orjson.loads(lines[-1]).get("received_at", now)
+            return (first_ts, max(last_ts, first_ts))
+        except Exception:
+            return (now, now)
+
+    @staticmethod
+    def _make_error_gap(result: FlushResult, detail: str) -> dict:
+        """Create a write_error gap envelope from a failed FlushResult."""
+        first_ts, last_ts = WriterConsumer._extract_batch_time_range(result.lines)
+        gap = create_gap_envelope(
+            exchange=result.target.exchange,
+            symbol=result.target.symbol,
+            stream=result.target.stream,
+            collector_session_id="",
+            session_seq=-1,
+            gap_start_ts=first_ts,
+            gap_end_ts=last_ts,
+            reason="write_error",
+            detail=detail,
+        )
+        return add_broker_coordinates(
+            gap,
+            topic=f"{result.target.exchange}.{result.target.stream}",
+            partition=result.partition,
+            offset=-1,
+        )
+
     def _write_to_disk(self, results: list[FlushResult]) -> tuple[list[FileState], list[dict]]:
         """Write compressed frames to disk and fsync. Returns (FileState list, gap envelopes).
         Gap envelopes are emitted for any files that failed to write.
@@ -777,35 +812,7 @@ class WriterConsumer:
                     stream=result.target.stream,
                 ).inc()
                 # Emit gap envelope covering the batch's time range
-                now_ns = time.time_ns()
-                first_ts = now_ns
-                last_ts = now_ns
-                if result.lines:
-                    try:
-                        first_env = orjson.loads(result.lines[0])
-                        last_env = orjson.loads(result.lines[-1])
-                        first_ts = first_env.get("received_at", now_ns)
-                        last_ts = last_env.get("received_at", now_ns)
-                    except Exception:
-                        pass
-                gap = create_gap_envelope(
-                    exchange=result.target.exchange,
-                    symbol=result.target.symbol,
-                    stream=result.target.stream,
-                    collector_session_id="",
-                    session_seq=-1,
-                    gap_start_ts=first_ts,
-                    gap_end_ts=max(last_ts, first_ts),
-                    reason="write_error",
-                    detail=f"Disk write failed: {e}",
-                )
-                gap = add_broker_coordinates(
-                    gap,
-                    topic=f"{result.target.exchange}.{result.target.stream}",
-                    partition=result.partition,
-                    offset=-1,
-                )
-                gap_envelopes.append(gap)
+                gap_envelopes.append(self._make_error_gap(result, f"Disk write failed: {e}"))
                 continue  # skip this file, data in buffer is lost
 
             file_size = file_path.stat().st_size
@@ -873,37 +880,8 @@ class WriterConsumer:
             )
             writer_metrics.pg_commit_failures_total.inc()
             # Emit gap for each affected stream covering the batch's time range
-            now_ns = time.time_ns()
             for result in results:
-                # Derive batch time range from serialized lines
-                first_ts = now_ns
-                last_ts = now_ns
-                if result.lines:
-                    try:
-                        first_env = orjson.loads(result.lines[0])
-                        last_env = orjson.loads(result.lines[-1])
-                        first_ts = first_env.get("received_at", now_ns)
-                        last_ts = last_env.get("received_at", now_ns)
-                    except Exception:
-                        pass
-                gap = create_gap_envelope(
-                    exchange=result.target.exchange,
-                    symbol=result.target.symbol,
-                    stream=result.target.stream,
-                    collector_session_id="",
-                    session_seq=-1,
-                    gap_start_ts=first_ts,
-                    gap_end_ts=max(last_ts, first_ts),
-                    reason="write_error",
-                    detail=f"PostgreSQL commit failed: {e}",
-                )
-                gap = add_broker_coordinates(
-                    gap,
-                    topic=f"{result.target.exchange}.{result.target.stream}",
-                    partition=result.partition,
-                    offset=-1,
-                )
-                self.buffer_manager.add(gap)
+                self.buffer_manager.add(self._make_error_gap(result, f"PostgreSQL commit failed: {e}"))
             # Do NOT commit Kafka offsets — messages will be re-consumed
             # and re-written on next flush (dedup handles duplicates).
             return
