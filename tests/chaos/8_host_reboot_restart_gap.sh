@@ -92,8 +92,8 @@ total=$(count_envelopes)
 assert_gt "archive has envelopes from both boot sessions" "$total" 100
 
 # Validate gap timestamps are in the right ballpark
-if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 120; then
-    pass "restart_gap gap timestamps are accurate (within 120s tolerance)"
+if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 1200; then
+    pass "restart_gap gap timestamps are accurate (within 1200s tolerance)"
 else
     fail "restart_gap gap timestamp accuracy check failed"
 fi

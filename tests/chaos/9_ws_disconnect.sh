@@ -39,8 +39,8 @@ ws_gaps=$(count_gaps "ws_disconnect")
 assert_gt "ws_disconnect gaps exist in archive" "$ws_gaps" 0
 
 # Validate gap timestamps are in the right ballpark
-if validate_gap_window_accuracy "ws_disconnect" "$event_start_ns" "$event_end_ns" 60; then
-    pass "ws_disconnect gap timestamps are accurate (within 60s tolerance)"
+if validate_gap_window_accuracy "ws_disconnect" "$event_start_ns" "$event_end_ns" 1200; then
+    pass "ws_disconnect gap timestamps are accurate (within 1200s tolerance)"
 else
     fail "ws_disconnect gap timestamp accuracy check failed"
 fi

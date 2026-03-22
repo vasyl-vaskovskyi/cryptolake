@@ -121,6 +121,9 @@ $COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" "${DISK_DATA_DI
            rm -f /data/disk_test/fill_disk.tmp /data/disk_test/fill_disk_last.tmp 2>/dev/null || true
 
 echo "8. Restarting writer for recovery..."
+# Force-restart so _recover_files truncates corrupt partial frames back
+# to PG-recorded byte sizes.  "up -d" is a no-op for a running container.
+$COMPOSE_DISK stop writer 2>&1
 $COMPOSE_DISK up -d writer 2>&1
 sleep 30
 
