@@ -351,6 +351,11 @@ class WriterConsumer:
         except (ValueError, TypeError):
             gap_start_ts = 0
 
+        # Clamp: checkpoint may carry a wall-clock received_at from an error-gap
+        # envelope that was newer than messages Kafka will re-deliver after restart.
+        if gap_start_ts > current_received_at > 0:
+            gap_start_ts = current_received_at
+
         exchange, symbol, stream = stream_key
         logger.warning(
             "recovery_gap_detected",
@@ -808,6 +813,7 @@ class WriterConsumer:
             gap_end_ts=last_ts,
             reason="write_error",
             detail=detail,
+            received_at=last_ts,
         )
         return add_broker_coordinates(
             gap,

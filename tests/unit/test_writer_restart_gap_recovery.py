@@ -774,3 +774,55 @@ class TestRuntimeSessionDetectionPreserved:
         assert result["component"] == "host"
         assert result["cause"] == "host_reboot"
         assert result["planned"] is False
+
+
+class TestRecoveryGapTimestampClamping:
+    """When a checkpoint's last_received_at was set from a gap envelope with
+    wall-clock received_at, it can be newer than messages Kafka re-delivers
+    after restart.  The recovery gap must clamp gap_start_ts <= gap_end_ts."""
+
+    def test_inverted_timestamps_clamped_to_zero_duration(self):
+        """If checkpoint timestamp > first post-recovery message, clamp to avoid
+        negative-duration gap (regression from buffer_overflow_recovery chaos test)."""
+        from src.writer.consumer import WriterConsumer
+
+        state_manager = MagicMock(spec=StateManager)
+        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
+        compressor = MagicMock()
+
+        consumer = WriterConsumer(
+            brokers=["localhost:9092"],
+            topics=["binance.trades"],
+            group_id="test",
+            buffer_manager=buffer_manager,
+            compressor=compressor,
+            state_manager=state_manager,
+            base_dir="/data",
+        )
+
+        # Checkpoint has a NEWER timestamp (e.g., from a wall-clock error-gap envelope)
+        future_ts = "2026-03-18T10:05:00+00:00"  # 10:05
+        consumer._durable_checkpoints = {
+            ("binance", "btcusdt", "trades"): _make_checkpoint(
+                last_received_at=future_ts,
+                last_collector_session_id="session-old",
+            ),
+        }
+        consumer._previous_writer_state = _make_component_state(
+            component="writer", host_boot_id="boot-A"
+        )
+        consumer._current_boot_id = "boot-A"
+
+        # First post-recovery message has an OLDER received_at (re-delivered from Kafka)
+        older_ns = int(datetime(2026, 3, 18, 10, 3, 0, tzinfo=timezone.utc).timestamp() * 1e9)
+        envelope = _make_data_envelope(
+            collector_session_id="session-old",
+            received_at=older_ns,
+        )
+
+        result = consumer._check_recovery_gap(envelope)
+        assert result is not None
+        assert result["reason"] == "restart_gap"
+        # gap_start_ts must be clamped to gap_end_ts (no negative duration)
+        assert result["gap_start_ts"] <= result["gap_end_ts"]
+        assert result["gap_end_ts"] == older_ns

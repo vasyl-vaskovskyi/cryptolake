@@ -109,6 +109,31 @@ class TestPgErrorGapEmission:
         )
 
 
+class TestErrorGapUsesDataTimestamp:
+    def test_make_error_gap_received_at_matches_data_range(self):
+        """_make_error_gap must set received_at to last_ts from the batch,
+        NOT wall-clock time.  Wall-clock received_at pollutes checkpoints
+        and causes inverted timestamps on recovery (buffer_overflow regression)."""
+        from src.writer.consumer import WriterConsumer
+        from src.writer.buffer_manager import FlushResult
+        from src.writer.file_rotator import FileTarget
+
+        data_ts = 1_700_000_000_000_000_000  # fixed nanosecond timestamp
+        line = orjson.dumps({"received_at": data_ts})
+        result = FlushResult(
+            target=FileTarget("binance", "btcusdt", "trades", "2026-03-18", 10),
+            file_path=Path("/data/test.jsonl.zst"),
+            lines=[line],
+            high_water_offset=100,
+            partition=0,
+            count=1,
+        )
+        gap = WriterConsumer._make_error_gap(result, "test error")
+        assert gap["received_at"] == data_ts, (
+            "received_at must come from data timestamps, not wall-clock"
+        )
+
+
 class TestProducerSerializationError:
     def test_produce_catches_serialization_error(self):
         """produce() must catch serialization errors and return False."""
