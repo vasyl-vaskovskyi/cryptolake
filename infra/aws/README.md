@@ -51,6 +51,69 @@ checks) before reporting `CREATE_COMPLETE`.
 `x86_64` for `t3`, `m6i`, `c6i`, etc. Use `arm64` only with Graviton families
 such as `t4g`, `m7g`, or `c7g`.
 
+## Deploy to an Existing EC2 Instance
+
+If you already have a running EC2 instance (not managed by CloudFormation), SSH
+in and set up the stack manually:
+
+```bash
+ssh -i ~/.ssh/your-key.pem ec2-user@<your-instance-ip>
+
+# Install Docker
+sudo dnf update -y
+sudo dnf install -y docker git xfsprogs
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+
+# Install Docker Compose plugin
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64) COMPOSE_ARCH=x86_64 ;;
+  aarch64|arm64) COMPOSE_ARCH=aarch64 ;;
+esac
+sudo curl -SL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-$COMPOSE_ARCH" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Re-login to pick up the docker group, then:
+exit
+ssh -i ~/.ssh/your-key.pem ec2-user@<your-instance-ip>
+
+# Mount data volume (skip if already mounted)
+# Identify the device (lsblk), then:
+sudo mkfs.xfs /dev/<device>          # only if not yet formatted
+sudo mkdir -p /data
+sudo mount /dev/<device> /data
+VOL_UUID=$(sudo blkid -s UUID -o value /dev/<device>)
+echo "UUID=$VOL_UUID /data xfs defaults,nofail 0 2" | sudo tee -a /etc/fstab
+
+# Clone and start the stack
+sudo mkdir -p /opt/cryptolake
+sudo chown ec2-user:ec2-user /opt/cryptolake
+git clone -b main <your-repo-url> /opt/cryptolake
+cd /opt/cryptolake
+
+# Create .env
+cat > .env << 'EOF'
+POSTGRES_PASSWORD=<your-postgres-password>
+GF_ADMIN_PASSWORD=<your-grafana-password>
+WEBHOOK_URL=
+GRAFANA_BIND=127.0.0.1
+HOST_DATA_DIR=/data
+EOF
+chmod 600 .env
+
+docker compose up -d --build
+docker compose ps   # verify all services are healthy
+```
+
+> **Note:** This does not set up CloudWatch agent, AWS Backup, or the Elastic IP.
+> Those are managed by the CloudFormation template. If you need them on an
+> existing instance, install the CloudWatch agent manually and configure AWS
+> Backup through the console.
+
 ## Connect
 
 ```bash
@@ -83,19 +146,35 @@ startup to promote restart gap classification from generic Phase 1
 
 ### Install
 
+The lifecycle agent requires a dedicated `cryptolake` user and a Python
+virtualenv with the project's dependencies.
+
 ```bash
 ssh -i ~/.ssh/your-key.pem ec2-user@<ElasticIP>
 
-# Copy the systemd unit
+# 1. Create the cryptolake service user (if it doesn't already exist)
+sudo useradd -r -s /sbin/nologin -d /opt/cryptolake cryptolake
+sudo usermod -aG docker cryptolake
+
+# 2. Create the Python virtualenv
+cd /opt/cryptolake
+python3 -m venv .venv
+.venv/bin/pip install -e .
+
+# 3. Create the ledger directory
+sudo mkdir -p /data/.cryptolake/lifecycle
+sudo chown cryptolake:docker /data/.cryptolake/lifecycle
+
+# 4. Install the systemd unit
 sudo cp /opt/cryptolake/infra/aws/systemd/cryptolake-lifecycle-agent.service \
     /etc/systemd/system/
 
-# Enable and start
+# 5. Enable and start
 sudo systemctl daemon-reload
 sudo systemctl enable cryptolake-lifecycle-agent
 sudo systemctl start cryptolake-lifecycle-agent
 
-# Verify
+# 6. Verify
 sudo systemctl status cryptolake-lifecycle-agent
 journalctl -u cryptolake-lifecycle-agent -f
 ```
@@ -125,7 +204,11 @@ scripts/cryptolake-maintenance.sh stop --reason "hardware maintenance"
 
 The wrapper:
 1. Writes maintenance intent to the host lifecycle ledger (always succeeds)
-2. Attempts to write intent to PostgreSQL via CLI (best-effort)
+2. Attempts to write intent to PostgreSQL via CLI (best-effort — requires
+   host-level access to port 5432; in the default docker-compose topology
+   PostgreSQL is only on the internal Docker network, so this step is
+   effectively ledger-only unless you add a `127.0.0.1:5432:5432` port
+   binding to the `postgres` service)
 3. Stops or restarts Docker Compose services
 
 This ensures restart gaps are classified as `planned=true` even if PG is
