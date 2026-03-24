@@ -74,6 +74,7 @@ class TestComposeStacks:
             "prometheus",
             "grafana",
             "alertmanager",
+            "whatsapp-bridge",
         }
 
         assert services["collector"]["build"]["context"] == "."

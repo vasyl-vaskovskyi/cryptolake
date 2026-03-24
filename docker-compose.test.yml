@@ -89,6 +89,14 @@ services:
     networks:
       - cryptolake_internal
 
+  whatsapp-bridge:
+    extends:
+      file: docker-compose.yml
+      service: whatsapp-bridge
+    networks:
+      - cryptolake_internal
+      - alertmanager_egress
+
   alertmanager:
     extends:
       file: docker-compose.yml

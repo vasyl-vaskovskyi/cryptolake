@@ -162,6 +162,27 @@ services:
     depends_on:
       - prometheus
 
+  whatsapp-bridge:
+    build:
+      context: ./infra/whatsapp-bridge
+    environment:
+      - CALLMEBOT_PHONE=${CALLMEBOT_PHONE:?Set CALLMEBOT_PHONE in .env}
+      - CALLMEBOT_APIKEY=${CALLMEBOT_APIKEY:?Set CALLMEBOT_APIKEY in .env}
+    networks:
+      - cryptolake_internal
+      - alertmanager_egress
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9095/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   alertmanager:
     image: prom/alertmanager:v0.27.0
     entrypoint:
@@ -171,7 +192,7 @@ services:
         sed "s|\$${WEBHOOK_URL}|$$WEBHOOK_URL|g" /etc/alertmanager/alertmanager.template.yml > /tmp/alertmanager.yml
         exec /bin/alertmanager --config.file=/tmp/alertmanager.yml
     environment:
-      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:9093}
+      - WEBHOOK_URL=http://whatsapp-bridge:9095
     networks:
       - cryptolake_internal
       - alertmanager_egress
@@ -182,6 +203,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    depends_on:
+      whatsapp-bridge:
+        condition: service_healthy
 
 volumes:
   postgres_data:
