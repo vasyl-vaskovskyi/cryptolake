@@ -211,17 +211,15 @@ class TestReadyEndpointNonBlocking:
 
     @pytest.mark.asyncio
     async def test_ready_uses_executor(self):
-        """_ready() should call is_connected() via run_in_executor."""
+        """_ready_checks() should call is_connected() via run_in_executor."""
         from src.collector.main import Collector
 
-        # Avoid full __init__ — just test the _ready method
+        # Avoid full __init__ — just test the _ready_checks method
         collector = Collector.__new__(Collector)
         collector.ws_manager = MagicMock()
         collector.ws_manager.is_connected.return_value = True
         collector.producer = MagicMock()
         collector.producer.is_connected.return_value = True
-
-        request = MagicMock()
 
         # Patch run_in_executor to verify it's used
         loop = asyncio.get_running_loop()
@@ -233,15 +231,12 @@ class TestReadyEndpointNonBlocking:
             return await original_run_in_executor(executor, fn, *args)
 
         with patch.object(loop, 'run_in_executor', side_effect=tracking_executor):
-            resp = await collector._ready(request)
+            checks = await collector._ready_checks()
 
         # Verify run_in_executor was called with producer.is_connected
         assert len(executor_calls) == 1
         assert executor_calls[0] == collector.producer.is_connected
 
-        # Verify response is correct
-        import json
-        body = json.loads(resp.body)
-        assert body["ws_connected"] is True
-        assert body["producer_connected"] is True
-        assert resp.status == 200
+        # Verify checks are correct
+        assert checks["ws_connected"] is True
+        assert checks["producer_connected"] is True

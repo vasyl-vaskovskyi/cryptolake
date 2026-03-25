@@ -3,17 +3,14 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import structlog
 import uvloop
-from aiohttp import web
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-
-from datetime import timedelta
 
 from src.common.config import load_config
+from src.common.health_server import start_health_server
 from src.common.logging import setup_logging
 from src.common.system_identity import get_host_boot_id
 from src.writer.buffer_manager import BufferManager
@@ -101,7 +98,7 @@ class Writer:
                      instance_id=self._instance_id, boot_id=self._boot_id)
         await asyncio.gather(
             self.consumer.consume_loop(),
-            self._start_http(),
+            start_health_server(self.config.monitoring.prometheus_port + 1, self._ready_checks),
         )
 
     async def shutdown(self) -> None:
@@ -121,21 +118,7 @@ class Writer:
         await self.state_manager.close()
         logger.info("writer_shutdown_complete")
 
-    async def _start_http(self) -> None:
-        app = web.Application()
-        app.router.add_get("/health", self._health)
-        app.router.add_get("/ready", self._ready)
-        app.router.add_get("/metrics", self._metrics)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        port = self.config.monitoring.prometheus_port + 1  # writer on 8001
-        site = web.TCPSite(runner, "0.0.0.0", port)
-        await site.start()
-
-    async def _health(self, request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok"})
-
-    async def _ready(self, request: web.Request) -> web.Response:
+    async def _ready_checks(self) -> dict[str, bool]:
         checks = {"consumer_connected": self.consumer.is_connected(), "storage_writable": True}
         try:
             Path(self.config.writer.base_dir).mkdir(parents=True, exist_ok=True)
@@ -144,14 +127,7 @@ class Writer:
             test_file.unlink()
         except Exception:
             checks["storage_writable"] = False
-        status = 200 if all(checks.values()) else 503
-        return web.json_response(checks, status=status)
-
-    async def _metrics(self, request: web.Request) -> web.Response:
-        return web.Response(
-            body=generate_latest(),
-            headers={"Content-Type": CONTENT_TYPE_LATEST},
-        )
+        return checks
 
 
 def main():

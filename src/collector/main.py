@@ -9,11 +9,9 @@ from pathlib import Path
 
 import structlog
 import uvloop
-from aiohttp import web
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-
 from src.common.async_utils import cancel_tasks
 from src.common.config import load_config
+from src.common.health_server import start_health_server
 from src.common.logging import setup_logging
 from src.common.system_identity import get_host_boot_id
 from src.collector.connection import WebSocketManager
@@ -245,7 +243,9 @@ class Collector:
             self._tasks.append(asyncio.create_task(self.oi_poller.start()))
 
         # Health/metrics HTTP server
-        self._tasks.append(asyncio.create_task(self._start_http()))
+        self._tasks.append(asyncio.create_task(
+            start_health_server(self.config.monitoring.prometheus_port, self._ready_checks)
+        ))
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
@@ -275,34 +275,13 @@ class Collector:
         await cancel_tasks(self._tasks)
         logger.info("collector_shutdown_complete")
 
-    async def _start_http(self) -> None:
-        app = web.Application()
-        app.router.add_get("/health", self._health)
-        app.router.add_get("/ready", self._ready)
-        app.router.add_get("/metrics", self._metrics)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.config.monitoring.prometheus_port)
-        await site.start()
-
-    async def _health(self, request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok"})
-
-    async def _ready(self, request: web.Request) -> web.Response:
+    async def _ready_checks(self) -> dict[str, bool]:
         loop = asyncio.get_running_loop()
         producer_ok = await loop.run_in_executor(None, self.producer.is_connected)
-        checks = {
+        return {
             "ws_connected": self.ws_manager.is_connected(),
             "producer_connected": producer_ok,
         }
-        status = 200 if all(checks.values()) else 503
-        return web.json_response(checks, status=status)
-
-    async def _metrics(self, request: web.Request) -> web.Response:
-        return web.Response(
-            body=generate_latest(),
-            headers={"Content-Type": CONTENT_TYPE_LATEST},
-        )
 
 
 def main():
