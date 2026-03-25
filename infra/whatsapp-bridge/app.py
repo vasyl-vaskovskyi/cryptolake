@@ -12,6 +12,7 @@ APIKEY = os.environ["CALLMEBOT_APIKEY"]
 CALLMEBOT_URL = "https://api.callmebot.com/whatsapp.php"
 # Callmebot rate-limits; AlertManager already batches via group_wait/group_interval
 SEND_DELAY = 2  # seconds between messages in a batch
+MAX_CONTENT_LENGTH = 1024 * 1024  # 1 MB
 
 
 def send_whatsapp(text: str) -> None:
@@ -126,6 +127,11 @@ def format_alert(alert: dict) -> str:
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", 0))
+        if length > MAX_CONTENT_LENGTH:
+            self.send_response(413)
+            self.end_headers()
+            self.wfile.write(b"payload too large")
+            return
         body = json.loads(self.rfile.read(length)) if length else {}
         alerts = body.get("alerts", [])
 

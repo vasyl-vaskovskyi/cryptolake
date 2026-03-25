@@ -198,6 +198,20 @@ Resources:
           # Signal CloudFormation on exit (success or failure)
           trap '/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}' EXIT
 
+          echo "=== Installing fail2ban ==="
+          dnf install -y epel-release || true
+          dnf install -y fail2ban
+          cat > /etc/fail2ban/jail.local << 'F2B'
+          [sshd]
+          enabled = true
+          port = ssh
+          maxretry = 5
+          bantime = 3600
+          findtime = 600
+          F2B
+          systemctl enable fail2ban
+          systemctl start fail2ban
+
           echo "=== Installing Docker ==="
           dnf update -y
           dnf install -y docker git xfsprogs aws-cfn-bootstrap

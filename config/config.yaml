@@ -1,5 +1,5 @@
 database:
-  url: "postgresql://cryptolake:postgres@postgres:5432/cryptolake"
+  url: "postgresql://cryptolake@postgres:5432/cryptolake"
 
 exchanges:
   binance:
