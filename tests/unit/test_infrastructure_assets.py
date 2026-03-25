@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -69,7 +68,6 @@ class TestComposeStacks:
             "collector",
             "writer",
             "prometheus",
-            "grafana",
             "alertmanager",
             "whatsapp-bridge",
         }
@@ -104,7 +102,7 @@ class TestComposeStacks:
         compose = _read_yaml("docker-compose.test.yml")
         services = compose["services"]
 
-        for name in ("postgres", "redpanda", "collector", "writer", "prometheus", "grafana", "alertmanager"):
+        for name in ("postgres", "redpanda", "collector", "writer", "prometheus", "alertmanager"):
             assert services[name]["extends"]["file"] == "docker-compose.yml"
             assert services[name]["extends"]["service"] == name
 
@@ -131,9 +129,6 @@ class TestObservabilityAssets:
         prometheus = _read_yaml("infra/prometheus/prometheus.yml")
         alert_rules = _read_yaml("infra/prometheus/alert_rules.yml")
         alertmanager = _read_yaml("infra/alertmanager/alertmanager.yml")
-        datasources = _read_yaml("infra/grafana/provisioning/datasources/datasources.yml")
-        dashboards = _read_yaml("infra/grafana/provisioning/dashboards/dashboards.yml")
-        dashboard = json.loads(_read_text("infra/grafana/dashboards/cryptolake.json"))
 
         job_names = {job["job_name"] for job in prometheus["scrape_configs"]}
         assert job_names == {"collector", "writer", "redpanda"}
@@ -153,22 +148,14 @@ class TestObservabilityAssets:
             "NTPDrift",
             "RedpandaBufferHigh",
             "MessagesDropped",
+            "WriteErrors",
+            "PostgresCommitFailing",
+            "KafkaCommitFailing",
         }
 
-        assert datasources["datasources"][0]["url"] == "http://prometheus:9090"
-        assert dashboards["providers"][0]["options"]["path"] == "/var/lib/grafana/dashboards"
-
-        panel_titles = {panel["title"] for panel in dashboard["panels"]}
-        assert panel_titles == {
-            "Message Throughput",
-            "Exchange Latency Heatmap",
-            "Consumer Lag",
-            "Connection Status",
-            "Gap Timeline",
-            "Disk Usage",
-            "Snapshot Health",
-            "Compression Efficiency",
-        }
+        sampler = _read_yaml("infra/sampler/sampler.yml")
+        assert len(sampler["sparklines"]) == 14
+        assert len(sampler["gauges"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
         assert receiver["url"] == "${WEBHOOK_URL}"
@@ -192,9 +179,7 @@ class TestAwsDeploymentAssets:
         readme = _read_text("infra/aws/README.md")
 
         assert "read -s POSTGRES_PASSWORD" in readme
-        assert "read -s GRAFANA_PASSWORD" in readme
         assert "PostgresPassword=\"$POSTGRES_PASSWORD\"" in readme
-        assert "GrafanaPassword=\"$GRAFANA_PASSWORD\"" in readme
         assert "InstanceArchitecture" in readme
 
 
