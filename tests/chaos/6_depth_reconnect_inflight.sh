@@ -3,26 +3,27 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Depth Reconnect Inflight ==="
+echo "=== Chaos 6: Depth Reconnect Inflight ==="
 echo "Kills the collector during active depth flow and verifies that depth"
 echo "data resynchronises correctly after reconnect."
 echo ""
 
 setup_stack
 
-echo "1. Letting collector stream depth updates for 30s..."
+section "Scenario"
+step 1 "Letting collector stream depth updates for 30s..."
 wait_for_data 30
 
-echo "2. Killing collector during active depth flow..."
+step 2 "Killing collector during active depth flow..."
 event_start_ns=$(ts_now_ns)
 docker kill "${COLLECTOR_CONTAINER}"
 sleep 5
 
-echo "3. Restarting collector..."
+step 3 "Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
 
-echo "4. Waiting for depth snapshot data to appear in archive..."
+step 4 "Waiting for depth snapshot data to appear in archive..."
 # Poll until depth_snapshot records are written (snapshot_interval=30s + REST latency + flush)
 depth_found=false
 for _attempt in $(seq 1 40); do
@@ -53,11 +54,11 @@ if ! $depth_found; then
     echo "   WARNING: no depth_snapshot records after 120s polling"
 fi
 
-echo "5. Waiting for collector to recover and produce new data..."
+step 5 "Waiting for collector to recover and produce new data..."
 if ! wait_service_healthy collector 30; then :; fi
 wait_for_data 30
 
-echo "6. Verifying results..."
+section "Verification"
 
 assert_container_healthy "collector"
 assert_container_healthy "writer"

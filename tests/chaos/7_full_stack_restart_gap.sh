@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Full-Stack Planned Restart ==="
+echo "=== Chaos 7: Full Stack Restart Gap ==="
 echo "Verifies that a planned full-stack restart (docker compose down/up)"
 echo "with a maintenance intent produces restart_gap records with planned=true."
 echo ""
@@ -13,7 +13,8 @@ DB_URL="${DB_URL:-postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@localho
 setup_stack
 wait_for_data 20
 
-echo "1. Recording maintenance intent before shutdown..."
+section "Scenario"
+step 1 "Recording maintenance intent before shutdown..."
 uv run cryptolake mark-maintenance \
   --db-url "${DB_URL}" \
   --scope system \
@@ -21,15 +22,15 @@ uv run cryptolake mark-maintenance \
   --reason "chaos test: planned full-stack restart" \
   --ttl-minutes 30
 
-echo "2. Performing full-stack shutdown (docker compose down)..."
+step 2 "Performing full-stack shutdown (docker compose down)..."
 $COMPOSE down 2>&1
 
-echo "3. Bringing stack back up..."
+step 3 "Bringing stack back up..."
 $COMPOSE up -d 2>&1
 wait_healthy
 wait_for_data 30
 
-echo "4. Verifying results..."
+section "Verification"
 
 # Writer should detect the session change and emit restart_gap records
 gaps=$(count_gaps "restart_gap")

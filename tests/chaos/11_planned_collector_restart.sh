@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Planned Collector-Only Restart ==="
+echo "=== Chaos 11: Planned Collector Restart ==="
 echo "Stops only the collector with maintenance intent, restarts it,"
 echo "and verifies restart_gap with component=collector, cause=operator_shutdown, planned=true."
 echo ""
@@ -15,7 +15,8 @@ wait_for_data 20
 
 MAINT_ID="chaos-collector-$(date -u '+%Y%m%dT%H%M%SZ')"
 
-echo "1. Recording maintenance intent for collector restart..."
+section "Scenario"
+step 1 "Recording maintenance intent for collector restart..."
 uv run cryptolake mark-maintenance \
   --db-url "${DB_URL}" \
   --scope collector \
@@ -23,20 +24,20 @@ uv run cryptolake mark-maintenance \
   --reason "chaos test: planned collector restart" \
   --ttl-minutes 30
 
-echo "2. Gracefully stopping collector..."
+step 2 "Gracefully stopping collector..."
 event_start_ns=$(ts_now_ns)
 $COMPOSE stop collector 2>&1
 
-echo "3. Waiting 10s (writer continues, Redpanda buffers)..."
+step 3 "Waiting 10s (writer continues, Redpanda buffers)..."
 sleep 10
 
-echo "4. Restarting collector..."
+step 4 "Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
 wait_healthy
 wait_for_data 30
 
-echo "5. Verifying results..."
+section "Verification"
 
 # Writer should detect the session change and emit restart_gap records
 wait_for_gaps "restart_gap" 60

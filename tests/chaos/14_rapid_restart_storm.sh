@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Rapid Restart Storm ==="
+echo "=== Chaos 14: Rapid Restart Storm ==="
 echo "Kills the writer 3 times in 60 seconds and verifies no duplicates."
 echo ""
 
@@ -12,8 +12,9 @@ wait_for_data 20
 
 pre_kill=$(count_envelopes)
 
+section "Scenario"
 for i in 1 2 3; do
-    echo "${i}. Killing writer (restart ${i}/3)..."
+    step "${i}" "Killing writer (restart ${i}/3)..."
     docker kill "${WRITER_CONTAINER}"
     sleep 5
     $COMPOSE up -d writer 2>&1
@@ -21,14 +22,14 @@ for i in 1 2 3; do
     sleep 10
 done
 
-echo "4. Waiting for writer to flush new data after restart storm..."
+step 4 "Waiting for writer to flush new data after restart storm..."
 if wait_for_envelope_count_gt "$pre_kill" 90; then
     pass "writer resumed writing after restart storm"
 else
     fail "writer did not resume writing after restart storm"
 fi
 
-echo "5. Verifying results..."
+section "Verification"
 assert_container_healthy "writer"
 assert_container_healthy "collector"
 
@@ -41,7 +42,7 @@ fi
 post_storm=$(count_envelopes)
 assert_gt "archive has data after restart storm" "$post_storm" "$pre_kill"
 
-echo "6. Checking for restart_gap records..."
+step 6 "Checking for restart_gap records..."
 wait_for_gaps "restart_gap" 60 || true
 gaps=$(count_gaps "restart_gap")
 if (( gaps > 0 )); then

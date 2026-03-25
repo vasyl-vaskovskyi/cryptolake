@@ -5,7 +5,7 @@ trap teardown_stack EXIT
 
 test_date="$(date -u '+%Y-%m-%d')"
 
-echo "=== Chaos: Kill Collector (Unclean Exit) ==="
+echo "=== Chaos 1: Kill Collector (Unclean Exit) ==="
 echo "Verifies that killing the collector process produces restart_gap records"
 echo "in the archive with component=collector and cause=unclean_exit."
 echo ""
@@ -13,27 +13,28 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-kill state..."
+section "Scenario"
+step 1 "Recording pre-kill state..."
 pre_kill=$(count_envelopes)
 event_start_ns=$(ts_now_ns)
 
-echo "2. Killing collector to simulate unclean exit..."
+step 2 "Killing collector to simulate unclean exit..."
 docker kill "${COLLECTOR_CONTAINER}"
 sleep 5
 
-echo "3. Restarting collector..."
+step 3 "Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
 
-echo "4. Waiting for restart_gap records to appear in archive..."
+step 4 "Waiting for restart_gap records to appear in archive..."
 wait_for_gaps "restart_gap" 60
 
-echo "5. Waiting for collector healthcheck..."
+step 5 "Waiting for collector healthcheck..."
 if ! wait_service_healthy collector 30; then
     :
 fi
 
-echo "6. Verifying results..."
+section "Verification"
 
 # Writer should detect the session change and emit restart_gap records
 gaps=$(count_gaps "restart_gap")
@@ -140,7 +141,7 @@ else
     fail "restart_gap gap timestamp accuracy check failed"
 fi
 
-echo "7. Stopping collector to quiesce input before archive verification..."
+step 7 "Stopping collector to quiesce input before archive verification..."
 $COMPOSE stop collector 2>&1
 if wait_for_writer_lag_below 0 30; then
     pass "writer drained remaining backlog after collector stop"
@@ -148,7 +149,7 @@ else
     fail "writer still had backlog after collector stop"
 fi
 
-echo "8. Running cryptolake verify..."
+step 8 "Running cryptolake verify..."
 if UV_CACHE_DIR="${REPO_ROOT}/.tmp/uv-cache" \
     uv run cryptolake verify \
         --date "${test_date}" \

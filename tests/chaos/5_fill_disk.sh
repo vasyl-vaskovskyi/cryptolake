@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-echo "=== Chaos: Fill Disk ==="
+echo "=== Chaos 5: Fill Disk ==="
 echo "Uses a size-limited tmpfs volume (150MB) for the writer's data dir"
 echo "to test real disk-pressure and ENOSPC handling."
 echo ""
@@ -40,12 +40,11 @@ YAML
 COMPOSE_DISK="docker compose -f ${COMPOSE_FILE} -f ${DISK_OVERRIDE}"
 
 cleanup() {
-    echo ""
-    echo "--- Teardown: removing stack, images, and test data ---"
+    section "Teardown"
     $COMPOSE_DISK down -v --rmi local 2>&1 || true
     rm -rf "${TEST_DATA_DIR:?}/binance"
     rm -f "${DISK_OVERRIDE}"
-    echo "--- Cleanup complete ---"
+    echo "  Cleanup complete"
 }
 trap cleanup EXIT
 
@@ -55,7 +54,7 @@ trap cleanup EXIT
 preflight_checks
 TEST_START="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 SECONDS=0
-echo "--- Setup: building images and starting stack (150MB data volume) ---"
+section "Setup"
 echo "  Start time: ${TEST_START}"
 $COMPOSE_DISK build --quiet 2>&1
 TEST_DURATION_SECONDS=600 $COMPOSE_DISK up -d 2>&1
@@ -77,13 +76,14 @@ if ! $all_healthy; then
 fi
 echo "--- Stack is ready (150MB tmpfs data volume) ---"
 
-echo "1. Letting data flow for 30s..."
+section "Scenario"
+step 1 "Letting data flow for 30s..."
 sleep 30
 
-echo "2. Checking volume usage before fill..."
+step 2 "Checking volume usage before fill..."
 $COMPOSE_DISK exec writer df -h "${DISK_DATA_DIR}" 2>&1
 
-echo "3. Filling tmpfs to zero free space..."
+step 3 "Filling tmpfs to zero free space..."
 # First pass: fill in 1MB blocks to get close
 avail_mb=$($COMPOSE_DISK exec writer \
     df -m "${DISK_DATA_DIR}" | awk 'NR==2{print $4}')
@@ -97,13 +97,13 @@ $COMPOSE_DISK exec writer \
     dd if=/dev/zero of="${DISK_DATA_DIR}/fill_disk_last.tmp" bs=4K 2>/dev/null || true
 echo "   Filled to capacity"
 
-echo "4. Checking volume usage after fill..."
+step 4 "Checking volume usage after fill..."
 $COMPOSE_DISK exec writer df -h "${DISK_DATA_DIR}" 2>&1
 
-echo "5. Waiting 30s for writer to encounter ENOSPC..."
+step 5 "Waiting 30s for writer to encounter ENOSPC..."
 sleep 30
 
-echo "6. Checking writer status under disk pressure..."
+step 6 "Checking writer status under disk pressure..."
 writer_status=$($COMPOSE_DISK ps writer --format '{{.Status}}' 2>/dev/null || echo "missing")
 echo "   Writer status: ${writer_status}"
 if echo "$writer_status" | grep -q "(healthy)"; then
@@ -114,20 +114,20 @@ else
     pass "writer exited under disk pressure (expected — no ENOSPC handling)"
 fi
 
-echo "7. Cleaning up fill files and freeing space..."
+step 7 "Cleaning up fill files and freeing space..."
 # If the writer crashed, exec won't work — start a temp container to clean the volume.
 $COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" "${DISK_DATA_DIR}/fill_disk_last.tmp" 2>/dev/null \
     || docker run --rm -v cryptolake-test_disk_test_data:/data/disk_test alpine \
            rm -f /data/disk_test/fill_disk.tmp /data/disk_test/fill_disk_last.tmp 2>/dev/null || true
 
-echo "8. Restarting writer for recovery..."
+step 8 "Restarting writer for recovery..."
 # Force-restart so _recover_files truncates corrupt partial frames back
 # to PG-recorded byte sizes.  "up -d" is a no-op for a running container.
 $COMPOSE_DISK stop writer 2>&1
 $COMPOSE_DISK up -d writer 2>&1
 sleep 30
 
-echo "9. Verifying recovery..."
+section "Verification"
 
 # Writer should recover after disk space is freed
 writer_status=$($COMPOSE_DISK ps writer --format '{{.Status}}' 2>/dev/null || echo "missing")

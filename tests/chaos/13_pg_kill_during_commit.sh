@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: PostgreSQL Kill During Writer Commit ==="
+echo "=== Chaos 13: PG Kill During Commit ==="
 echo "Kills PostgreSQL while data is flowing, verifies the writer"
 echo "recovers after PG comes back without data loss."
 echo ""
@@ -11,29 +11,30 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-kill envelope count..."
+section "Scenario"
+step 1 "Recording pre-kill envelope count..."
 pre_kill=$(count_envelopes)
 
-echo "2. Killing PostgreSQL..."
+step 2 "Killing PostgreSQL..."
 event_start_ns=$(ts_now_ns)
 $COMPOSE kill postgres 2>&1
 
-echo "3. Waiting 15s (writer continues to receive but can't commit to PG)..."
+step 3 "Waiting 15s (writer continues to receive but can't commit to PG)..."
 sleep 15
 
-echo "4. Restarting PostgreSQL..."
+step 4 "Restarting PostgreSQL..."
 $COMPOSE up -d postgres 2>&1
 wait_service_healthy postgres 60
 event_end_ns=$(ts_now_ns)
 
-echo "5. Waiting for writer to recover and resume..."
+step 5 "Waiting for writer to recover and resume..."
 if wait_for_envelope_count_gt "$pre_kill" 60; then
     pass "writer resumed after PG recovery"
 else
     fail "writer did not resume after PG recovery"
 fi
 
-echo "6. Verifying results..."
+section "Verification"
 assert_container_healthy "writer"
 assert_container_healthy "collector"
 

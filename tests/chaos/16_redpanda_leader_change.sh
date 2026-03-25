@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Redpanda Restart (Leader Re-election) ==="
+echo "=== Chaos 16: Redpanda Leader Change ==="
 echo "Restarts Redpanda to force partition leadership changes."
 echo "Verifies no data loss across the re-election."
 echo ""
@@ -11,24 +11,25 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-restart envelope count..."
+section "Scenario"
+step 1 "Recording pre-restart envelope count..."
 pre_restart=$(count_envelopes)
 
-echo "2. Restarting Redpanda (forces leader re-election)..."
+step 2 "Restarting Redpanda (forces leader re-election)..."
 $COMPOSE restart redpanda 2>&1
 wait_service_healthy redpanda 60
 
-echo "3. Waiting for writer and collector to reconnect..."
+step 3 "Waiting for writer and collector to reconnect..."
 wait_healthy
 
-echo "4. Waiting for data flow to resume..."
+step 4 "Waiting for data flow to resume..."
 if wait_for_envelope_count_gt "$pre_restart" 60; then
     pass "data flow resumed after Redpanda restart"
 else
     fail "data flow did not resume"
 fi
 
-echo "5. Verifying results..."
+section "Verification"
 assert_container_healthy "writer"
 assert_container_healthy "collector"
 assert_container_healthy "redpanda"

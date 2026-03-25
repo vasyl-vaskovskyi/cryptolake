@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Host Reboot Restart Gap ==="
+echo "=== Chaos 8: Host Reboot Restart Gap ==="
 echo "Simulates a host reboot by restarting the stack with a new boot ID."
 echo "Verifies restart_gap records have component=host, cause=host_reboot."
 echo ""
@@ -20,21 +20,22 @@ setup_stack
 wait_for_data 20
 event_start_ns=$(ts_now_ns)
 
-echo "1. Stopping all services (simulating host power-off)..."
+section "Scenario"
+step 1 "Stopping all services (simulating host power-off)..."
 # No maintenance intent — this is an unplanned reboot.
 # Use 'stop' to preserve volumes (PostgreSQL data with the old boot ID).
 # Then 'up --force-recreate' to create new containers that pick up the
 # changed CRYPTOLAKE_TEST_BOOT_ID env var while keeping the same volumes.
 $COMPOSE stop 2>&1
 
-echo "2. Bringing stack back up with new boot ID (simulating reboot)..."
+step 2 "Bringing stack back up with new boot ID (simulating reboot)..."
 export CRYPTOLAKE_TEST_BOOT_ID="${NEW_BOOT_ID}"
 $COMPOSE up -d --force-recreate 2>&1
 event_end_ns=$(ts_now_ns)
 wait_healthy
 wait_for_data 30
 
-echo "3. Verifying results..."
+section "Verification"
 
 # Writer should detect boot ID change and emit restart_gap with component=host
 gaps=$(count_gaps "restart_gap")

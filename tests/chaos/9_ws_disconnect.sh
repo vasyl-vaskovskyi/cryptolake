@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: True WebSocket Disconnect ==="
+echo "=== Chaos 9: WebSocket Disconnect ==="
 echo "Blocks collector network to trigger ws_disconnect gaps while"
 echo "the collector process stays alive, then restores and verifies."
 echo ""
@@ -11,23 +11,24 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-disconnect timestamps..."
+section "Scenario"
+step 1 "Recording pre-disconnect timestamps..."
 event_start_ns=$(ts_now_ns)
 
-echo "2. Blocking collector network (iptables DROP)..."
+step 2 "Blocking collector network (iptables DROP)..."
 block_egress "${COLLECTOR_CONTAINER}"
 
-echo "3. Waiting 30s for WebSocket timeout and disconnect detection..."
+step 3 "Waiting 30s for WebSocket timeout and disconnect detection..."
 sleep 30
 
-echo "4. Restoring collector network..."
+step 4 "Restoring collector network..."
 unblock_egress "${COLLECTOR_CONTAINER}"
 event_end_ns=$(ts_now_ns)
 
-echo "5. Waiting 45s for reconnection and data flow..."
+step 5 "Waiting 45s for reconnection and data flow..."
 sleep 45
 
-echo "6. Verifying results..."
+section "Verification"
 
 # Collector should still be running (not killed, just disconnected)
 assert_container_healthy "collector"

@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Snapshot Poll Miss ==="
+echo "=== Chaos 10: Snapshot Poll Miss ==="
 echo "Blocks collector HTTPS egress to trigger snapshot_poll_miss gaps"
 echo "while WebSocket streams continue via existing connections."
 echo ""
@@ -11,7 +11,8 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Blocking collector HTTPS egress (port 443 only)..."
+section "Scenario"
+step 1 "Blocking collector HTTPS egress (port 443 only)..."
 # Block ALL outbound TCP to port 443 (not just SYN). The --syn filter would only
 # block new connections, but aiohttp reuses keepalive connections for REST polls.
 # Blocking all port-443 traffic will also break WebSocket streams, but that's
@@ -21,21 +22,21 @@ event_start_ns=$(ts_now_ns)
 docker exec -u root "${COLLECTOR_CONTAINER}" iptables -A OUTPUT -p tcp --dport 443 -j DROP 2>/dev/null || true
 echo "   Blocked all HTTPS traffic from collector"
 
-echo "2. Waiting 120s for snapshot poll retries to exhaust..."
+step 2 "Waiting 120s for snapshot poll retries to exhaust..."
 # Test config: snapshot_interval=30s, open_interest.poll_interval=30s
 # Each poll does 3 retries with exponential backoff.
 # We need to wait long enough for at least one complete poll cycle to fail.
 sleep 120
 
-echo "3. Restoring collector HTTPS egress..."
+step 3 "Restoring collector HTTPS egress..."
 docker exec -u root "${COLLECTOR_CONTAINER}" iptables -F 2>/dev/null || true
 event_end_ns=$(ts_now_ns)
 echo "   Restored HTTPS connections"
 
-echo "4. Waiting 45s for next successful poll cycle..."
+step 4 "Waiting 45s for next successful poll cycle..."
 sleep 45
 
-echo "5. Verifying results..."
+section "Verification"
 
 assert_container_healthy "collector"
 assert_container_healthy "writer"

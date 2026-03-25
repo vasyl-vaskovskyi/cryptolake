@@ -5,7 +5,7 @@ trap teardown_stack EXIT
 
 test_date="$(date -u '+%Y-%m-%d')"
 
-echo "=== Chaos: Buffer Overflow Recovery ==="
+echo "=== Chaos 2: Buffer Overflow Recovery ==="
 echo "Stops Redpanda to force collector buffer growth, then restarts and"
 echo "verifies the collector recovers with buffer_overflow gaps recorded."
 echo ""
@@ -13,31 +13,32 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Stopping redpanda to force collector buffer growth..."
+section "Scenario"
+step 1 "Stopping redpanda to force collector buffer growth..."
 event_start_ns=$(ts_now_ns)
 $COMPOSE stop redpanda 2>&1
 
-echo "2. Waiting for collector buffer to overflow..."
+step 2 "Waiting for collector buffer to overflow..."
 wait_for_overflow 60
 
-echo "3. Restarting redpanda..."
+step 3 "Restarting redpanda..."
 $COMPOSE up -d redpanda 2>&1
 echo "   Waiting for redpanda to become healthy..."
 # We don't use wait_healthy here because the writer is expected to have crashed
 # during the redpanda outage (session timeout).
 wait_service_healthy redpanda
 
-echo "4. Force-restarting writer (crashes on rebalance after broker reconnect)..."
+step 4 "Force-restarting writer (crashes on rebalance after broker reconnect)..."
 $COMPOSE stop writer 2>&1 || true
 $COMPOSE up -d writer 2>&1
 event_end_ns=$(ts_now_ns)
 echo "   Waiting for all services to become healthy..."
 wait_healthy
 
-echo "5. Waiting for buffer_overflow gaps to appear in archive..."
+step 5 "Waiting for buffer_overflow gaps to appear in archive..."
 wait_for_gaps "buffer_overflow" 60
 
-echo "6. Verifying results..."
+section "Verification"
 
 assert_container_healthy "collector"
 assert_container_healthy "writer"
@@ -142,7 +143,7 @@ fi
 total=$(count_envelopes)
 assert_gt "archive has envelopes spanning the outage" "$total" 100
 
-echo "7. Stopping collector to quiesce input before archive verification..."
+step 7 "Stopping collector to quiesce input before archive verification..."
 $COMPOSE stop collector 2>&1
 if wait_for_writer_lag_below 0 30; then
     pass "writer drained remaining backlog after collector stop"
@@ -150,7 +151,7 @@ else
     fail "writer still had backlog after collector stop"
 fi
 
-echo "8. Running cryptolake verify..."
+step 8 "Running cryptolake verify..."
 if UV_CACHE_DIR="${REPO_ROOT}/.tmp/uv-cache" \
     uv run cryptolake verify \
         --date "${test_date}" \

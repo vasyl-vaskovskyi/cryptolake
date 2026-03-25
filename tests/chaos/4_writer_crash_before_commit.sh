@@ -5,7 +5,7 @@ trap teardown_stack EXIT
 
 test_date="$(date -u '+%Y-%m-%d')"
 
-echo "=== Chaos: Writer Crash Before Commit ==="
+echo "=== Chaos 4: Writer Crash Before Commit ==="
 echo "Sends SIGKILL to the writer (simulates crash mid-flush) and verifies"
 echo "no duplicates, no corrupt zstd frames after recovery."
 echo ""
@@ -13,30 +13,31 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-crash envelope count..."
+section "Scenario"
+step 1 "Recording pre-crash envelope count..."
 pre_kill=$(count_envelopes)
 
-echo "2. Capturing event timestamp and sending SIGKILL to writer..."
+step 2 "Capturing event timestamp and sending SIGKILL to writer..."
 event_start_ns=$(ts_now_ns)
 docker kill -s KILL "${WRITER_CONTAINER}"
 
-echo "3. Restarting writer..."
+step 3 "Restarting writer..."
 $COMPOSE up -d writer 2>&1
 event_end_ns=$(ts_now_ns)
 
-echo "4. Waiting for writer to recover and resume writing..."
+step 4 "Waiting for writer to recover and resume writing..."
 if wait_for_envelope_count_gt "$pre_kill" 60; then
     pass "writer resumed writing after crash recovery"
 else
     fail "writer did not resume writing after crash recovery"
 fi
 
-echo "5. Waiting for writer healthcheck..."
+step 5 "Waiting for writer healthcheck..."
 if ! wait_service_healthy writer 30; then
     :
 fi
 
-echo "6. Verifying results..."
+section "Verification"
 
 assert_container_healthy "writer"
 assert_container_healthy "collector"
@@ -140,7 +141,7 @@ else
     fail "data integrity check failed"
 fi
 
-echo "7. Stopping collector to quiesce input before archive verification..."
+step 7 "Stopping collector to quiesce input before archive verification..."
 $COMPOSE stop collector 2>&1
 if wait_for_writer_lag_below 0 30; then
     pass "writer drained remaining backlog after collector stop"
@@ -148,7 +149,7 @@ else
     fail "writer still had backlog after collector stop"
 fi
 
-echo "8. Running cryptolake verify..."
+step 8 "Running cryptolake verify..."
 if UV_CACHE_DIR="${REPO_ROOT}/.tmp/uv-cache" \
     uv run cryptolake verify \
         --date "${test_date}" \

@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos: Corrupt Message in Redpanda ==="
+echo "=== Chaos 12: Corrupt Message ==="
 echo "Injects corrupt (non-JSON) messages and verifies the writer"
 echo "skips them and continues processing valid data."
 echo ""
@@ -11,25 +11,26 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-injection envelope count..."
+section "Scenario"
+step 1 "Recording pre-injection envelope count..."
 pre_inject=$(count_envelopes)
 
-echo "2. Injecting corrupt messages into Redpanda..."
+step 2 "Injecting corrupt messages into Redpanda..."
 inject_corrupt_message "binance.trades"
 inject_corrupt_message "binance.bookticker"
 
-echo "3. Waiting for writer to process past corrupt messages..."
+step 3 "Waiting for writer to process past corrupt messages..."
 if wait_for_envelope_count_gt "$pre_inject" 60; then
     pass "writer continued processing after corrupt messages"
 else
     fail "writer stopped processing after corrupt messages"
 fi
 
-echo "4. Waiting for deserialization_error gaps to flush to archive..."
+step 4 "Waiting for deserialization_error gaps to flush to archive..."
 # The gap envelopes are in the buffer — wait for the timer-based flush (10s)
 wait_for_gaps "deserialization_error" 30
 
-echo "5. Verifying results..."
+section "Verification"
 assert_container_healthy "writer"
 assert_container_healthy "collector"
 

@@ -5,7 +5,7 @@ trap teardown_stack EXIT
 
 test_date="$(date -u '+%Y-%m-%d')"
 
-echo "=== Chaos: Kill Writer ==="
+echo "=== Chaos 3: Kill Writer ==="
 echo "Verifies that the writer catches up after being killed while data"
 echo "accumulates in Redpanda, and runs cryptolake verify successfully."
 echo ""
@@ -13,33 +13,34 @@ echo ""
 setup_stack
 wait_for_data 20
 
-echo "1. Recording pre-kill envelope count..."
+section "Scenario"
+step 1 "Recording pre-kill envelope count..."
 pre_kill=$(count_envelopes)
 
-echo "2. Killing writer container..."
+step 2 "Killing writer container..."
 event_start_ns=$(ts_now_ns)
 docker kill "${WRITER_CONTAINER}"
 
-echo "3. Waiting 20s (data accumulates in Redpanda)..."
+step 3 "Waiting 20s (data accumulates in Redpanda)..."
 sleep 20
 
-echo "4. Restarting writer..."
+step 4 "Restarting writer..."
 $COMPOSE up -d writer 2>&1
 event_end_ns=$(ts_now_ns)
 
-echo "5. Waiting for archive writes to resume..."
+step 5 "Waiting for archive writes to resume..."
 if wait_for_envelope_count_gt "$pre_kill" 60; then
     pass "writer resumed writing after restart"
 else
     fail "writer did not resume writing after restart"
 fi
 
-echo "6. Waiting for writer healthcheck..."
+step 6 "Waiting for writer healthcheck..."
 if ! wait_service_healthy writer 30; then
     :
 fi
 
-echo "7. Verifying results..."
+section "Verification"
 
 assert_container_healthy "writer"
 assert_container_healthy "collector"
@@ -145,7 +146,7 @@ else
     pass "no restart_gap records (writer handled SIGTERM gracefully)"
 fi
 
-echo "8. Stopping collector to quiesce input before archive verification..."
+step 8 "Stopping collector to quiesce input before archive verification..."
 $COMPOSE stop collector 2>&1
 if wait_for_writer_lag_below 0 30; then
     pass "writer drained remaining backlog after collector stop"
@@ -153,7 +154,7 @@ else
     fail "writer still had backlog after collector stop"
 fi
 
-echo "9. Running cryptolake verify..."
+step 9 "Running cryptolake verify..."
 if UV_CACHE_DIR="${REPO_ROOT}/.tmp/uv-cache" \
     uv run cryptolake verify \
         --date "${test_date}" \
