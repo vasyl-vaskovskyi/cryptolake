@@ -535,3 +535,80 @@ print_results() {
     echo "==========================================="
     if (( FAIL > 0 )); then exit 1; fi
 }
+
+# Validate gap timestamp ordering: gap_end_ts > gap_start_ts > 0 for all gap records.
+validate_any_gap_timestamps() {
+    uv run python -c "
+import zstandard as zstd, orjson
+from pathlib import Path
+base = Path('${TEST_DATA_DIR}')
+errors = []
+found = 0
+for f in base.rglob('*.zst'):
+    with open(f, 'rb') as fh:
+        data = zstd.ZstdDecompressor().stream_reader(fh).read()
+    for line in data.strip().split(b'\n'):
+        if not line:
+            continue
+        env = orjson.loads(line)
+        if env.get('type') == 'gap':
+            found += 1
+            gs = env.get('gap_start_ts', 0)
+            ge = env.get('gap_end_ts', 0)
+            if gs <= 0:
+                errors.append(f'gap_start_ts invalid: {gs}')
+            if ge <= 0:
+                errors.append(f'gap_end_ts invalid: {ge}')
+            if ge <= gs:
+                errors.append(f'gap_end_ts ({ge}) <= gap_start_ts ({gs})')
+if errors:
+    for e in errors:
+        print(f'ERROR: {e}')
+    exit(1)
+print(f'OK: {found} gap record(s) all have valid timestamps' if found else 'OK: no gap records')
+"
+}
+
+# Validate restart_gap metadata fields.
+# Usage: validate_restart_gap_fields [expected_component] [expected_cause]
+# If no args, just validates planned=false on any restart_gap.
+validate_restart_gap_fields() {
+    local expected_component="${1:-}"
+    local expected_cause="${2:-}"
+    uv run python -c "
+import zstandard as zstd, orjson
+from pathlib import Path
+base = Path('${TEST_DATA_DIR}')
+found = 0
+errors = []
+expected_component = '${expected_component}'
+expected_cause = '${expected_cause}'
+for f in base.rglob('*.zst'):
+    with open(f, 'rb') as fh:
+        data = zstd.ZstdDecompressor().stream_reader(fh).read()
+    for line in data.strip().split(b'\n'):
+        if not line:
+            continue
+        env = orjson.loads(line)
+        if env.get('type') == 'gap' and env.get('reason') == 'restart_gap':
+            found += 1
+            if expected_component and env.get('component') != expected_component:
+                errors.append(f'expected component={expected_component}, got {env.get(\"component\")}')
+            if expected_cause and env.get('cause') != expected_cause:
+                errors.append(f'expected cause={expected_cause}, got {env.get(\"cause\")}')
+            planned = env.get('planned')
+            if planned is not False:
+                errors.append(f'expected planned=false, got {planned}')
+if errors:
+    for e in errors:
+        print(f'ERROR: {e}')
+    exit(1)
+if found == 0:
+    print('OK: no restart_gap records')
+else:
+    msg_parts = ['planned=false']
+    if expected_component: msg_parts.insert(0, f'component={expected_component}')
+    if expected_cause: msg_parts.insert(1, f'cause={expected_cause}')
+    print(f'OK: {found} restart_gap record(s) with {\", \".join(msg_parts)}')
+"
+}

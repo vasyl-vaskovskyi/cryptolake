@@ -41,78 +41,13 @@ gaps=$(count_gaps "restart_gap")
 assert_gt "restart_gap records exist in archive" "$gaps" 0
 
 # Validate structured restart_gap metadata: component=collector, cause=unclean_exit
-validate_restart_gap_fields() {
-    uv run python -c "
-import zstandard as zstd, orjson
-from pathlib import Path
-base = Path('${TEST_DATA_DIR}')
-found = 0
-errors = []
-for f in base.rglob('*.zst'):
-    with open(f, 'rb') as fh:
-        data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    for line in data.strip().split(b'\n'):
-        if not line:
-            continue
-        env = orjson.loads(line)
-        if env.get('type') == 'gap' and env.get('reason') == 'restart_gap':
-            found += 1
-            if env.get('component') != 'collector':
-                errors.append(f'expected component=collector, got {env.get(\"component\")}')
-            if env.get('cause') != 'unclean_exit':
-                errors.append(f'expected cause=unclean_exit, got {env.get(\"cause\")}')
-            if env.get('planned') is not False:
-                errors.append(f'expected planned=false, got {env.get(\"planned\")}')
-if errors:
-    for e in errors:
-        print(f'ERROR: {e}')
-    exit(1)
-if found == 0:
-    print('ERROR: no restart_gap records found')
-    exit(1)
-print(f'OK: {found} restart_gap record(s) with component=collector, cause=unclean_exit, planned=false')
-"
-}
-
-if validate_restart_gap_fields; then
+if validate_restart_gap_fields "collector" "unclean_exit"; then
     pass "restart_gap metadata: component=collector, cause=unclean_exit, planned=false"
 else
     fail "restart_gap metadata validation failed"
 fi
 
 # Validate gap timestamp ordering (gap_end_ts > gap_start_ts > 0)
-validate_any_gap_timestamps() {
-    uv run python -c "
-import zstandard as zstd, orjson
-from pathlib import Path
-base = Path('${TEST_DATA_DIR}')
-errors = []
-found = 0
-for f in base.rglob('*.zst'):
-    with open(f, 'rb') as fh:
-        data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    for line in data.strip().split(b'\n'):
-        if not line:
-            continue
-        env = orjson.loads(line)
-        if env.get('type') == 'gap':
-            found += 1
-            gs = env.get('gap_start_ts', 0)
-            ge = env.get('gap_end_ts', 0)
-            if gs <= 0:
-                errors.append(f'gap_start_ts invalid: {gs}')
-            if ge <= 0:
-                errors.append(f'gap_end_ts invalid: {ge}')
-            if ge <= gs:
-                errors.append(f'gap_end_ts ({ge}) <= gap_start_ts ({gs})')
-if errors:
-    for e in errors:
-        print(f'ERROR: {e}')
-    exit(1)
-print(f'OK: {found} gap record(s) all have valid timestamps')
-"
-}
-
 if validate_any_gap_timestamps; then
     pass "all gap records have valid timestamps"
 else

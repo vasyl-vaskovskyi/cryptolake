@@ -49,38 +49,6 @@ overflow_gaps=$(count_gaps "buffer_overflow")
 assert_gt "buffer_overflow gaps exist in archive" "$overflow_gaps" 0
 
 # Validate buffer_overflow gap timestamps (gap_end_ts > gap_start_ts > 0)
-validate_any_gap_timestamps() {
-    uv run python -c "
-import zstandard as zstd, orjson
-from pathlib import Path
-base = Path('${TEST_DATA_DIR}')
-errors = []
-found = 0
-for f in base.rglob('*.zst'):
-    with open(f, 'rb') as fh:
-        data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    for line in data.strip().split(b'\n'):
-        if not line:
-            continue
-        env = orjson.loads(line)
-        if env.get('type') == 'gap':
-            found += 1
-            gs = env.get('gap_start_ts', 0)
-            ge = env.get('gap_end_ts', 0)
-            if gs <= 0:
-                errors.append(f'gap_start_ts invalid: {gs}')
-            if ge <= 0:
-                errors.append(f'gap_end_ts invalid: {ge}')
-            if ge <= gs:
-                errors.append(f'gap_end_ts ({ge}) <= gap_start_ts ({gs})')
-if errors:
-    for e in errors:
-        print(f'ERROR: {e}')
-    exit(1)
-print(f'OK: {found} gap record(s) all have valid timestamps')
-"
-}
-
 if validate_any_gap_timestamps; then
     pass "all gap records have valid timestamps"
 else
@@ -89,36 +57,6 @@ fi
 
 # Writer was force-restarted, so restart_gap records may exist.
 # If present, they must have planned=false.
-validate_restart_gap_fields() {
-    uv run python -c "
-import zstandard as zstd, orjson
-from pathlib import Path
-base = Path('${TEST_DATA_DIR}')
-found = 0
-errors = []
-for f in base.rglob('*.zst'):
-    with open(f, 'rb') as fh:
-        data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    for line in data.strip().split(b'\n'):
-        if not line:
-            continue
-        env = orjson.loads(line)
-        if env.get('type') == 'gap' and env.get('reason') == 'restart_gap':
-            found += 1
-            planned = env.get('planned')
-            if planned is not False:
-                errors.append(f'expected planned=false, got {planned}')
-if errors:
-    for e in errors:
-        print(f'ERROR: {e}')
-    exit(1)
-if found == 0:
-    print('OK: no restart_gap records (writer recovered cleanly)')
-else:
-    print(f'OK: {found} restart_gap record(s) with planned=false')
-"
-}
-
 if validate_restart_gap_fields; then
     pass "restart_gap metadata valid (planned=false if gaps exist)"
 else
