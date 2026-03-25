@@ -21,7 +21,7 @@ ws_reconnects_total = Counter(
 gaps_detected_total = Counter(
     "collector_gaps_detected_total",
     "Gaps detected (sequence breaks, disconnects, drops)",
-    ["exchange", "symbol", "stream"],
+    ["exchange", "symbol", "stream", "reason"],
 )
 
 exchange_latency_ms = Histogram(

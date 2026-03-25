@@ -184,7 +184,7 @@ class CryptoLakeProducer:
         """Emit a gap envelope and increment the gap metric. Convenience for callers."""
         now = time.time_ns()
         collector_metrics.gaps_detected_total.labels(
-            exchange=self.exchange, symbol=symbol, stream=stream,
+            exchange=self.exchange, symbol=symbol, stream=stream, reason=reason,
         ).inc()
         gap = create_gap_envelope(
             exchange=self.exchange,

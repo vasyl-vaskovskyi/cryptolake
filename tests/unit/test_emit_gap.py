@@ -18,7 +18,9 @@ def test_emit_gap_produces_gap_envelope_and_increments_metric():
         assert gap["exchange"] == "binance"
         assert gap["symbol"] == "btcusdt"
         assert gap["session_seq"] == 42
-        mock_metrics.gaps_detected_total.labels.assert_called_once()
+        mock_metrics.gaps_detected_total.labels.assert_called_once_with(
+            exchange="binance", symbol="btcusdt", stream="depth", reason="pu_chain_break",
+        )
 
 
 def test_emit_gap_uses_custom_timestamps():
