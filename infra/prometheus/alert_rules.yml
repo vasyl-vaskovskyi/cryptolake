@@ -92,3 +92,28 @@ groups:
         annotations:
           summary: "Messages dropped: {{ $labels.symbol }}/{{ $labels.stream }}"
           description: "{{ $value | printf \"%.0f\" }} message(s) dropped on {{ $labels.exchange }}/{{ $labels.symbol }}/{{ $labels.stream }} due to producer backpressure."
+
+      - alert: WriteErrors
+        expr: increase(writer_write_errors_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Writer disk write errors detected"
+          description: "{{ $value | printf \"%.0f\" }} write error(s) in the last 5 minutes on {{ $labels.exchange }}/{{ $labels.stream }}."
+
+      - alert: PostgresCommitFailing
+        expr: increase(writer_pg_commit_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL state commit failures"
+          description: "{{ $value | printf \"%.0f\" }} PostgreSQL commit failure(s) in the last 5 minutes. State persistence is degraded."
+
+      - alert: KafkaCommitFailing
+        expr: increase(writer_kafka_commit_failures_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka offset commit failures"
+          description: "{{ $value | printf \"%.0f\" }} Kafka offset commit failure(s) in the last 5 minutes. Offset tracking is degraded."
