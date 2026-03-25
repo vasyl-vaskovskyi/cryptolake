@@ -142,26 +142,6 @@ services:
       - writer
       - alertmanager
 
-  grafana:
-    image: grafana/grafana:11.0.0
-    ports:
-      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
-    networks:
-      - cryptolake_internal
-      - host_access
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?Set GF_ADMIN_PASSWORD in .env}
-    volumes:
-      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    depends_on:
-      - prometheus
-
   whatsapp-bridge:
     build:
       context: ./infra/whatsapp-bridge
