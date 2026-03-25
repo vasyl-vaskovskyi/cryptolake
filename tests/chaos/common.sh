@@ -56,6 +56,9 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; }
 
+section() { echo ""; echo "--- $1 ---"; }
+step() { echo "  Step $1: $2"; }
+
 assert_eq() {
     local desc="$1" expected="$2" actual="$3"
     if [[ "$expected" == "$actual" ]]; then pass "$desc"; else fail "$desc (expected=$expected, actual=$actual)"; fi
@@ -77,7 +80,7 @@ setup_stack() {
     preflight_checks
     TEST_START="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     SECONDS=0
-    echo "--- Setup: building images and starting stack ---"
+    section "Setup"
     echo "  Start time: ${TEST_START}"
     rm -rf "${TEST_DATA_DIR:?}/binance"
     $COMPOSE build --quiet 2>&1
@@ -114,11 +117,10 @@ wait_for_data() {
 }
 
 teardown_stack() {
-    echo ""
-    echo "--- Teardown: removing stack, images, and test data ---"
+    section "Teardown"
     $COMPOSE down -v --rmi local 2>&1 || true
     rm -rf "${TEST_DATA_DIR:?}/binance"
-    echo "--- Cleanup complete ---"
+    echo "  Cleanup complete"
 }
 
 # Count gap records in archive files by reason.
@@ -494,10 +496,24 @@ else:
 "
 }
 
+# Print whatsapp-bridge logs showing alert deliveries.
+print_whatsapp_log() {
+    echo ""
+    echo "--- WhatsApp Bridge Log ---"
+    local bridge_log
+    bridge_log=$($COMPOSE logs whatsapp-bridge --no-log-prefix 2>/dev/null || echo "(bridge not running)")
+    if [[ -z "$bridge_log" || "$bridge_log" == "(bridge not running)" ]]; then
+        echo "  (no whatsapp-bridge logs available)"
+    else
+        echo "$bridge_log" | tail -20 | sed 's/^/  /'
+    fi
+}
+
 # Full test report — call this BEFORE teardown (while data still exists).
 print_test_report() {
     print_archive_stats
     print_gap_details
+    print_whatsapp_log
 }
 
 print_results() {
