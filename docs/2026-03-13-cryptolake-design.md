@@ -655,7 +655,7 @@ For Docker/Kubernetes deployment, all config values can be overridden via enviro
 EXCHANGES__BINANCE__SYMBOLS=btcusdt,ethusdt
 REDPANDA__BROKERS=redpanda-0:9092,redpanda-1:9092
 WRITER__BASE_DIR=/mnt/data
-MONITORING__ALERTING__WEBHOOK_URL=https://hooks.slack.com/...
+MONITORING__WEBHOOK_URL=https://hooks.slack.com/...
 ```
 
 ---

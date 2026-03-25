@@ -31,21 +31,9 @@ class OpenInterestConfig(BaseModel):
     poll_interval: str = "5m"
 
 
-class AlertRulesConfig(BaseModel):
-    gap_detected: str = "critical"
-    connection_lost: str = "critical"
-    writer_lag_seconds: int = 30
-    disk_usage_pct: int = 85
-
-
-class AlertingConfig(BaseModel):
-    webhook_url: str = ""
-    rules: AlertRulesConfig = Field(default_factory=AlertRulesConfig)
-
-
 class MonitoringConfig(BaseModel):
     prometheus_port: int = 8000
-    alerting: AlertingConfig = Field(default_factory=AlertingConfig)
+    webhook_url: str = ""
 
 
 class BinanceExchangeConfig(BaseModel):
@@ -121,12 +109,8 @@ def default_archive_dir() -> str:
     return os.environ.get("HOST_DATA_DIR", "/data")
 
 
-def _default_archive_dir() -> str:
-    return default_archive_dir()
-
-
 class WriterConfig(BaseModel):
-    base_dir: str = Field(default_factory=_default_archive_dir)
+    base_dir: str = Field(default_factory=default_archive_dir)
     rotation: str = "hourly"
     compression: str = "zstd"
     compression_level: int = 3

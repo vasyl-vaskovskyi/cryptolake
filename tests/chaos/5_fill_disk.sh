@@ -23,7 +23,7 @@ services:
     environment:
       - CONFIG_PATH=/app/config/config.test.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
-      - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
       - HOST_DATA_DIR=/data/disk_test
       - TEST_DURATION_SECONDS=${TEST_DURATION_SECONDS:-600}
       - CRYPTOLAKE_TEST_BOOT_ID=${CRYPTOLAKE_TEST_BOOT_ID:-}

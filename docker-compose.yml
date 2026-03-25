@@ -72,7 +72,7 @@ services:
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
-      - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
       interval: 15s
@@ -106,7 +106,7 @@ services:
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
-      - MONITORING__ALERTING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/health', timeout=5).status == 200 else 1)"]

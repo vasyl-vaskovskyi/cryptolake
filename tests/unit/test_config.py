@@ -91,13 +91,7 @@ writer:
   flush_interval_seconds: 30
 monitoring:
   prometheus_port: 8000
-  alerting:
-    webhook_url: ""
-    rules:
-      gap_detected: critical
-      connection_lost: critical
-      writer_lag_seconds: 30
-      disk_usage_pct: 85
+  webhook_url: ""
 """.strip()
         )
         with pytest.raises(ConfigValidationError, match="retention_hours"):
