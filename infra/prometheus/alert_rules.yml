@@ -2,12 +2,12 @@ groups:
   - name: cryptolake
     rules:
       - alert: GapDetected
-        expr: sum(increase(collector_gaps_detected_total[5m])) > 0
+        expr: increase(collector_gaps_detected_total[5m]) > 0
         labels:
           severity: critical
         annotations:
-          summary: Gap records detected in the collector stream
-          description: Collector emitted at least one gap envelope in the last 5 minutes.
+          summary: "Gap detected: {{ $labels.reason }} on {{ $labels.symbol }}/{{ $labels.stream }}"
+          description: "{{ $value | printf \"%.0f\" }} {{ $labels.reason }} gap(s) on {{ $labels.exchange }}/{{ $labels.symbol }}/{{ $labels.stream }} in the last 5 minutes."
 
       - alert: ConnectionLost
         expr: sum(collector_ws_connections_active) < 4
@@ -16,7 +16,7 @@ groups:
           severity: critical
         annotations:
           summary: Collector WebSocket connectivity degraded
-          description: Active Binance WebSocket connections fell below expected count (default 6 for 3 symbols x 2 sockets).
+          description: "Active Binance WebSocket connections fell below expected count. Current: {{ $value | printf \"%.0f\" }}."
 
       - alert: WriterLagging
         expr: max(writer_consumer_lag) > 1000
@@ -25,7 +25,7 @@ groups:
           severity: warning
         annotations:
           summary: Writer consumer lag is elevated
-          description: Writer lag exceeded 1,000 messages for more than 2 minutes.
+          description: "Writer lag exceeded 1,000 messages for more than 2 minutes. Current: {{ $value | printf \"%.0f\" }}."
 
       - alert: WriterLagCritical
         expr: max(writer_consumer_lag) > 100000
@@ -33,7 +33,7 @@ groups:
           severity: critical
         annotations:
           summary: Writer consumer lag is critical
-          description: Writer lag exceeded 100,000 messages.
+          description: "Writer lag exceeded 100,000 messages. Current: {{ $value | printf \"%.0f\" }}."
 
       - alert: SnapshotsFailing
         expr: sum(increase(collector_snapshots_failed_total[15m])) >= 3
@@ -41,7 +41,7 @@ groups:
           severity: warning
         annotations:
           summary: Snapshot fetches are failing repeatedly
-          description: At least three snapshot attempts failed in the last 15 minutes.
+          description: "At least three snapshot attempts failed in the last 15 minutes. Count: {{ $value | printf \"%.0f\" }}."
 
       - alert: DiskAlmostFull
         expr: writer_disk_usage_pct > 85
@@ -49,7 +49,7 @@ groups:
           severity: warning
         annotations:
           summary: Writer disk usage is high
-          description: Writer storage usage exceeded 85%.
+          description: "Writer storage usage exceeded 85%. Current: {{ $value | printf \"%.0f\" }}%."
 
       - alert: DiskCritical
         expr: writer_disk_usage_pct > 95
@@ -57,7 +57,7 @@ groups:
           severity: critical
         annotations:
           summary: Writer disk usage is critical
-          description: Writer storage usage exceeded 95%.
+          description: "Writer storage usage exceeded 95%. Current: {{ $value | printf \"%.0f\" }}%."
 
       - alert: HighLatency
         expr: histogram_quantile(0.99, sum by (le) (rate(collector_exchange_latency_ms_bucket[5m]))) > 500
@@ -66,7 +66,7 @@ groups:
           severity: warning
         annotations:
           summary: Exchange latency p99 is elevated
-          description: Collector exchange latency p99 exceeded 500ms for 5 minutes.
+          description: "Collector exchange latency p99 exceeded 500ms for 5 minutes. Current: {{ $value | printf \"%.0f\" }}ms."
 
       - alert: NTPDrift
         expr: collector_ntp_drift_ms > 500
@@ -75,7 +75,7 @@ groups:
           severity: warning
         annotations:
           summary: Collector clock drift is elevated
-          description: Estimated NTP drift is above 500ms.
+          description: "Estimated NTP drift is above 500ms. Current: {{ $value | printf \"%.0f\" }}ms."
 
       - alert: RedpandaBufferHigh
         expr: collector_producer_buffer_size > 80000
@@ -83,12 +83,12 @@ groups:
           severity: warning
         annotations:
           summary: Producer buffer is nearing overflow
-          description: Collector in-memory producer buffer exceeded 80,000 messages.
+          description: "Collector in-memory producer buffer exceeded 80,000 messages. Current: {{ $value | printf \"%.0f\" }}."
 
       - alert: MessagesDropped
-        expr: sum(increase(collector_messages_dropped_total[5m])) > 0
+        expr: increase(collector_messages_dropped_total[5m]) > 0
         labels:
           severity: critical
         annotations:
-          summary: Collector dropped messages
-          description: At least one message was dropped due to producer backpressure.
+          summary: "Messages dropped: {{ $labels.symbol }}/{{ $labels.stream }}"
+          description: "{{ $value | printf \"%.0f\" }} message(s) dropped on {{ $labels.exchange }}/{{ $labels.symbol }}/{{ $labels.stream }} due to producer backpressure."
