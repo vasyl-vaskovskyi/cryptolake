@@ -5,6 +5,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PHONE = os.environ["CALLMEBOT_PHONE"]
@@ -35,8 +36,6 @@ def _parse_iso(ts: str) -> str:
     try:
         # Handle both "Z" and "+00:00" suffixes
         clean = ts.replace("Z", "+00:00")
-        from datetime import datetime, timezone
-
         dt = datetime.fromisoformat(clean).astimezone(timezone.utc)
         return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     except Exception:
@@ -48,8 +47,6 @@ def _duration_str(start: str, end: str) -> str:
     if not start or not end or end.startswith("0001"):
         return ""
     try:
-        from datetime import datetime
-
         s = datetime.fromisoformat(start.replace("Z", "+00:00"))
         e = datetime.fromisoformat(end.replace("Z", "+00:00"))
         delta = e - s

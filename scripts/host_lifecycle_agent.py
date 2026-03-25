@@ -29,12 +29,11 @@ from pathlib import Path
 
 from src.common.jsonl import append_jsonl, read_jsonl
 from src.common.system_identity import get_host_boot_id
+from src.writer.host_lifecycle_reader import DEFAULT_LEDGER_PATH
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-DEFAULT_LEDGER_PATH = Path("/data/.cryptolake/lifecycle/events.jsonl")
 
 TRACKED_CONTAINERS: frozenset[str] = frozenset({
     "collector",
@@ -56,21 +55,6 @@ _OOM_EXIT_CODE = 137
 
 
 # ---------------------------------------------------------------------------
-# Ledger I/O — delegates to src.common.jsonl
-# ---------------------------------------------------------------------------
-
-
-def read_ledger_events(ledger_path: Path) -> list[dict]:
-    """Read all valid JSONL events from the ledger, discarding bad lines."""
-    return read_jsonl(ledger_path)
-
-
-def append_event(ledger_path: Path, event: dict) -> None:
-    """Append a single event record to the JSONL ledger."""
-    append_jsonl(ledger_path, event)
-
-
-# ---------------------------------------------------------------------------
 # Pruning
 # ---------------------------------------------------------------------------
 
@@ -88,7 +72,7 @@ def prune_ledger(ledger_path: Path, max_age: timedelta | None = None) -> None:
         max_age = PRUNE_MAX_AGE
 
     cutoff = datetime.now(timezone.utc) - max_age
-    events = read_ledger_events(ledger_path)
+    events = read_jsonl(ledger_path)
 
     kept: list[dict] = []
     for evt in events:
@@ -124,7 +108,7 @@ def record_boot_id(ledger_path: Path) -> None:
         "event_type": "boot_id",
         "boot_id": boot_id,
     }
-    append_event(ledger_path, event)
+    append_jsonl(ledger_path, event)
 
 
 def record_maintenance_intent(
@@ -149,7 +133,7 @@ def record_maintenance_intent(
         "reason": reason,
         "source": source,
     }
-    append_event(ledger_path, event)
+    append_jsonl(ledger_path, event)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +278,7 @@ def _run_event_loop(ledger_path: Path) -> None:  # pragma: no cover
                 continue
             event = parse_docker_event(raw)
             if event is not None:
-                append_event(ledger_path, event)
+                append_jsonl(ledger_path, event)
 
 
 def main() -> None:  # pragma: no cover

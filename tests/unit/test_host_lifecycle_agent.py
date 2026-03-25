@@ -16,9 +16,9 @@ import pytest
 
 def _read_events(ledger_path: Path) -> list[dict]:
     """Read all valid JSONL events from a ledger file."""
-    from scripts.host_lifecycle_agent import read_ledger_events
+    from src.common.jsonl import read_jsonl
 
-    return read_ledger_events(ledger_path)
+    return read_jsonl(ledger_path)
 
 
 def _make_event(event_type: str, ts: str | None = None, **extra) -> dict:
@@ -40,21 +40,21 @@ class TestLedgerWriteAndRead:
 
     def test_write_single_event_creates_file(self, tmp_path: Path):
         """Writing a single event should create the ledger file."""
-        from scripts.host_lifecycle_agent import append_event
+        from src.common.jsonl import append_jsonl
 
         ledger = tmp_path / "lifecycle" / "events.jsonl"
         event = _make_event("boot_id", boot_id="test-boot-123")
-        append_event(ledger, event)
+        append_jsonl(ledger, event)
 
         assert ledger.exists()
 
     def test_written_event_is_valid_json_line(self, tmp_path: Path):
         """Each line in the ledger must be a valid JSON object."""
-        from scripts.host_lifecycle_agent import append_event
+        from src.common.jsonl import append_jsonl
 
         ledger = tmp_path / "events.jsonl"
         event = _make_event("boot_id", boot_id="abc")
-        append_event(ledger, event)
+        append_jsonl(ledger, event)
 
         lines = ledger.read_text().strip().splitlines()
         assert len(lines) == 1
@@ -64,11 +64,11 @@ class TestLedgerWriteAndRead:
 
     def test_multiple_events_appended(self, tmp_path: Path):
         """Multiple writes should produce multiple lines."""
-        from scripts.host_lifecycle_agent import append_event
+        from src.common.jsonl import append_jsonl
 
         ledger = tmp_path / "events.jsonl"
         for i in range(5):
-            append_event(ledger, _make_event("test", seq=i))
+            append_jsonl(ledger, _make_event("test", seq=i))
 
         events = _read_events(ledger)
         assert len(events) == 5
@@ -76,11 +76,11 @@ class TestLedgerWriteAndRead:
 
     def test_each_event_has_ts_and_event_type(self, tmp_path: Path):
         """Every record must include 'ts' (ISO 8601) and 'event_type'."""
-        from scripts.host_lifecycle_agent import append_event
+        from src.common.jsonl import append_jsonl
 
         ledger = tmp_path / "events.jsonl"
         now = datetime.now(timezone.utc).isoformat()
-        append_event(ledger, _make_event("container_start", ts=now, container="writer"))
+        append_jsonl(ledger, _make_event("container_start", ts=now, container="writer"))
 
         events = _read_events(ledger)
         assert len(events) == 1
@@ -92,10 +92,10 @@ class TestLedgerWriteAndRead:
 
     def test_line_ends_with_newline(self, tmp_path: Path):
         """Each record must end with a newline for crash resilience."""
-        from scripts.host_lifecycle_agent import append_event
+        from src.common.jsonl import append_jsonl
 
         ledger = tmp_path / "events.jsonl"
-        append_event(ledger, _make_event("boot_id"))
+        append_jsonl(ledger, _make_event("boot_id"))
 
         raw = ledger.read_text()
         assert raw.endswith("\n")
@@ -206,15 +206,16 @@ class TestPruning:
 
     def test_prune_removes_old_events(self, tmp_path: Path):
         """Events older than 7 days should be removed."""
-        from scripts.host_lifecycle_agent import append_event, prune_ledger
+        from src.common.jsonl import append_jsonl
+        from scripts.host_lifecycle_agent import prune_ledger
 
         ledger = tmp_path / "events.jsonl"
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
         recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
-        append_event(ledger, _make_event("old_event", ts=old_ts))
-        append_event(ledger, _make_event("recent_event", ts=recent_ts))
+        append_jsonl(ledger, _make_event("old_event", ts=old_ts))
+        append_jsonl(ledger, _make_event("recent_event", ts=recent_ts))
 
         prune_ledger(ledger)
 
@@ -224,13 +225,14 @@ class TestPruning:
 
     def test_prune_keeps_all_recent_events(self, tmp_path: Path):
         """Events within the last 7 days should all be kept."""
-        from scripts.host_lifecycle_agent import append_event, prune_ledger
+        from src.common.jsonl import append_jsonl
+        from scripts.host_lifecycle_agent import prune_ledger
 
         ledger = tmp_path / "events.jsonl"
 
         for i in range(5):
             ts = (datetime.now(timezone.utc) - timedelta(days=i)).isoformat()
-            append_event(ledger, _make_event("event", ts=ts, day=i))
+            append_jsonl(ledger, _make_event("event", ts=ts, day=i))
 
         prune_ledger(ledger)
 
@@ -239,13 +241,14 @@ class TestPruning:
 
     def test_prune_removes_all_old_events(self, tmp_path: Path):
         """If all events are older than 7 days, ledger should be empty after pruning."""
-        from scripts.host_lifecycle_agent import append_event, prune_ledger
+        from src.common.jsonl import append_jsonl
+        from scripts.host_lifecycle_agent import prune_ledger
 
         ledger = tmp_path / "events.jsonl"
 
         for i in range(3):
             ts = (datetime.now(timezone.utc) - timedelta(days=10 + i)).isoformat()
-            append_event(ledger, _make_event("old", ts=ts))
+            append_jsonl(ledger, _make_event("old", ts=ts))
 
         prune_ledger(ledger)
 
@@ -521,13 +524,14 @@ class TestAgentStartup:
 
     def test_startup_records_boot_id_and_prunes(self, tmp_path: Path):
         """On startup, agent should record boot ID and prune old events."""
-        from scripts.host_lifecycle_agent import agent_startup, append_event
+        from scripts.host_lifecycle_agent import agent_startup
+        from src.common.jsonl import append_jsonl
 
         ledger = tmp_path / "events.jsonl"
 
         # Pre-populate with an old event
         old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-        append_event(ledger, _make_event("old_event", ts=old_ts))
+        append_jsonl(ledger, _make_event("old_event", ts=old_ts))
 
         with patch("scripts.host_lifecycle_agent.get_host_boot_id", return_value="startup-boot-id"):
             agent_startup(ledger)

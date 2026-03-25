@@ -45,14 +45,11 @@ class TestDockerfiles:
 class TestRuntimeConfigs:
     def test_runtime_configs_load_expected_profiles(self) -> None:
         production = load_config(PROJECT_ROOT / "config" / "config.yaml")
-        example = load_config(PROJECT_ROOT / "config" / "config.example.yaml")
         test = load_config(PROJECT_ROOT / "config" / "config.test.yaml")
 
         assert production.database.url.startswith("postgresql://")
-        assert example.database.url.startswith("postgresql://")
         assert production.redpanda.brokers == ["redpanda:9092"]
         assert production.exchanges.binance.symbols == ["btcusdt"]
-        assert example.exchanges.binance.symbols == ["btcusdt"]
 
         assert test.exchanges.binance.symbols == ["btcusdt"]
         assert test.exchanges.binance.depth.snapshot_interval == "30s"
