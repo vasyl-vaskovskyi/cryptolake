@@ -1,42 +1,7 @@
 """Unit tests for the restart gap classifier (Phase 1 strict classification)."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-from src.writer.state_manager import MaintenanceIntent
-
-
-def _make_intent(
-    *,
-    expires_in_minutes: int = 30,
-    scope: str = "full_stack",
-    consumed: bool = False,
-) -> MaintenanceIntent:
-    """Helper to create a MaintenanceIntent with sensible defaults."""
-    now = datetime.now(timezone.utc)
-    return MaintenanceIntent(
-        maintenance_id="maint-001",
-        scope=scope,
-        planned_by="operator",
-        reason="scheduled update",
-        created_at=(now - timedelta(minutes=5)).isoformat(),
-        expires_at=(now + timedelta(minutes=expires_in_minutes)).isoformat(),
-        consumed_at=now.isoformat() if consumed else None,
-    )
-
-
-def _expired_intent(*, scope: str = "full_stack") -> MaintenanceIntent:
-    """Helper to create an already-expired MaintenanceIntent."""
-    now = datetime.now(timezone.utc)
-    return MaintenanceIntent(
-        maintenance_id="maint-expired",
-        scope=scope,
-        planned_by="operator",
-        reason="scheduled update",
-        created_at=(now - timedelta(hours=2)).isoformat(),
-        expires_at=(now - timedelta(hours=1)).isoformat(),
-        consumed_at=None,
-    )
+from tests.helpers import expired_intent, make_intent
 
 
 class TestPlannedSystemRestart:
@@ -52,7 +17,7 @@ class TestPlannedSystemRestart:
             current_session_id="session-new",
             collector_clean_shutdown=True,
             system_clean_shutdown=True,
-            maintenance_intent=_make_intent(),
+            maintenance_intent=make_intent(),
         )
 
         assert result["reason"] == "restart_gap"
@@ -74,7 +39,7 @@ class TestPlannedSystemRestart:
             current_session_id="session-new",
             collector_clean_shutdown=True,
             system_clean_shutdown=True,
-            maintenance_intent=_make_intent(),
+            maintenance_intent=make_intent(),
         )
 
         assert result["reason"] == "restart_gap"
@@ -106,7 +71,7 @@ class TestHostRebootUnplanned:
         assert result["classifier"] == "writer_recovery_v1"
         assert "host_boot_id_changed" in result["evidence"]
 
-    def test_unplanned_host_reboot_with_expired_intent(self):
+    def test_unplanned_host_reboot_withexpired_intent(self):
         """Expired maintenance intent does NOT make a reboot planned."""
         from src.writer.restart_gap_classifier import classify_restart_gap
 
@@ -117,7 +82,7 @@ class TestHostRebootUnplanned:
             current_session_id="session-new",
             collector_clean_shutdown=False,
             system_clean_shutdown=False,
-            maintenance_intent=_expired_intent(),
+            maintenance_intent=expired_intent(),
         )
 
         assert result["component"] == "host"
@@ -139,7 +104,7 @@ class TestPlannedCollectorRestart:
             current_session_id="session-new",
             collector_clean_shutdown=True,
             system_clean_shutdown=False,
-            maintenance_intent=_make_intent(scope="collector"),
+            maintenance_intent=make_intent(scope="collector"),
         )
 
         assert result["reason"] == "restart_gap"
@@ -162,7 +127,7 @@ class TestPlannedCollectorRestart:
             current_session_id="session-new",
             collector_clean_shutdown=True,
             system_clean_shutdown=False,
-            maintenance_intent=_make_intent(scope="full_stack"),
+            maintenance_intent=make_intent(scope="full_stack"),
         )
 
         assert result["component"] == "collector"
@@ -194,7 +159,7 @@ class TestCollectorUncleanExit:
         assert "collector_session_changed" in result["evidence"]
         assert "host_boot_id_unchanged" in result["evidence"]
 
-    def test_collector_unclean_with_expired_intent(self):
+    def test_collector_unclean_withexpired_intent(self):
         """Expired maintenance intent does NOT make an unclean exit planned."""
         from src.writer.restart_gap_classifier import classify_restart_gap
 
@@ -205,7 +170,7 @@ class TestCollectorUncleanExit:
             current_session_id="session-new",
             collector_clean_shutdown=False,
             system_clean_shutdown=False,
-            maintenance_intent=_expired_intent(),
+            maintenance_intent=expired_intent(),
         )
 
         assert result["component"] == "collector"
@@ -247,7 +212,7 @@ class TestHostRebootWithMaintenanceIntent:
             current_session_id="session-new",
             collector_clean_shutdown=False,
             system_clean_shutdown=False,
-            maintenance_intent=_make_intent(),
+            maintenance_intent=make_intent(),
         )
 
         assert result["reason"] == "restart_gap"
@@ -333,7 +298,7 @@ class TestMaintenanceIntentExpiry:
             current_session_id="session-new",
             collector_clean_shutdown=True,
             system_clean_shutdown=True,
-            maintenance_intent=_expired_intent(),
+            maintenance_intent=expired_intent(),
         )
 
         # Boot ID changed + no valid intent = unplanned host reboot
@@ -345,7 +310,7 @@ class TestMaintenanceIntentExpiry:
         """When maintenance intent is valid, maintenance_id should be in the result."""
         from src.writer.restart_gap_classifier import classify_restart_gap
 
-        intent = _make_intent()
+        intent = make_intent()
         result = classify_restart_gap(
             previous_boot_id="boot-aaa",
             current_boot_id="boot-bbb",

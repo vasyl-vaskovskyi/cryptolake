@@ -1,21 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import orjson
-
-from src.exchanges.binance import BinanceAdapter
-
-FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
 class TestBinanceWSFixtures:
-    def test_route_all_fixture_types(self) -> None:
-        adapter = BinanceAdapter(
-            ws_base="wss://fstream.binance.com",
-            rest_base="https://fapi.binance.com",
-        )
-
+    def test_route_all_fixture_types(self, binance_adapter, fixtures_dir) -> None:
         cases = [
             ("binance_aggtrade.json", "btcusdt@aggTrade", "trades"),
             ("binance_depth_diff.json", "btcusdt@depth@100ms", "depth"),
@@ -25,9 +14,9 @@ class TestBinanceWSFixtures:
         ]
 
         for fixture_name, stream_key, expected_type in cases:
-            inner = (FIXTURES_DIR / fixture_name).read_text()
+            inner = (fixtures_dir / fixture_name).read_text()
             frame = orjson.dumps({"stream": stream_key, "data": orjson.loads(inner)}).decode()
-            stream_type, symbol, raw_data = adapter.route_stream(frame)
+            stream_type, symbol, raw_data = binance_adapter.route_stream(frame)
 
             assert stream_type == expected_type, f"failed for {fixture_name}"
             assert symbol == "btcusdt"

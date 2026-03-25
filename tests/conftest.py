@@ -29,3 +29,14 @@ def load_fixture():
         return orjson.loads(path.read_bytes())
 
     return _load
+
+
+from src.exchanges.binance import BinanceAdapter
+
+
+@pytest.fixture
+def binance_adapter() -> BinanceAdapter:
+    return BinanceAdapter(
+        ws_base="wss://fstream.binance.com",
+        rest_base="https://fapi.binance.com",
+    )

@@ -4,29 +4,27 @@ from pathlib import Path
 
 import pytest
 
-FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
-
 
 class TestConfigLoading:
-    def test_load_valid_config(self) -> None:
+    def test_load_valid_config(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         assert config.exchanges.binance.enabled is True
         assert config.exchanges.binance.symbols == ["btcusdt", "ethusdt", "solusdt"]
         assert config.redpanda.retention_hours == 48
 
-    def test_config_symbols_are_lowercase(self) -> None:
+    def test_config_symbols_are_lowercase(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         for symbol in config.exchanges.binance.symbols:
             assert symbol == symbol.lower()
 
-    def test_config_all_streams_enabled(self) -> None:
+    def test_config_all_streams_enabled(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         streams = config.exchanges.binance.streams
         assert streams.trades is True
         assert streams.depth is True
@@ -35,17 +33,17 @@ class TestConfigLoading:
         assert streams.liquidations is True
         assert streams.open_interest is True
 
-    def test_config_depth_snapshot_override(self) -> None:
+    def test_config_depth_snapshot_override(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         assert config.exchanges.binance.depth.snapshot_overrides["btcusdt"] == "1m"
         assert config.exchanges.binance.depth.snapshot_interval == "5m"
 
-    def test_config_writer_defaults(self) -> None:
+    def test_config_writer_defaults(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         assert config.writer.compression == "zstd"
         assert config.writer.compression_level == 3
         assert config.writer.rotation == "hourly"
@@ -97,21 +95,21 @@ monitoring:
         with pytest.raises(ConfigValidationError, match="retention_hours"):
             load_config(bad_config)
 
-    def test_config_env_override(self) -> None:
+    def test_config_env_override(self, fixtures_dir) -> None:
         """Environment variables override YAML values."""
         from src.common.config import load_config
 
         config = load_config(
-            FIXTURES_DIR / "config_valid.yaml",
+            fixtures_dir / "config_valid.yaml",
             env_overrides={"REDPANDA__BROKERS": "broker1:9092,broker2:9092"},
         )
         assert config.redpanda.brokers == ["broker1:9092", "broker2:9092"]
 
-    def test_host_data_dir_alias_overrides_writer_base_dir(self) -> None:
+    def test_host_data_dir_alias_overrides_writer_base_dir(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
         config = load_config(
-            FIXTURES_DIR / "config_valid.yaml",
+            fixtures_dir / "config_valid.yaml",
             env_overrides={"HOST_DATA_DIR": "/tmp/archive"},
         )
         assert config.writer.base_dir == "/tmp/archive"
@@ -122,19 +120,19 @@ monitoring:
         with pytest.raises(FileNotFoundError):
             load_config(Path("/nonexistent/config.yaml"))
 
-    def test_disabled_stream_no_depth_snapshot(self) -> None:
+    def test_disabled_stream_no_depth_snapshot(self, fixtures_dir) -> None:
         """When depth is enabled, depth_snapshot is implicitly enabled too."""
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         enabled = config.exchanges.binance.get_enabled_streams()
         assert "depth" in enabled
         assert "depth_snapshot" in enabled
 
-    def test_enabled_stream_list(self) -> None:
+    def test_enabled_stream_list(self, fixtures_dir) -> None:
         from src.common.config import load_config
 
-        config = load_config(FIXTURES_DIR / "config_valid.yaml")
+        config = load_config(fixtures_dir / "config_valid.yaml")
         enabled = config.exchanges.binance.get_enabled_streams()
         assert enabled == [
             "trades",
@@ -173,13 +171,13 @@ monitoring:
         cfg = BinanceExchangeConfig(symbols=["btcusdt"])
         assert cfg.writer_streams_override is None
 
-    def test_env_override_does_not_bleed_os_environ(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_override_does_not_bleed_os_environ(self, fixtures_dir, monkeypatch: pytest.MonkeyPatch) -> None:
         """When explicit env_overrides are passed, os.environ should not bleed in."""
         from src.common.config import load_config
 
         monkeypatch.setenv("REDPANDA__BROKERS", "leaked:9092,leaked:9093")
         config = load_config(
-            FIXTURES_DIR / "config_valid.yaml",
+            fixtures_dir / "config_valid.yaml",
             env_overrides={"WRITER__COMPRESSION_LEVEL": "5"},
         )
         assert config.writer.compression_level == 5

@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.helpers import make_intent
+
 from src.common.envelope import create_data_envelope
 from src.writer.buffer_manager import BufferManager, CheckpointMeta, FlushResult
 from src.writer.state_manager import (
@@ -75,23 +77,6 @@ def _make_checkpoint(
         last_received_at=last_received_at,
         last_collector_session_id=last_collector_session_id,
         last_gap_reason=last_gap_reason,
-    )
-
-
-def _make_intent(
-    *,
-    expires_in_minutes: int = 30,
-    scope: str = "full_stack",
-) -> MaintenanceIntent:
-    now = datetime.now(timezone.utc)
-    return MaintenanceIntent(
-        maintenance_id="maint-001",
-        scope=scope,
-        planned_by="operator",
-        reason="scheduled update",
-        created_at=(now - timedelta(minutes=5)).isoformat(),
-        expires_at=(now + timedelta(minutes=expires_in_minutes)).isoformat(),
-        consumed_at=None,
     )
 
 
@@ -239,7 +224,7 @@ class TestRecoveryGapClassification:
             clean_shutdown_at=datetime.now(timezone.utc).isoformat(),
             planned_shutdown=True,
         )
-        consumer._maintenance_intent = _make_intent()
+        consumer._maintenance_intent = make_intent()
 
         envelope = _make_data_envelope(collector_session_id="session-new")
         gap = consumer._check_recovery_gap(envelope)
