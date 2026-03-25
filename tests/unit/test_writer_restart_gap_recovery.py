@@ -21,12 +21,30 @@ from tests.helpers import make_intent
 
 from src.common.envelope import create_data_envelope
 from src.writer.buffer_manager import BufferManager, CheckpointMeta, FlushResult
+from src.writer.consumer import WriterConsumer
 from src.writer.state_manager import (
     ComponentRuntimeState,
     MaintenanceIntent,
     StreamCheckpoint,
     StateManager,
 )
+
+
+def _make_consumer(*, topics=None, async_state=False):
+    """Create a WriterConsumer with standard mocked dependencies."""
+    state_manager = AsyncMock(spec=StateManager) if async_state else MagicMock(spec=StateManager)
+    buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
+    compressor = MagicMock()
+
+    return WriterConsumer(
+        brokers=["localhost:9092"],
+        topics=topics or ["binance.trades"],
+        group_id="test",
+        buffer_manager=buffer_manager,
+        compressor=compressor,
+        state_manager=state_manager,
+        base_dir="/data",
+    )
 
 
 def _make_data_envelope(
@@ -108,22 +126,7 @@ class TestRecoveryGapClassification:
     def test_session_change_emits_restart_gap_not_collector_restart(self):
         """Core requirement: after writer restart, session change produces
         reason=restart_gap with structured metadata, NOT the old collector_restart."""
-        from src.writer.consumer import WriterConsumer
-
-        # Set up consumer with mocked dependencies
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         # Load durable checkpoints (simulating a previous run)
         checkpoint = _make_checkpoint(last_collector_session_id="session-old")
@@ -154,21 +157,7 @@ class TestRecoveryGapClassification:
 
     def test_boot_id_change_emits_host_reboot(self):
         """When boot ID changed between runs, gap should have component=host, cause=host_reboot."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         checkpoint = _make_checkpoint(last_collector_session_id="session-old")
         consumer._durable_checkpoints = {
@@ -190,21 +179,7 @@ class TestRecoveryGapClassification:
 
     def test_maintenance_intent_emits_planned_shutdown(self):
         """Valid maintenance intent should produce planned=true, cause=operator_shutdown."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         checkpoint = _make_checkpoint(last_collector_session_id="session-old")
         consumer._durable_checkpoints = {
@@ -236,21 +211,7 @@ class TestRecoveryGapClassification:
 
     def test_first_post_recovery_record_sets_gap_end_ts(self):
         """gap_end_ts should be set to the received_at of the first post-recovery envelope."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         now_ns = time.time_ns()
         checkpoint = _make_checkpoint(
@@ -278,21 +239,7 @@ class TestRecoveryGapClassification:
     def test_recovery_runs_once_per_stream(self):
         """After the first envelope is processed for a stream, recovery should not
         run again for that same stream."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         checkpoint = _make_checkpoint(last_collector_session_id="session-old")
         consumer._durable_checkpoints = {
@@ -314,21 +261,7 @@ class TestRecoveryGapClassification:
     def test_no_durable_checkpoint_no_recovery_gap(self):
         """If there is no durable checkpoint for a stream (first-ever run),
         no recovery gap should be emitted."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         consumer._durable_checkpoints = {}  # no checkpoints
         consumer._recovery_done = set()
@@ -348,21 +281,7 @@ class TestRestPolledStreamRecovery:
     def test_time_delta_gap_detection_for_rest_polled_stream(self):
         """When session_id is unchanged but the time delta exceeds the expected
         poll interval, a restart_gap should be emitted."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.open_interest"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer(topics=["binance.open_interest"])
 
         # Checkpoint from 30 minutes ago -- same session
         old_ts = datetime.now(timezone.utc) - timedelta(minutes=30)
@@ -397,21 +316,7 @@ class TestRestPolledStreamRecovery:
         even for REST-polled streams within the normal poll interval.
         A writer restart means potential data loss; silent gaps violate the
         system invariant 'no data lost silently'."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.open_interest"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer(topics=["binance.open_interest"])
 
         # Checkpoint from 3 minutes ago -- same session, within 5m poll interval
         recent_ts = datetime.now(timezone.utc) - timedelta(minutes=3)
@@ -497,21 +402,7 @@ class TestCheckpointPersistenceAfterCommit:
     async def test_checkpoint_saved_in_commit_state(self):
         """save_stream_checkpoints should be called inside _commit_state,
         not before the durable write."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = AsyncMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer(async_state=True)
         consumer._consumer = MagicMock()  # mock Kafka consumer
         consumer._durable_checkpoints = {}
         consumer._recovery_done = set()
@@ -548,8 +439,8 @@ class TestCheckpointPersistenceAfterCommit:
         await consumer._commit_state(states, [flush_result], time.monotonic())
 
         # save_states_and_checkpoints should have been called (atomic transaction)
-        state_manager.save_states_and_checkpoints.assert_called_once()
-        saved_checkpoints = state_manager.save_states_and_checkpoints.call_args[0][1]
+        consumer.state_manager.save_states_and_checkpoints.assert_called_once()
+        saved_checkpoints = consumer.state_manager.save_states_and_checkpoints.call_args[0][1]
         assert len(saved_checkpoints) == 1
         assert saved_checkpoints[0].exchange == "binance"
         assert saved_checkpoints[0].symbol == "btcusdt"
@@ -559,21 +450,7 @@ class TestCheckpointPersistenceAfterCommit:
     async def test_in_memory_checkpoint_updated_after_commit(self):
         """The in-memory _durable_checkpoints cache should update only after
         successful commit."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = AsyncMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer(async_state=True)
         consumer._consumer = MagicMock()
         consumer._durable_checkpoints = {}
         consumer._recovery_done = set()
@@ -622,24 +499,10 @@ class TestRuntimeSessionDetectionPreserved:
     async def test_runtime_session_change_still_works(self):
         """After recovery, _check_session_change should still detect collector
         session changes during normal runtime."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
+        consumer = _make_consumer()
         # Mock async DB calls used by the runtime path
-        state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
-        state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer.state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
+        consumer.state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
 
         # Simulate normal runtime -- first envelope sets session
         env1 = _make_data_envelope(collector_session_id="session-A")
@@ -663,8 +526,6 @@ class TestRuntimeSessionDetectionPreserved:
     async def test_runtime_planned_collector_restart(self):
         """When collector does a graceful shutdown with maintenance intent,
         runtime session change should be classified as planned."""
-        from src.writer.consumer import WriterConsumer
-
         intent = MaintenanceIntent(
             maintenance_id="maint-1",
             scope="collector",
@@ -685,24 +546,12 @@ class TestRuntimeSessionDetectionPreserved:
             maintenance_id="maint-1",
         )
 
-        state_manager = MagicMock(spec=StateManager)
-        state_manager.load_component_state_by_instance = AsyncMock(
+        consumer = _make_consumer()
+        consumer.state_manager.load_component_state_by_instance = AsyncMock(
             return_value=collector_state,
         )
-        state_manager.load_active_maintenance_intent = AsyncMock(
+        consumer.state_manager.load_active_maintenance_intent = AsyncMock(
             return_value=intent,
-        )
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
         )
 
         env1 = _make_data_envelope(collector_session_id="session-A")
@@ -722,23 +571,9 @@ class TestRuntimeSessionDetectionPreserved:
     async def test_runtime_session_change_detects_boot_id_change(self):
         """When boot ID changed, runtime session-change path should classify
         as component=host, cause=host_reboot — not collector/unclean_exit."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
-        state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
+        consumer.state_manager.load_component_state_by_instance = AsyncMock(return_value=None)
+        consumer.state_manager.load_active_maintenance_intent = AsyncMock(return_value=None)
 
         # Previous writer ran with old boot ID
         consumer._current_boot_id = "boot-new"
@@ -769,21 +604,7 @@ class TestRecoveryGapTimestampClamping:
     def test_inverted_timestamps_clamped_to_zero_duration(self):
         """If checkpoint timestamp > first post-recovery message, clamp to avoid
         negative-duration gap (regression from buffer_overflow_recovery chaos test)."""
-        from src.writer.consumer import WriterConsumer
-
-        state_manager = MagicMock(spec=StateManager)
-        buffer_manager = BufferManager(base_dir="/data", flush_messages=10_000)
-        compressor = MagicMock()
-
-        consumer = WriterConsumer(
-            brokers=["localhost:9092"],
-            topics=["binance.trades"],
-            group_id="test",
-            buffer_manager=buffer_manager,
-            compressor=compressor,
-            state_manager=state_manager,
-            base_dir="/data",
-        )
+        consumer = _make_consumer()
 
         # Checkpoint has a NEWER timestamp (e.g., from a wall-clock error-gap envelope)
         future_ts = "2026-03-18T10:05:00+00:00"  # 10:05
