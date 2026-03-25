@@ -6,7 +6,9 @@ Grafana requires port 3000 to be exposed on the VPS, which is undesirable for a 
 
 ## Solution
 
-Replace Grafana with [sampler](https://github.com/sqshq/sampler) — a pre-built Go binary that renders real-time terminal dashboards from YAML configuration. Sampler queries the existing Prometheus HTTP API via `curl` and displays results as sparklines, gauges, and bar charts directly in the terminal.
+Replace Grafana with [sampler](https://github.com/sqshq/sampler) (v1.1.0) — a pre-built Go binary that renders real-time terminal dashboards from YAML configuration. Each sampler widget runs a shell command (`curl` + `jq`) to query the existing Prometheus HTTP API and displays the result as a sparkline, gauge, or bar chart directly in the terminal.
+
+**Note:** sampler's last release (v1.1.0) was in 2019. The tool is stable and functional but not actively maintained. If issues arise, grafterm or a custom Python TUI are fallback options.
 
 ## Changes
 
@@ -18,43 +20,69 @@ Delete the `grafana` service block from `docker-compose.yml`. This removes:
 - `GF_ADMIN_PASSWORD` environment variable requirement
 - Volume mounts for provisioning and dashboards
 
-### 2. Expose Prometheus on localhost
+### 2. Clean up environment variables
+
+Remove from `.env` and `.env.example`:
+- `GF_ADMIN_PASSWORD`
+- `GRAFANA_BIND`
+
+### 3. Expose Prometheus on localhost
 
 Add to the `prometheus` service in `docker-compose.yml`:
-- `ports: ["127.0.0.1:9090:9090"]` — binds only to localhost, no public exposure
-- Add `host_access` network so the port binding works
 
-This allows sampler (running on the host) to reach Prometheus.
+```yaml
+prometheus:
+  ...
+  ports:
+    - "127.0.0.1:9090:9090"
+  networks:
+    - cryptolake_internal
+    - host_access    # added — required for port binding on Docker Desktop
+```
 
-### 3. Create `infra/sampler/sampler.yml`
+This allows sampler (running on the host) to reach Prometheus. The `host_access` network follows the same pattern used by `redpanda`, `writer`, and the now-removed `grafana`.
 
-A YAML config file that mirrors all 8 Grafana dashboard panels:
+### 4. Create `infra/sampler/sampler.yml`
+
+A YAML config file covering all 8 Grafana dashboard panels, expanded to 10 sampler widgets (two multi-query Grafana panels are split into separate widgets):
 
 | # | Panel | Widget | PromQL Query |
 |---|-------|--------|-------------|
 | 1 | Message Throughput | sparkline | `sum(rate(collector_messages_produced_total[1m]))` |
 | 2 | Exchange Latency p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(collector_exchange_latency_ms_bucket[5m])))` |
-| 3 | Consumer Lag | sparkline | `max by (stream)(writer_consumer_lag)` |
+| 3 | Consumer Lag | sparkline | `max(writer_consumer_lag)` |
 | 4 | Active Connections | sparkline | `sum(collector_ws_connections_active)` |
 | 5 | Reconnects/5m | sparkline | `sum(increase(collector_ws_reconnects_total[5m]))` |
 | 6 | Gaps Detected/5m | sparkline | `sum(increase(collector_gaps_detected_total[5m]))` |
 | 7 | Disk Usage % | gauge | `writer_disk_usage_pct` |
 | 8 | Snapshots Taken/15m | sparkline | `sum(increase(collector_snapshots_taken_total[15m]))` |
 | 9 | Snapshots Failed/15m | sparkline | `sum(increase(collector_snapshots_failed_total[15m]))` |
-| 10 | Compression Ratio | sparkline | `avg by (stream)(writer_compression_ratio)` |
+| 10 | Compression Ratio | sparkline | `avg(writer_compression_ratio)` |
 
-Note: The Grafana heatmap panel (#2) is converted to a p99 latency sparkline since terminal UIs cannot render heatmaps. Connection Status is split into two sparklines (active + reconnects) for clarity.
+**Design notes:**
+- The Grafana heatmap (panel #2) is converted to a p99 latency sparkline since terminal UIs cannot render heatmaps.
+- Connection Status (Grafana panel #4, two queries) is split into two sparklines: Active Connections and Reconnects/5m.
+- Snapshot Health (Grafana panel #7, two queries) is split into two sparklines: Taken and Failed.
+- Queries that used `sum by (symbol, stream)` in Grafana are aggregated to a single value in sampler, since sampler sparklines display one series per widget. This is an intentional trade-off: the terminal dashboard shows aggregate health at a glance, while per-symbol debugging is done via direct PromQL queries (`curl localhost:9090/api/v1/query?query=...`).
 
-All queries poll every 5 seconds via `curl` against `http://localhost:9090/api/v1/query`.
+Each widget polls every 5000ms using a shell command like:
+```yaml
+sparklines:
+  - title: Message Throughput
+    rate-ms: 5000
+    sample: >
+      curl -s 'http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total[1m]))' |
+      jq '.data.result[0].value[1] // 0' -r
+```
 
-### 4. Delete Grafana infrastructure files
+### 5. Delete Grafana infrastructure files
 
 Remove the entire `infra/grafana/` directory:
 - `infra/grafana/dashboards/cryptolake.json`
 - `infra/grafana/provisioning/datasources/datasources.yml`
 - `infra/grafana/provisioning/dashboards/dashboards.yml`
 
-### 5. No changes to
+### 6. No changes to
 
 - Prometheus configuration and alert rules
 - AlertManager and WhatsApp bridge
@@ -66,8 +94,8 @@ Remove the entire `infra/grafana/` directory:
 ### Install sampler on VPS
 
 ```bash
-# Linux amd64
-wget https://github.com/sqshq/sampler/releases/latest/download/sampler-linux-amd64 -O /usr/local/bin/sampler
+# Linux amd64 — pinned to v1.1.0
+wget https://github.com/sqshq/sampler/releases/download/v1.1.0/sampler-1.1.0-linux-amd64 -O /usr/local/bin/sampler
 chmod +x /usr/local/bin/sampler
 ```
 
@@ -76,7 +104,10 @@ chmod +x /usr/local/bin/sampler
 ```bash
 ssh user@vps
 cd /path/to/cryptolake
+# Run in tmux/screen so it persists after disconnect
+tmux new -s monitor
 sampler -c infra/sampler/sampler.yml
+# Detach: Ctrl+b, d — reattach: tmux attach -t monitor
 ```
 
 ### Key bindings
@@ -84,8 +115,16 @@ sampler -c infra/sampler/sampler.yml
 - `q` — quit
 - Arrow keys — navigate between panels
 
+### Ad-hoc per-symbol queries
+
+For per-symbol/stream breakdown (not shown in the aggregate dashboard):
+```bash
+curl -s 'http://localhost:9090/api/v1/query?query=sum+by+(symbol,stream)(rate(collector_messages_produced_total[1m]))' | jq '.data.result[]'
+```
+
 ## Dependencies
 
-- `sampler` binary installed on the VPS host
+- `sampler` v1.1.0 binary installed on the VPS host
 - `curl` and `jq` available on the VPS host (standard on most Linux distros)
+- `tmux` or `screen` recommended for persistent sessions
 - Prometheus accessible at `localhost:9090`
