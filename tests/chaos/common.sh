@@ -496,7 +496,7 @@ else:
 "
 }
 
-# Print whatsapp-bridge logs showing alert deliveries.
+# Print whatsapp-bridge logs showing alert deliveries with delivery summary.
 print_whatsapp_log() {
     echo ""
     echo "--- WhatsApp Bridge Log ---"
@@ -505,7 +505,13 @@ print_whatsapp_log() {
     if [[ -z "$bridge_log" || "$bridge_log" == "(bridge not running)" ]]; then
         echo "  (no whatsapp-bridge logs available)"
     else
-        echo "$bridge_log" | tail -20 | sed 's/^/  /'
+        echo "$bridge_log" | sed 's/^/  /'
+        echo "  ─────────────────────────────────────"
+        local sent failed total
+        sent=$(echo "$bridge_log" | grep -c 'callmebot status=200' || true)
+        failed=$(echo "$bridge_log" | grep -c 'callmebot error' || true)
+        total=$((sent + failed))
+        echo "  Delivery: ${sent} sent, ${failed} failed, ${total} total"
     fi
 }
 

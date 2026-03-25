@@ -26,6 +26,42 @@ def send_whatsapp(text: str) -> None:
         print(f"callmebot error: {exc}")
 
 
+def _parse_iso(ts: str) -> str:
+    """Convert ISO-8601 timestamp to compact human-readable form."""
+    if not ts or ts.startswith("0001"):
+        return ""
+    # Strip sub-second and timezone for brevity: "2025-03-25T14:02:33.123Z" → "14:02:33 UTC"
+    try:
+        # Handle both "Z" and "+00:00" suffixes
+        clean = ts.replace("Z", "+00:00")
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(clean).astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except Exception:
+        return ts[:19]
+
+
+def _duration_str(start: str, end: str) -> str:
+    """Return human-readable duration between two ISO timestamps."""
+    if not start or not end or end.startswith("0001"):
+        return ""
+    try:
+        from datetime import datetime
+
+        s = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        e = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        delta = e - s
+        secs = int(delta.total_seconds())
+        if secs < 0:
+            return ""
+        if secs < 60:
+            return f"{secs}s"
+        return f"{secs // 60}m {secs % 60}s"
+    except Exception:
+        return ""
+
+
 def format_alert(alert: dict) -> str:
     status = alert.get("status", "unknown")
     labels = alert.get("labels", {})
@@ -41,12 +77,28 @@ def format_alert(alert: dict) -> str:
     reason = labels.get("reason", "")
     exchange = labels.get("exchange", "")
 
+    # Timing and identity fields from AlertManager payload
+    starts_at = alert.get("startsAt", "")
+    ends_at = alert.get("endsAt", "")
+    fingerprint = alert.get("fingerprint", "")
+    instance = labels.get("instance", "")
+    job = labels.get("job", "")
+
     lines = []
 
     if status == "resolved":
         lines.append(f"RESOLVED: {name}")
         if symbol:
-            lines.append(f"{exchange}/{symbol}/{stream}")
+            lines.append(f"Pair: {exchange}/{symbol}/{stream}")
+        if reason:
+            lines.append(f"Reason: {reason}")
+        duration = _duration_str(starts_at, ends_at)
+        if duration:
+            lines.append(f"Duration: {duration}")
+        fired = _parse_iso(starts_at)
+        resolved = _parse_iso(ends_at)
+        if fired and resolved:
+            lines.append(f"Fired: {fired} -> Resolved: {resolved}")
         lines.append(summary)
     else:
         tag = "CRITICAL" if severity == "critical" else "WARNING"
@@ -55,9 +107,18 @@ def format_alert(alert: dict) -> str:
             lines.append(f"Pair: {exchange}/{symbol}/{stream}")
         if reason:
             lines.append(f"Reason: {reason}")
+        fired = _parse_iso(starts_at)
+        if fired:
+            lines.append(f"Since: {fired}")
+        if instance or job:
+            source = "/".join(filter(None, [job, instance]))
+            lines.append(f"Source: {source}")
         lines.append(summary)
         if description and description != summary:
             lines.append(description)
+
+    if fingerprint:
+        lines.append(f"[{fingerprint}]")
 
     return "\n".join(lines)
 
