@@ -82,13 +82,6 @@ services:
     networks:
       - cryptolake_internal
 
-  grafana:
-    extends:
-      file: docker-compose.yml
-      service: grafana
-    networks:
-      - cryptolake_internal
-
   whatsapp-bridge:
     extends:
       file: docker-compose.yml

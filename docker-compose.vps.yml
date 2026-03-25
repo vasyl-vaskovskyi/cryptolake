@@ -1,0 +1,88 @@
+# VPS production overrides for medium servers (2-4 vCPU, 4-8 GB RAM).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
+
+services:
+  postgres:
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - max_connections=50
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - checkpoint_completion_target=0.9
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  redpanda:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+          cpus: "1.0"
+
+  collector:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  writer:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  prometheus:
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  alertmanager:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  whatsapp-bridge:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
