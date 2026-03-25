@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import structlog
-import uvloop
 
 from src.common.config import load_config
 from src.common.health_server import start_health_server
-from src.common.logging import setup_logging
 from src.common.system_identity import get_host_boot_id
 from src.writer.buffer_manager import BufferManager
 from src.writer.compressor import ZstdFrameCompressor
@@ -131,31 +128,9 @@ class Writer:
 
 
 def main():
-    setup_logging()
-    uvloop.install()
+    from src.common.service_runner import run_service
 
-    config_path = os.environ.get("CONFIG_PATH", "config/config.yaml")
-    writer = Writer(config_path)
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    shutdown_task = None
-
-    def _signal_handler():
-        nonlocal shutdown_task
-        if shutdown_task is None:
-            shutdown_task = loop.create_task(writer.shutdown())
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, _signal_handler)
-
-    try:
-        loop.run_until_complete(writer.start())
-    finally:
-        if shutdown_task is not None and not shutdown_task.done():
-            loop.run_until_complete(shutdown_task)
-        loop.close()
+    run_service(Writer)
 
 
 if __name__ == "__main__":
