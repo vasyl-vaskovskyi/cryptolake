@@ -35,11 +35,31 @@ def format_alert(alert: dict) -> str:
     summary = annotations.get("summary", "")
     description = annotations.get("description", "")
 
-    if status == "resolved":
-        return f"RESOLVED: {name}\n{summary}"
+    # Extract gap-specific labels if present
+    symbol = labels.get("symbol", "")
+    stream = labels.get("stream", "")
+    reason = labels.get("reason", "")
+    exchange = labels.get("exchange", "")
 
-    tag = "CRITICAL" if severity == "critical" else "WARNING"
-    return f"{tag}: {name}\n{summary}\n{description}"
+    lines = []
+
+    if status == "resolved":
+        lines.append(f"RESOLVED: {name}")
+        if symbol:
+            lines.append(f"{exchange}/{symbol}/{stream}")
+        lines.append(summary)
+    else:
+        tag = "CRITICAL" if severity == "critical" else "WARNING"
+        lines.append(f"{tag}: {name}")
+        if symbol:
+            lines.append(f"Pair: {exchange}/{symbol}/{stream}")
+        if reason:
+            lines.append(f"Reason: {reason}")
+        lines.append(summary)
+        if description and description != summary:
+            lines.append(description)
+
+    return "\n".join(lines)
 
 
 class Handler(BaseHTTPRequestHandler):
