@@ -23,7 +23,6 @@ Metadata:
           - GitRepoURL
           - GitBranch
           - PostgresPassword
-          - GrafanaPassword
 
 Parameters:
   SSHKeyName:
@@ -69,12 +68,6 @@ Parameters:
     NoEcho: true
     MinLength: 8
     Description: Password for the PostgreSQL database
-
-  GrafanaPassword:
-    Type: String
-    NoEcho: true
-    MinLength: 8
-    Description: Password for the Grafana admin user
 
 Conditions:
   UseArm64: !Equals [!Ref InstanceArchitecture, arm64]
@@ -320,9 +313,7 @@ Resources:
           # Create .env from CloudFormation parameters (NoEcho — not logged)
           cat > .env << 'ENVFILE'
           POSTGRES_PASSWORD=${PostgresPassword}
-          GF_ADMIN_PASSWORD=${GrafanaPassword}
           WEBHOOK_URL=
-          GRAFANA_BIND=127.0.0.1
           HOST_DATA_DIR=/data
           ENVFILE
           chmod 600 .env
@@ -330,7 +321,7 @@ Resources:
           # Build images and start the stack
           docker compose up -d --build
           echo "=== Waiting for application services to become healthy ==="
-          REQUIRED_SERVICES="postgres redpanda collector writer prometheus grafana alertmanager"
+          REQUIRED_SERVICES="postgres redpanda collector writer prometheus alertmanager"
           unhealthy_services=""
           for i in $(seq 1 60); do
             unhealthy_services=""
@@ -414,10 +405,6 @@ Outputs:
   SSHCommand:
     Description: SSH command to connect
     Value: !Sub 'ssh -i ~/.ssh/${SSHKeyName}.pem ec2-user@${ElasticIP}'
-
-  GrafanaTunnel:
-    Description: SSH tunnel command for Grafana access
-    Value: !Sub 'ssh -L 3000:localhost:3000 -i ~/.ssh/${SSHKeyName}.pem ec2-user@${ElasticIP}'
 
   InstanceId:
     Description: EC2 Instance ID

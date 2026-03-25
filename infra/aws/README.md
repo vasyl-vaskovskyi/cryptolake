@@ -17,8 +17,6 @@ MY_IP=$(curl -s https://checkip.amazonaws.com)
 # Read secrets without writing them into shell history
 read -s POSTGRES_PASSWORD
 echo
-read -s GRAFANA_PASSWORD
-echo
 
 # Deploy the stack
 aws cloudformation deploy \
@@ -30,13 +28,12 @@ aws cloudformation deploy \
     InstanceArchitecture=x86_64 \
     GitRepoURL=https://github.com/your-org/cryptolake.git \
     PostgresPassword="$POSTGRES_PASSWORD" \
-    GrafanaPassword="$GRAFANA_PASSWORD" \
   --capabilities CAPABILITY_IAM \
   --region us-east-1
 
-unset POSTGRES_PASSWORD GRAFANA_PASSWORD
+unset POSTGRES_PASSWORD
 
-# Get outputs (SSH command, Grafana tunnel, etc.)
+# Get outputs (SSH command, etc.)
 aws cloudformation describe-stacks \
   --stack-name cryptolake \
   --query 'Stacks[0].Outputs' \
@@ -98,9 +95,7 @@ cd /opt/cryptolake
 # Create .env
 cat > .env << 'EOF'
 POSTGRES_PASSWORD=<your-postgres-password>
-GF_ADMIN_PASSWORD=<your-grafana-password>
 WEBHOOK_URL=
-GRAFANA_BIND=127.0.0.1
 HOST_DATA_DIR=/data
 EOF
 chmod 600 .env
@@ -123,10 +118,6 @@ ssh -i ~/.ssh/your-key.pem ec2-user@<ElasticIP>
 # Check the stack
 cd /opt/cryptolake
 docker compose ps
-
-# Grafana (via SSH tunnel)
-ssh -L 3000:localhost:3000 -i ~/.ssh/your-key.pem ec2-user@<ElasticIP>
-# Then open http://localhost:3000
 ```
 
 ## Monitor
@@ -134,7 +125,7 @@ ssh -L 3000:localhost:3000 -i ~/.ssh/your-key.pem ec2-user@<ElasticIP>
 - **CloudWatch Metrics**: `CryptoLake` namespace — memory, disk, disk I/O
 - **CloudWatch Logs**: `/cryptolake/docker` log group — all container logs
 - **AWS Backup**: Daily EBS snapshots at 05:00 UTC, 7-day retention
-- **Grafana**: Application-level dashboards via SSH tunnel on port 3000
+- **Sampler**: Real-time terminal dashboard over SSH — run `sampler -c infra/sampler/sampler.yml` (no port forwarding needed)
 
 ## Host Lifecycle Agent
 
@@ -239,7 +230,6 @@ aws cloudformation update-stack \
     ParameterKey=GitRepoURL,UsePreviousValue=true \
     ParameterKey=GitBranch,UsePreviousValue=true \
     ParameterKey=PostgresPassword,UsePreviousValue=true \
-    ParameterKey=GrafanaPassword,UsePreviousValue=true \
   --capabilities CAPABILITY_IAM \
   --region us-east-1
 ```
