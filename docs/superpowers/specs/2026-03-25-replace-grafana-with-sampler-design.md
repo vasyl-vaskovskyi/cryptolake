@@ -44,47 +44,96 @@ This allows sampler (running on the host) to reach Prometheus. The `host_access`
 
 ### 4. Create `infra/sampler/sampler.yml`
 
-A YAML config file covering all 8 Grafana dashboard panels, expanded to 10 sampler widgets (two multi-query Grafana panels are split into separate widgets):
+15 sampler widgets organized in 3 tiers by operational importance. This is an upgrade over the original 8-panel Grafana dashboard — 5 critical metrics that were never visualized are now included.
 
-| # | Panel | Widget | PromQL Query |
-|---|-------|--------|-------------|
-| 1 | Message Throughput | sparkline | `sum(rate(collector_messages_produced_total[1m]))` |
-| 2 | Exchange Latency p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(collector_exchange_latency_ms_bucket[5m])))` |
-| 3 | Consumer Lag | sparkline | `max(writer_consumer_lag)` |
-| 4 | Active Connections | sparkline | `sum(collector_ws_connections_active)` |
-| 5 | Reconnects/5m | sparkline | `sum(increase(collector_ws_reconnects_total[5m]))` |
-| 6 | Gaps Detected/5m | sparkline | `sum(increase(collector_gaps_detected_total[5m]))` |
-| 7 | Disk Usage % | gauge | `writer_disk_usage_pct` |
-| 8 | Snapshots Taken/15m | sparkline | `sum(increase(collector_snapshots_taken_total[15m]))` |
-| 9 | Snapshots Failed/15m | sparkline | `sum(increase(collector_snapshots_failed_total[15m]))` |
-| 10 | Compression Ratio | sparkline | `avg(writer_compression_ratio)` |
+#### Tier 1: Critical (must have)
+
+| # | Panel | Widget | PromQL Query | Notes |
+|---|-------|--------|-------------|-------|
+| 1 | Consumer Lag | sparkline | `max(writer_consumer_lag)` | Primary health indicator, 2 alert thresholds |
+| 2 | Gaps Detected/5m | sparkline | `sum(increase(collector_gaps_detected_total[5m]))` | Any gap = data loss |
+| 3 | Messages Dropped/5m | sparkline | `sum(increase(collector_messages_dropped_total[5m]))` | **NEW** — was missing from Grafana despite having critical alert |
+| 4 | Disk Usage % | gauge | `writer_disk_usage_pct` | Prevents storage exhaustion |
+| 5 | Active Connections | sparkline | `sum(collector_ws_connections_active)` | Connectivity loss halts collection |
+| 6 | Write Errors | sparkline | `sum(increase(writer_write_errors_total[5m]))` | **NEW** — disk failures, never visualized |
+
+#### Tier 2: High (strongly recommended)
+
+| # | Panel | Widget | PromQL Query | Notes |
+|---|-------|--------|-------------|-------|
+| 7 | Message Throughput | sparkline | `sum(rate(collector_messages_produced_total[1m]))` | Ingestion rate baseline |
+| 8 | Exchange Latency p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(collector_exchange_latency_ms_bucket[5m])))` | Alert at >500ms |
+| 9 | Reconnects/5m | sparkline | `sum(increase(collector_ws_reconnects_total[5m]))` | Connection instability signal |
+| 10 | Snapshots Taken/15m | sparkline | `sum(increase(collector_snapshots_taken_total[15m]))` | Snapshot health (success) |
+| 11 | Snapshots Failed/15m | sparkline | `sum(increase(collector_snapshots_failed_total[15m]))` | Snapshot health (failure), has alert |
+| 12 | DB Commit Failures | sparkline | `sum(increase(writer_pg_commit_failures_total[5m]))` | **NEW** — state persistence failures |
+| 13 | Kafka Commit Failures | sparkline | `sum(increase(writer_kafka_commit_failures_total[5m]))` | **NEW** — offset tracking failures |
+
+#### Tier 3: Operational (nice to have)
+
+| # | Panel | Widget | PromQL Query | Notes |
+|---|-------|--------|-------------|-------|
+| 14 | Compression Ratio | sparkline | `avg(writer_compression_ratio)` | I/O efficiency |
+| 15 | Flush Duration p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(writer_flush_duration_ms_bucket[5m])))` | **NEW** — I/O bottleneck detection |
 
 **Design notes:**
-- The Grafana heatmap (panel #2) is converted to a p99 latency sparkline since terminal UIs cannot render heatmaps.
-- Connection Status (Grafana panel #4, two queries) is split into two sparklines: Active Connections and Reconnects/5m.
-- Snapshot Health (Grafana panel #7, two queries) is split into two sparklines: Taken and Failed.
-- Queries that used `sum by (symbol, stream)` in Grafana are aggregated to a single value in sampler, since sampler sparklines display one series per widget. This is an intentional trade-off: the terminal dashboard shows aggregate health at a glance, while per-symbol debugging is done via direct PromQL queries (`curl localhost:9090/api/v1/query?query=...`).
+- The Grafana heatmap (Exchange Latency) is converted to a p99 sparkline since terminal UIs cannot render heatmaps.
+- Connection Status (Grafana panel with two queries) is split: Active Connections (Tier 1) and Reconnects (Tier 2).
+- Snapshot Health (Grafana panel with two queries) is split: Taken and Failed (both Tier 2).
+- Queries that used `sum by (symbol, stream)` in Grafana are aggregated to a single value in sampler, since sampler sparklines display one series per widget. Per-symbol debugging is done via ad-hoc PromQL queries.
+- **5 metrics marked NEW** were implemented in the codebase but never shown in Grafana. This dashboard closes that visibility gap.
 
 Each widget polls every 5000ms using a shell command like:
 ```yaml
 sparklines:
-  - title: Message Throughput
+  - title: Consumer Lag
     rate-ms: 5000
     sample: >
-      curl -s 'http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total[1m]))' |
+      curl -s 'http://localhost:9090/api/v1/query?query=max(writer_consumer_lag)' |
       jq '.data.result[0].value[1] // 0' -r
 ```
 
-### 5. Delete Grafana infrastructure files
+### 5. Add missing Prometheus alert rules
+
+Three critical metrics lack alerts. Add to `infra/prometheus/alert_rules.yml`:
+
+```yaml
+- alert: WriteErrors
+  expr: increase(writer_write_errors_total[5m]) > 0
+  labels:
+    severity: critical
+  annotations:
+    summary: "Writer disk write errors detected"
+    description: "{{ $value | printf \"%.0f\" }} write error(s) in the last 5 minutes on {{ $labels.exchange }}/{{ $labels.stream }}."
+
+- alert: PostgresCommitFailing
+  expr: increase(writer_pg_commit_failures_total[5m]) > 0
+  labels:
+    severity: critical
+  annotations:
+    summary: "PostgreSQL state commit failures"
+    description: "{{ $value | printf \"%.0f\" }} PostgreSQL commit failure(s) in the last 5 minutes. State persistence is degraded."
+
+- alert: KafkaCommitFailing
+  expr: increase(writer_kafka_commit_failures_total[5m]) > 0
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Kafka offset commit failures"
+    description: "{{ $value | printf \"%.0f\" }} Kafka offset commit failure(s) in the last 5 minutes. Offset tracking is degraded."
+```
+
+### 6. Delete Grafana infrastructure files
 
 Remove the entire `infra/grafana/` directory:
 - `infra/grafana/dashboards/cryptolake.json`
 - `infra/grafana/provisioning/datasources/datasources.yml`
 - `infra/grafana/provisioning/dashboards/dashboards.yml`
 
-### 6. No changes to
+### 7. No changes to
 
-- Prometheus configuration and alert rules
+- Prometheus scrape configuration (prometheus.yml)
 - AlertManager and WhatsApp bridge
 - Collector and writer metrics code
 - Any application code
