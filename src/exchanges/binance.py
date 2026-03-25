@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import orjson
 
-from src.exchanges.base import ExchangeAdapter
-
 # Stream name mapping from Binance subscription key to our stream type
 _STREAM_KEY_MAP = {
     "aggTrade": "trades",
@@ -27,7 +25,7 @@ _SUBSCRIPTION_MAP = {
 }
 
 
-class BinanceAdapter(ExchangeAdapter):
+class BinanceAdapter:
     def __init__(self, ws_base: str, rest_base: str):
         self.ws_base = ws_base.rstrip("/")
         self.rest_base = rest_base.rstrip("/")
