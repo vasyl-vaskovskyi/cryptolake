@@ -10,7 +10,7 @@ groups:
           description: "{{ $value | printf \"%.0f\" }} {{ $labels.reason }} gap(s) on {{ $labels.exchange }}/{{ $labels.symbol }}/{{ $labels.stream }} in the last 5 minutes."
 
       - alert: ConnectionLost
-        expr: sum(collector_ws_connections_active) < 4
+        expr: sum(collector_ws_connections_active) < 2
         for: 30s
         labels:
           severity: critical
