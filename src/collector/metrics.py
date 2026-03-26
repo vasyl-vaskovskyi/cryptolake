@@ -28,7 +28,7 @@ exchange_latency_ms = Histogram(
     "collector_exchange_latency_ms",
     "received_at - exchange_ts distribution (ms)",
     ["exchange", "symbol", "stream"],
-    buckets=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000],
+    buckets=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000],
 )
 
 snapshots_taken_total = Counter(

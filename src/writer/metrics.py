@@ -56,7 +56,7 @@ flush_duration_ms = Histogram(
     "writer_flush_duration_ms",
     "Time to flush buffer to disk (ms)",
     ["exchange", "stream"],
-    buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+    buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 )
 
 write_errors_total = Counter(
