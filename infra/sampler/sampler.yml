@@ -1,111 +1,82 @@
-# CryptoLake Terminal Dashboard
-# Run: sampler -c infra/sampler/sampler.yml
-# Requires: curl, jq, prometheus on localhost:9090
-
-variables:
-  PROM: http://localhost:9090
-
-# ── Tier 1: Critical ──────────────────────────────────────────────
-
-sparklines:
-  - title: Consumer Lag
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=max(writer_consumer_lag)' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Gaps Detected /5m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(collector_gaps_detected_total[5m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Messages Dropped /5m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(collector_messages_dropped_total[5m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Active Connections
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(collector_ws_connections_active)' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Write Errors /5m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(writer_write_errors_total[5m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-# ── Tier 2: High ──────────────────────────────────────────────────
-
-  - title: Message Throughput msg/s
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(rate(collector_messages_produced_total[1m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
-
-  - title: Exchange Latency p99 ms
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket[5m])))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Reconnects /5m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(collector_ws_reconnects_total[5m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Snapshots Taken /15m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(collector_snapshots_taken_total[15m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Snapshots Failed /15m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(collector_snapshots_failed_total[15m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: DB Commit Failures /5m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(writer_pg_commit_failures_total[5m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-  - title: Kafka Commit Failures /5m
-    rate-ms: 5000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=sum(increase(writer_kafka_commit_failures_total[5m]))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-# ── Tier 3: Operational ──────────────────────────────────────────
-
-  - title: Compression Ratio
-    rate-ms: 10000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=avg(writer_compression_ratio)' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.2f'
-
-  - title: Flush Duration p99 ms
-    rate-ms: 10000
-    sample: >
-      curl -s '$PROM/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket[5m])))' |
-      jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
-# ── Gauge ─────────────────────────────────────────────────────────
-
 gauges:
   - title: Disk Usage %
+    position: [[0, 8], [20, 12]]
     rate-ms: 10000
     cur:
-      sample: >
-        curl -s '$PROM/api/v1/query?query=writer_disk_usage_pct' |
-        jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        sample: |
+            curl -s 'http://localhost:9090/api/v1/query?query=writer_disk_usage_pct' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
     max:
-      sample: echo 100
+        sample: echo 100
     min:
-      sample: echo 0
+        sample: echo 0
+sparklines:
+  - title: Consumer Lag
+    position: [[40, 8], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=max(writer_consumer_lag)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Gaps Detected /5m
+    position: [[0, 0], [20, 8]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(collector_gaps_detected_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Messages Dropped /5m
+    position: [[0, 32], [20, 8]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(collector_messages_dropped_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Active Connections
+    position: [[0, 20], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(collector_ws_connections_active)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Write Errors /5m
+    position: [[40, 20], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(writer_write_errors_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Message Throughput msg/s
+    position: [[40, 0], [20, 8]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total[1m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
+  - title: Exchange Latency p99 ms
+    position: [[40, 32], [40, 8]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket[5m])))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Reconnects /5m
+    position: [[20, 8], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(collector_ws_reconnects_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Snapshots Taken /15m
+    position: [[60, 8], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_taken_total[15m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Snapshots Failed /15m
+    position: [[20, 20], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_failed_total[15m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: DB Commit Failures /5m
+    position: [[60, 20], [20, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(writer_pg_commit_failures_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Kafka Commit Failures /5m
+    position: [[20, 0], [20, 8]]
+    rate-ms: 5000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=sum(increase(writer_kafka_commit_failures_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+  - title: Compression Ratio
+    position: [[20, 32], [20, 8]]
+    rate-ms: 10000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=avg(writer_compression_ratio)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.2f'
+  - title: Flush Duration p99 ms
+    position: [[60, 0], [20, 8]]
+    rate-ms: 10000
+    sample: |
+        curl -s 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket[5m])))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
