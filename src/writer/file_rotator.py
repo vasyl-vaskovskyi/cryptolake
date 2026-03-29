@@ -35,6 +35,20 @@ def build_file_path(
     return Path(base_dir) / exchange / symbol / stream / date / name
 
 
+def build_backfill_file_path(
+    base_dir: str,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    date: str,
+    hour: int,
+    backfill_seq: int,
+) -> Path:
+    symbol = symbol.lower()
+    name = f"hour-{hour}.backfill-{backfill_seq}.jsonl.zst"
+    return Path(base_dir) / exchange / symbol / stream / date / name
+
+
 def sidecar_path(data_path: Path) -> Path:
     return data_path.with_suffix(data_path.suffix + ".sha256")
 

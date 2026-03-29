@@ -44,6 +44,34 @@ class TestFilePathGeneration:
         assert "BTCUSDT" not in str(path)
         assert "btcusdt" in str(path)
 
+    def test_build_backfill_file_path_basic(self):
+        from src.writer.file_rotator import build_backfill_file_path
+
+        path = build_backfill_file_path(
+            base_dir="/data",
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            date="2026-03-28",
+            hour=16,
+            backfill_seq=1,
+        )
+        assert str(path) == "/data/binance/btcusdt/trades/2026-03-28/hour-16.backfill-1.jsonl.zst"
+
+    def test_build_backfill_file_path_increments(self):
+        from src.writer.file_rotator import build_backfill_file_path
+
+        path = build_backfill_file_path(
+            base_dir="/data",
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            date="2026-03-28",
+            hour=16,
+            backfill_seq=3,
+        )
+        assert "backfill-3" in str(path)
+
     def test_sha256_sidecar_path(self):
         from src.writer.file_rotator import build_file_path, sidecar_path
 
