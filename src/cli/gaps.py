@@ -357,7 +357,7 @@ def _file_status_for_hour(hour: int, hour_map: dict[int, str], stream_name: str)
     if status == "backfilled":
         return "RECOVERED"
     # present or late — file exists
-    return "-"
+    return "OK"
 
 
 def _format_hours_line(hours: dict[int, str], expect_from: int = 0, expect_to: int = 23) -> str:

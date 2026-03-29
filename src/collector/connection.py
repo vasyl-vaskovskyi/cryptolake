@@ -270,3 +270,11 @@ class WebSocketManager:
                     detail=f"WebSocket {socket_name} disconnected",
                     gap_start_ts=gap_start, gap_end_ts=now,
                 )
+                # Advance the stream handler's seq tracker past the gap
+                # envelope's seq so the next data message doesn't trigger
+                # a spurious session_seq_skip.
+                handler = self.handlers.get(stream)
+                if handler is not None and hasattr(handler, "_seq_trackers"):
+                    tracker = handler._seq_trackers.get(symbol)
+                    if tracker is not None:
+                        tracker._last_seq = seq
