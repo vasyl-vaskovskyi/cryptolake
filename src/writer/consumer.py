@@ -9,6 +9,7 @@ from pathlib import Path
 
 import orjson
 import structlog
+import zstandard as zstd
 
 from src.common.envelope import (
     add_broker_coordinates,
@@ -280,10 +281,53 @@ class WriterConsumer:
             return None
         self._recovery_done.add(stream_key)
 
-        # No durable checkpoint = first-ever run, no gap to detect
         checkpoint = self._durable_checkpoints.get(stream_key)
         if checkpoint is None:
-            return None
+            exchange, symbol, stream = stream_key
+            stream_dir = Path(self.base_dir) / exchange / symbol / stream
+            if not stream_dir.exists() or not any(stream_dir.rglob("hour-*.jsonl.zst")):
+                logger.info("first_run_no_checkpoint",
+                            exchange=exchange, symbol=symbol, stream=stream)
+                return None
+
+            hour_files = sorted(stream_dir.rglob("hour-*.jsonl.zst"))
+            gap_start_ts = 0
+            for hf in reversed(hour_files):
+                try:
+                    dctx = zstd.ZstdDecompressor()
+                    with open(hf, "rb") as f:
+                        data = dctx.stream_reader(f).read()
+                    lines = [l for l in data.strip().split(b"\n") if l]
+                    if lines:
+                        last_env = orjson.loads(lines[-1])
+                        gap_start_ts = last_env.get("received_at", 0)
+                        break
+                except Exception:
+                    continue
+
+            current_received_at = envelope.get("received_at", 0)
+            current_session_id = envelope.get("collector_session_id", "")
+            logger.warning("recovery_gap_no_checkpoint",
+                           exchange=exchange, symbol=symbol, stream=stream,
+                           gap_start_ts=gap_start_ts, gap_end_ts=current_received_at)
+
+            writer_metrics.session_gaps_detected_total.labels(
+                exchange=exchange, symbol=symbol, stream=stream,
+            ).inc()
+            self._recovery_gap_emitted.add(stream_key)
+
+            return create_gap_envelope(
+                exchange=exchange,
+                symbol=symbol,
+                stream=stream,
+                collector_session_id=current_session_id,
+                session_seq=-1,
+                gap_start_ts=gap_start_ts,
+                gap_end_ts=current_received_at,
+                reason="checkpoint_lost",
+                detail="No durable checkpoint; recovered gap bounds from archive",
+                received_at=current_received_at,
+            )
 
         # Extract current envelope data
         current_session_id = envelope.get("collector_session_id", "")

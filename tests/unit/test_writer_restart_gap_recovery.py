@@ -274,6 +274,74 @@ class TestRecoveryGapClassification:
         assert gap is None
 
 
+class TestCheckpointLostGapDetection:
+    """When PostgreSQL has no durable checkpoint but archive files exist on disk,
+    emit a checkpoint_lost gap (writer was killed after disk write but before PG commit)."""
+
+    def test_no_checkpoint_with_archive_files_emits_checkpoint_lost(self, tmp_path):
+        """No PG checkpoint + archive files exist → emit checkpoint_lost gap."""
+        import zstandard as zstd
+        import orjson
+
+        consumer = _make_consumer()
+        consumer.base_dir = str(tmp_path)
+        consumer._durable_checkpoints = {}
+        consumer._recovery_done = set()
+        consumer._current_boot_id = "boot-aaa"
+        consumer._previous_writer_state = None
+
+        # Create archive file: tmp_path/binance/btcusdt/trades/2026-03-28/hour-15.jsonl.zst
+        archive_dir = tmp_path / "binance" / "btcusdt" / "trades" / "2026-03-28"
+        archive_dir.mkdir(parents=True)
+        archive_file = archive_dir / "hour-15.jsonl.zst"
+
+        archive_received_at = 1774712068000000000
+        data_env = {"v": 1, "type": "data", "received_at": archive_received_at, "exchange": "binance"}
+        line = orjson.dumps(data_env)
+
+        cctx = zstd.ZstdCompressor()
+        with open(archive_file, "wb") as f:
+            f.write(cctx.compress(line + b"\n"))
+
+        # New-session envelope with a later received_at
+        new_received_at = 1774722068000000000
+        envelope = _make_data_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            collector_session_id="session-new",
+            received_at=new_received_at,
+        )
+
+        gap = consumer._check_recovery_gap(envelope)
+
+        assert gap is not None
+        assert gap["reason"] == "checkpoint_lost"
+        assert gap["gap_start_ts"] == archive_received_at
+        assert gap["gap_end_ts"] == new_received_at
+
+    def test_no_checkpoint_no_archive_files_returns_none(self, tmp_path):
+        """No PG checkpoint + no archive files → first-ever run, return None."""
+        consumer = _make_consumer()
+        consumer.base_dir = str(tmp_path)
+        consumer._durable_checkpoints = {}
+        consumer._recovery_done = set()
+        consumer._current_boot_id = "boot-aaa"
+        consumer._previous_writer_state = None
+
+        envelope = _make_data_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            collector_session_id="session-new",
+            received_at=1774722068000000000,
+        )
+
+        gap = consumer._check_recovery_gap(envelope)
+
+        assert gap is None
+
+
 class TestRestPolledStreamRecovery:
     """REST-polled streams (e.g., open_interest) may not have session_id changes
     when only the writer restarts. Detect gaps via time delta."""
