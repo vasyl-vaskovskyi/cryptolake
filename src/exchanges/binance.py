@@ -88,6 +88,42 @@ class BinanceAdapter:
     def build_open_interest_url(self, symbol: str) -> str:
         return f"{self.rest_base}/fapi/v1/openInterest?symbol={symbol.upper()}"
 
+    def build_historical_trades_url(
+        self, symbol: str, *,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        from_id: int | None = None,
+        limit: int = 1000,
+    ) -> str:
+        base = f"{self.rest_base}/fapi/v1/aggTrades?symbol={symbol.upper()}"
+        if from_id is not None:
+            return f"{base}&fromId={from_id}&limit={limit}"
+        return f"{base}&startTime={start_time}&endTime={end_time}&limit={limit}"
+
+    def build_historical_funding_url(
+        self, symbol: str, *, start_time: int, end_time: int, limit: int = 1000,
+    ) -> str:
+        return (
+            f"{self.rest_base}/fapi/v1/fundingRate"
+            f"?symbol={symbol.upper()}&startTime={start_time}&endTime={end_time}&limit={limit}"
+        )
+
+    def build_historical_liquidations_url(
+        self, symbol: str, *, start_time: int, end_time: int, limit: int = 1000,
+    ) -> str:
+        return (
+            f"{self.rest_base}/fapi/v1/allForceOrders"
+            f"?symbol={symbol.upper()}&startTime={start_time}&endTime={end_time}&limit={limit}"
+        )
+
+    def build_historical_open_interest_url(
+        self, symbol: str, *, start_time: int, end_time: int, limit: int = 500,
+    ) -> str:
+        return (
+            f"{self.rest_base}/futures/data/openInterestHist"
+            f"?symbol={symbol.upper()}&period=5m&startTime={start_time}&endTime={end_time}&limit={limit}"
+        )
+
     def parse_snapshot_last_update_id(self, raw_text: str) -> int:
         parsed = orjson.loads(raw_text)
         return parsed["lastUpdateId"]
