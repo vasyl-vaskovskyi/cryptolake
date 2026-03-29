@@ -286,10 +286,16 @@ def _scan_hours(date_dir: Path) -> dict[int, str]:
 
 
 def _scan_gaps(date_dir: Path) -> list[dict]:
-    """Read all .jsonl.zst files in date_dir and return gap envelopes."""
-    gaps: list[dict] = []
+    """Read all .jsonl.zst files in date_dir and return gap envelopes.
+
+    Enriches each gap with ``_records_missed`` by examining the session_seq
+    of neighbouring data envelopes.
+    """
     if not date_dir.exists():
-        return gaps
+        return []
+
+    # Read ALL envelopes across all files for this date, preserving order
+    all_envs: list[dict] = []
     dctx = zstd.ZstdDecompressor()
     for f in sorted(date_dir.glob("*.jsonl.zst")):
         try:
@@ -298,11 +304,41 @@ def _scan_gaps(date_dir: Path) -> list[dict]:
             for line in data.strip().split(b"\n"):
                 if not line:
                     continue
-                env = orjson.loads(line)
-                if env.get("type") == "gap":
-                    gaps.append(env)
+                all_envs.append(orjson.loads(line))
         except Exception:
-            pass  # Skip unreadable files
+            pass
+
+    # Build gap list and compute records missed from surrounding data records
+    gaps: list[dict] = []
+    for i, env in enumerate(all_envs):
+        if env.get("type") != "gap":
+            continue
+
+        # Walk backwards to find the previous data envelope in the same session
+        prev_seq: int | None = None
+        gap_session = env.get("collector_session_id")
+        for j in range(i - 1, -1, -1):
+            prev = all_envs[j]
+            if prev.get("type") == "data" and prev.get("collector_session_id") == gap_session:
+                prev_seq = prev.get("session_seq")
+                break
+
+        # Walk forwards to find the next data envelope in the same session
+        next_seq: int | None = None
+        for j in range(i + 1, len(all_envs)):
+            nxt = all_envs[j]
+            if nxt.get("type") == "data" and nxt.get("collector_session_id") == gap_session:
+                next_seq = nxt.get("session_seq")
+                break
+
+        # Compute missed count
+        if prev_seq is not None and next_seq is not None and next_seq > prev_seq:
+            env["_records_missed"] = next_seq - prev_seq - 1
+        else:
+            env["_records_missed"] = None
+
+        gaps.append(env)
+
     return gaps
 
 
@@ -341,13 +377,25 @@ def _ns_to_time(ns: int) -> str:
 
 
 def _records_missed(gap: dict) -> str:
-    """Extract records missed count from gap detail when available."""
+    """Return records missed count as a string.
+
+    Uses the precomputed ``_records_missed`` field from ``_scan_gaps`` (based
+    on session_seq difference of surrounding data records). Falls back to
+    parsing the gap detail for session_seq_skip gaps. Shows "?" for missing
+    hour entries and gaps where the count cannot be determined.
+    """
+    # Precomputed from surrounding data envelopes
+    precomputed = gap.get("_records_missed")
+    if precomputed is not None:
+        return str(precomputed)
+
+    # Fallback: parse from detail (session_seq_skip)
     import re
     detail = gap.get("detail", "")
-    # session_seq_skip: "session_seq skip: expected 100, got 105" → 5
     m = re.search(r"expected (\d+), got (\d+)", detail)
     if m:
         return str(int(m.group(2)) - int(m.group(1)))
+
     return "?"
 
 
@@ -680,7 +728,7 @@ def _print_report(report: dict) -> None:
                     recorded_dur_ns = covered * 3_600_000_000_000
 
                     # Per-stream/date summary
-                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*15} {'-'*15}")
+                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*6}  {'-'*15} {'-'*15}")
                     click.echo(f"  Total recorded:      {_format_duration(recorded_dur_ns)}")
                     click.echo(f"  Total gaps:          {st_total:>4} / {_format_duration(st_total_dur)}")
                     click.echo(f"  Restored:            {st_restored:>4} / {_format_duration(st_restored_dur)}")
