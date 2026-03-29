@@ -629,7 +629,7 @@ def _print_report(report: dict) -> None:
 
                     # Per-stream/date summary
                     click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*15} {'-'*15}")
-                    click.echo(f"  Total recorded:      {covered:>4}h / {_format_duration(recorded_dur_ns)}")
+                    click.echo(f"  Total recorded:      {_format_duration(recorded_dur_ns)}")
                     click.echo(f"  Total gaps:          {st_total:>4} / {_format_duration(st_total_dur)}")
                     click.echo(f"  Restored:            {st_restored:>4} / {_format_duration(st_restored_dur)}")
                     click.echo(f"  Unrecoverable:       {st_unrecoverable:>4} / {_format_duration(st_unrecoverable_dur)}")
