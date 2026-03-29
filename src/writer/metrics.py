@@ -80,3 +80,15 @@ gap_records_written_total = Counter(
     "Gap envelopes persisted to archive",
     ["exchange", "symbol", "stream", "reason"],
 )
+
+hours_sealed_today = Gauge(
+    "writer_hours_sealed_today",
+    "Hours sealed so far for the current UTC date",
+    ["exchange", "symbol", "stream"],
+)
+
+hours_sealed_previous_day = Gauge(
+    "writer_hours_sealed_previous_day",
+    "Hours sealed for the previous UTC date",
+    ["exchange", "symbol", "stream"],
+)

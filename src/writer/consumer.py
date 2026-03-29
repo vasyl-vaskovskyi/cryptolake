@@ -95,6 +95,7 @@ class WriterConsumer:
         self._host_evidence: HostLifecycleEvidence | None = host_evidence
         # REST-polled stream gap threshold (3x configured poll interval in ns)
         self._rest_poll_interval_ns: int = _DEFAULT_REST_POLL_INTERVAL_NS
+        self._hours_sealed_count: dict[tuple[str, str, str], int] = {}
 
     async def start(self) -> None:
         from confluent_kafka import Consumer as KafkaConsumer
@@ -715,6 +716,17 @@ class WriterConsumer:
             if prev is not None:
                 prev_hour, prev_date = prev
                 if current_hour != prev_hour or current_date != prev_date:
+                    if current_date != prev_date:
+                        ex, sym, st = file_key
+                        key = (ex, sym, st)
+                        today_val = self._hours_sealed_count.get(key, 0)
+                        writer_metrics.hours_sealed_previous_day.labels(
+                            exchange=ex, symbol=sym, stream=st,
+                        ).set(today_val)
+                        writer_metrics.hours_sealed_today.labels(
+                            exchange=ex, symbol=sym, stream=st,
+                        ).set(0)
+                        self._hours_sealed_count[key] = 0
                     # Seal previous file using the PREVIOUS date/hour,
                     # not the current message's date (critical at 23->00 day boundary)
                     await self._rotate_file(file_key, prev_date, prev_hour)
@@ -779,6 +791,11 @@ class WriterConsumer:
                     writer_metrics.files_rotated_total.labels(
                         exchange=exchange, symbol=symbol, stream=stream,
                     ).inc()
+                    writer_metrics.hours_sealed_today.labels(
+                        exchange=exchange, symbol=symbol, stream=stream,
+                    ).inc()
+                    key = (exchange, symbol, stream)
+                    self._hours_sealed_count[key] = self._hours_sealed_count.get(key, 0) + 1
                     logger.info("file_sealed", path=str(file_path))
                 except OSError as e:
                     logger.error("sidecar_write_failed", path=str(file_path), error=str(e))
