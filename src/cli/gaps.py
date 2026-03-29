@@ -655,6 +655,13 @@ def _print_report(report: dict) -> None:
                     # Sort all entries by start timestamp, then by end
                     all_entries.sort(key=lambda e: (e.get("gap_start_ts", 0), e.get("gap_end_ts", 0)))
 
+                    # Filter out gaps with 0 records missed — no actual data loss
+                    all_entries = [
+                        e for e in all_entries
+                        if e.get("_records_missed") is None  # missing_hour (unknown count)
+                        or e["_records_missed"] > 0           # real data loss
+                    ]
+
                     if not all_entries:
                         click.echo("  No gaps.")
                         continue
