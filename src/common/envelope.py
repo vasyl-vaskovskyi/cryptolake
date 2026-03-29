@@ -17,6 +17,7 @@ VALID_GAP_REASONS = frozenset(
         "restart_gap",
         "write_error",
         "deserialization_error",
+        "checkpoint_lost",
     }
 )
 

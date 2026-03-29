@@ -193,6 +193,28 @@ class TestEnvelopeCreation:
         for key in ("component", "cause", "planned", "classifier", "evidence", "maintenance_id"):
             assert key not in env
 
+    def test_checkpoint_lost_is_valid_gap_reason(self) -> None:
+        from src.common.envelope import VALID_GAP_REASONS
+
+        assert "checkpoint_lost" in VALID_GAP_REASONS
+
+    def test_create_gap_envelope_with_checkpoint_lost(self) -> None:
+        from src.common.envelope import create_gap_envelope
+
+        env = create_gap_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            collector_session_id="test-session",
+            session_seq=-1,
+            gap_start_ts=1000,
+            gap_end_ts=2000,
+            reason="checkpoint_lost",
+            detail="No durable checkpoint; recovered gap bounds from archive",
+        )
+        assert env["reason"] == "checkpoint_lost"
+        assert env["type"] == "gap"
+
     def test_gap_invalid_reason_raises(self) -> None:
         from src.common.envelope import create_gap_envelope
 
