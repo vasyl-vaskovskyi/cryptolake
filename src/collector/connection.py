@@ -104,6 +104,13 @@ class WebSocketManager:
                     self._ws_connected[socket_name] = True
                     logger.info("ws_connected", socket=socket_name, url=url[:80])
                     backoff = 1  # reset on successful connect
+
+                    # Trigger initial depth resync on first connect (not just reconnects)
+                    if socket_name == "public" and "depth" in self.enabled_streams:
+                        for symbol in self.symbols:
+                            asyncio.get_running_loop().create_task(
+                                self._depth_resync(symbol))
+
                     await self._receive_loop(ws, socket_name, connect_time)
             except (websockets.ConnectionClosed, ConnectionError, OSError) as e:
                 logger.warning("ws_disconnected", socket=socket_name, error=str(e))
