@@ -258,6 +258,51 @@ class TestGenerateManifest:
         assert "gaps" in stream_info
         assert stream_info["gaps"] == []
 
+    def test_manifest_includes_backfill_and_late_files(self, tmp_path):
+        """generate_manifest should recognize backfill and late files alongside regular files."""
+        from src.cli.verify import generate_manifest
+        import hashlib
+        import zstandard as zstd
+
+        exchange = "binance"
+        symbol = "btcusdt"
+        stream = "trades"
+        date = "2026-03-11"
+
+        # Create regular hour file
+        dir_path = tmp_path / exchange / symbol / stream / date
+        dir_path.mkdir(parents=True, exist_ok=True)
+
+        envelopes = [_make_data_envelope(i) for i in range(3)]
+        cctx = zstd.ZstdCompressor(level=3)
+        raw_lines = b"".join(orjson.dumps(e) + b"\n" for e in envelopes)
+        compressed = cctx.compress(raw_lines)
+
+        # Write regular hour-14 file
+        regular_path = dir_path / "hour-14.jsonl.zst"
+        regular_path.write_bytes(compressed)
+        digest = hashlib.sha256(compressed).hexdigest()
+        (dir_path / "hour-14.jsonl.zst.sha256").write_text(f"{digest}  hour-14.jsonl.zst\n")
+
+        # Write backfill hour-15.backfill-1 file
+        backfill_path = dir_path / "hour-15.backfill-1.jsonl.zst"
+        backfill_path.write_bytes(compressed)
+        digest = hashlib.sha256(compressed).hexdigest()
+        (dir_path / "hour-15.backfill-1.jsonl.zst.sha256").write_text(f"{digest}  hour-15.backfill-1.jsonl.zst\n")
+
+        # Write late hour-16.late-100 file
+        late_path = dir_path / "hour-16.late-100.jsonl.zst"
+        late_path.write_bytes(compressed)
+        digest = hashlib.sha256(compressed).hexdigest()
+        (dir_path / "hour-16.late-100.jsonl.zst.sha256").write_text(f"{digest}  hour-16.late-100.jsonl.zst\n")
+
+        manifest = generate_manifest(tmp_path, exchange, date)
+        stream_info = manifest["symbols"][symbol]["streams"][stream]
+
+        # All three hours should be present
+        assert sorted(stream_info["hours"]) == [14, 15, 16]
+        assert stream_info["record_count"] == 9  # 3 envelopes x 3 files
+
     def test_manifest_includes_restart_gap_metadata(self, tmp_path):
         """Manifest gap entries must include restart metadata when present."""
         from src.cli.verify import generate_manifest

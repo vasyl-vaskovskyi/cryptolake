@@ -200,7 +200,12 @@ def generate_manifest(base_dir: Path, exchange: str, date: str) -> dict:
             hours: list[int] = []
             record_count = 0
             gaps_list: list[dict] = []
-            for f in sorted(date_dir.glob("hour-*.jsonl.zst")):
+            all_files = sorted(set(
+                list(date_dir.glob("hour-*.jsonl.zst"))
+                + list(date_dir.glob("hour-*.backfill-*.jsonl.zst"))
+                + list(date_dir.glob("hour-*.late-*.jsonl.zst"))
+            ))
+            for f in all_files:
                 hour_str = f.name.split(".")[0].replace("hour-", "")
                 try:
                     hours.append(int(hour_str))
@@ -256,7 +261,11 @@ def verify(date, base_dir, exchange, symbol, stream, full, repair_checksums):
     all_gaps: list[dict] = []
     all_envelopes: list[dict] = []
 
-    files = sorted(base.rglob(f"*/{date}/hour-*.jsonl.zst"))
+    files = sorted(set(
+        list(base.rglob(f"*/{date}/hour-*.jsonl.zst"))
+        + list(base.rglob(f"*/{date}/hour-*.backfill-*.jsonl.zst"))
+        + list(base.rglob(f"*/{date}/hour-*.late-*.jsonl.zst"))
+    ))
     if not files:
         click.echo(f"No archive files found for date {date} in {base_dir}")
         return
