@@ -1,18 +1,233 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import time
+import uuid
 from pathlib import Path
 
+import aiohttp
 import click
 import orjson
 import zstandard as zstd
 
 from src.common.config import default_archive_dir
+from src.exchanges.binance import BinanceAdapter
+from src.writer.file_rotator import build_backfill_file_path, compute_sha256, sidecar_path
 
 DEFAULT_ARCHIVE_DIR = default_archive_dir()
 
 BACKFILLABLE_STREAMS = frozenset({"trades", "funding_rate", "liquidations", "open_interest"})
 NON_BACKFILLABLE_STREAMS = frozenset({"depth", "depth_snapshot", "bookticker"})
+
+STREAM_TS_KEYS = {
+    "trades": "T",
+    "funding_rate": "fundingTime",
+    "liquidations": "time",
+    "open_interest": "timestamp",
+}
+
+ENDPOINT_WEIGHTS = {
+    "trades": 20,
+    "funding_rate": 1,
+    "liquidations": 21,
+    "open_interest": 1,
+}
+
+BINANCE_REST_BASE = "https://fapi.binance.com"
+
+
+def _hour_to_ms_range(date: str, hour: int) -> tuple[int, int]:
+    from datetime import datetime, timezone, timedelta
+    dt_start = datetime.strptime(f"{date} {hour:02d}:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    dt_end = dt_start + timedelta(hours=1) - timedelta(milliseconds=1)
+    return int(dt_start.timestamp() * 1000), int(dt_end.timestamp() * 1000)
+
+
+def _wrap_backfill_envelope(
+    raw_record: dict,
+    *,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    session_id: str,
+    seq: int,
+    exchange_ts_key: str,
+) -> dict:
+    raw_text = orjson.dumps(raw_record).decode()
+    return {
+        "v": 1,
+        "type": "data",
+        "source": "backfill",
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "received_at": time.time_ns(),
+        "exchange_ts": raw_record.get(exchange_ts_key, 0),
+        "collector_session_id": session_id,
+        "session_seq": seq,
+        "raw_text": raw_text,
+        "raw_sha256": hashlib.sha256(raw_text.encode()).hexdigest(),
+        "_topic": "backfill",
+        "_partition": 0,
+        "_offset": seq,
+    }
+
+
+async def _fetch_historical_page(session: aiohttp.ClientSession, url: str) -> list[dict]:
+    async with session.get(url) as resp:
+        resp.raise_for_status()
+        return await resp.json(content_type=None)
+
+
+async def _fetch_historical_all(
+    adapter: BinanceAdapter,
+    symbol: str,
+    stream: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[dict]:
+    """Fetch all records for the given stream/symbol in [start_ms, end_ms] with pagination."""
+    ts_key = STREAM_TS_KEYS[stream]
+    all_records: list[dict] = []
+
+    async with aiohttp.ClientSession() as session:
+        current_start = start_ms
+        while current_start <= end_ms:
+            if stream == "trades":
+                url = adapter.build_historical_trades_url(
+                    symbol, start_time=current_start, end_time=end_ms, limit=1000
+                )
+            elif stream == "funding_rate":
+                url = adapter.build_historical_funding_url(
+                    symbol, start_time=current_start, end_time=end_ms, limit=1000
+                )
+            elif stream == "liquidations":
+                url = adapter.build_historical_liquidations_url(
+                    symbol, start_time=current_start, end_time=end_ms, limit=1000
+                )
+            elif stream == "open_interest":
+                url = adapter.build_historical_open_interest_url(
+                    symbol, start_time=current_start, end_time=end_ms, limit=500
+                )
+            else:
+                break
+
+            page = await _fetch_historical_page(session, url)
+            if not page:
+                break
+
+            all_records.extend(page)
+
+            # Advance pagination cursor using the last record's timestamp
+            last_ts = page[-1].get(ts_key, 0)
+            if last_ts is None or last_ts >= end_ms or len(page) < (500 if stream == "open_interest" else 1000):
+                break
+            current_start = last_ts + 1
+
+    return all_records
+
+
+def _write_backfill_files(
+    records: list[dict],
+    *,
+    base_dir: str,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    date: str,
+    session_id: str,
+    seq_offset: int,
+    backfill_seq: int,
+) -> tuple[Path, int]:
+    """Wrap records as envelopes and write a backfill file. Returns (file_path, records_written)."""
+    ts_key = STREAM_TS_KEYS[stream]
+    envelopes = []
+    for i, record in enumerate(records):
+        env = _wrap_backfill_envelope(
+            record,
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            session_id=session_id,
+            seq=seq_offset + i,
+            exchange_ts_key=ts_key,
+        )
+        envelopes.append(orjson.dumps(env))
+
+    if not envelopes:
+        return None, 0
+
+    out_path = build_backfill_file_path(base_dir, exchange, symbol, stream, date, _parse_hour_from_date(date, records[0].get(ts_key, 0)), backfill_seq)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cctx = zstd.ZstdCompressor()
+    raw = b"\n".join(envelopes)
+    out_path.write_bytes(cctx.compress(raw))
+
+    sc = sidecar_path(out_path)
+    sc.write_text(f"{compute_sha256(out_path)}  {out_path.name}\n")
+
+    return out_path, len(envelopes)
+
+
+def _parse_hour_from_date(date: str, ts_ms: int) -> int:
+    """Derive the hour from a millisecond timestamp."""
+    from datetime import datetime, timezone
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    return dt.hour
+
+
+def _decompress_and_parse(file_path: Path) -> list[dict]:
+    dctx = zstd.ZstdDecompressor()
+    with open(file_path, "rb") as fh:
+        data = dctx.stream_reader(fh).read()
+    result = []
+    for line in data.strip().split(b"\n"):
+        if line:
+            result.append(orjson.loads(line))
+    return result
+
+
+def _collect_missing_hours(report: dict) -> list[tuple[str, str, str, str, int]]:
+    """Extract (exchange, symbol, stream, date, hour) tuples for missing hours in backfillable streams."""
+    missing = []
+    for exch_name, symbols in report.items():
+        for sym_name, streams in symbols.items():
+            for stream_name, dates in streams.items():
+                if stream_name not in BACKFILLABLE_STREAMS:
+                    continue
+                for date_name, info in dates.items():
+                    hour_map = info["hours"]
+                    for h in range(24):
+                        if h not in hour_map:
+                            missing.append((exch_name, sym_name, stream_name, date_name, h))
+    return missing
+
+
+def _next_backfill_seq(base_dir: Path, exchange: str, symbol: str, stream: str, date: str, hour: int) -> int:
+    """Find the next available backfill sequence number for a given hour."""
+    date_dir = base_dir / exchange / symbol / stream / date
+    if not date_dir.exists():
+        return 1
+    existing = []
+    for f in date_dir.iterdir():
+        parsed = _classify_hour_file(f.name)
+        if parsed is None:
+            continue
+        h, status = parsed
+        if h == hour and status == "backfilled":
+            # Extract the seq number from the filename
+            stem = f.name[: -len(".jsonl.zst")]
+            parts = stem.split(".", 1)
+            if len(parts) == 2 and parts[1].startswith("backfill-"):
+                try:
+                    seq = int(parts[1][len("backfill-"):])
+                    existing.append(seq)
+                except ValueError:
+                    pass
+    return max(existing, default=0) + 1
 
 
 def _classify_hour_file(filename: str) -> tuple[int, str] | None:
@@ -294,3 +509,98 @@ def analyze(exchange, symbol, stream, date, date_from, date_to, output_json, bas
         click.echo(json.dumps(_serialisable(report)))
     else:
         _print_report(report)
+
+
+@cli.command()
+@click.option("--exchange", default=None, help="Filter by exchange")
+@click.option("--symbol", default=None, help="Filter by symbol")
+@click.option("--stream", default=None, help="Filter by stream")
+@click.option("--date", default=None, help="Specific date (YYYY-MM-DD)")
+@click.option("--date-from", default=None, help="Start date inclusive (YYYY-MM-DD)")
+@click.option("--date-to", default=None, help="End date inclusive (YYYY-MM-DD)")
+@click.option("--dry-run", is_flag=True, help="Print backfill plan without fetching data")
+@click.option(
+    "--base-dir",
+    default=DEFAULT_ARCHIVE_DIR,
+    help="Archive base directory",
+)
+def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, base_dir):
+    """Find gaps and backfill missing hours from Binance historical REST API."""
+    base = Path(base_dir)
+
+    # If a specific stream is given and it's not backfillable, report and exit early
+    if stream and stream not in BACKFILLABLE_STREAMS:
+        click.echo(f"Stream '{stream}' is not backfillable (unrecoverable via REST API). Skipping.")
+        return
+
+    report = analyze_archive(
+        base,
+        exchange=exchange,
+        symbol=symbol,
+        stream=stream,
+        date=date,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    # Separate backfillable from non-backfillable streams in the report
+    non_backfillable_found: list[str] = []
+    for _exch, symbols in report.items():
+        for _sym, streams in symbols.items():
+            for stream_name in streams:
+                if stream_name not in BACKFILLABLE_STREAMS and stream_name not in non_backfillable_found:
+                    non_backfillable_found.append(stream_name)
+
+    for s in non_backfillable_found:
+        click.echo(f"Stream '{s}' is not backfillable. Skipping.")
+
+    missing = _collect_missing_hours(report)
+
+    if not missing:
+        click.echo("Nothing to backfill: all backfillable hours are covered.")
+        return
+
+    if dry_run:
+        click.echo(f"Dry-run: {len(missing)} missing hour(s) to backfill:")
+        for exch_name, sym_name, stream_name, date_name, h in missing:
+            click.echo(f"  {exch_name}/{sym_name}/{stream_name}/{date_name}  hour={h}")
+        return
+
+    # Actual backfill
+    adapter = BinanceAdapter(ws_base="wss://fstream.binance.com", rest_base=BINANCE_REST_BASE)
+    session_id = str(uuid.uuid4())
+    total_written = 0
+
+    for exch_name, sym_name, stream_name, date_name, hour in missing:
+        start_ms, end_ms = _hour_to_ms_range(date_name, hour)
+        click.echo(f"Fetching {exch_name}/{sym_name}/{stream_name}/{date_name} hour={hour}...")
+
+        try:
+            records = asyncio.run(
+                _fetch_historical_all(adapter, sym_name, stream_name, start_ms, end_ms)
+            )
+        except Exception as exc:
+            click.echo(f"  ERROR fetching: {exc}")
+            continue
+
+        if not records:
+            click.echo(f"  No records returned for hour {hour}.")
+            continue
+
+        backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
+        out_path, n = _write_backfill_files(
+            records,
+            base_dir=str(base),
+            exchange=exch_name,
+            symbol=sym_name,
+            stream=stream_name,
+            date=date_name,
+            session_id=session_id,
+            seq_offset=total_written,
+            backfill_seq=backfill_seq,
+        )
+        total_written += n
+        if out_path:
+            click.echo(f"  Wrote {n} records -> {out_path}")
+
+    click.echo(f"Backfill complete: {total_written} total records written.")
