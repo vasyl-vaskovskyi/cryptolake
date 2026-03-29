@@ -228,6 +228,32 @@ def _print_report(report: dict) -> None:
             )
         click.echo("")
 
+    # Cross-reference: bookticker integrity via depth chain
+    # Group results by (exchange, symbol, date) to check if depth is clean
+    # for the same symbol/date where bookticker was checked
+    by_sym_date: dict[tuple, dict[str, bool]] = defaultdict(dict)
+    for (exch, sym, stream, date_name), info in report.items():
+        key = (exch, sym, date_name)
+        by_sym_date[key][stream] = len(info["breaks"]) == 0
+
+    bookticker_notes: list[str] = []
+    for (exch, sym, date_name), streams in sorted(by_sym_date.items()):
+        if "bookticker" not in streams:
+            continue
+        if "depth" in streams:
+            if streams["depth"]:
+                bookticker_notes.append(
+                    f"  {exch}/{sym}/bookticker/{date_name}: "
+                    f"depth chain OK — bookticker integrity confirmed (same WebSocket, no drops)")
+            else:
+                bookticker_notes.append(
+                    f"  {exch}/{sym}/bookticker/{date_name}: "
+                    f"depth chain BROKEN — bookticker may have gaps too")
+        else:
+            bookticker_notes.append(
+                f"  {exch}/{sym}/bookticker/{date_name}: "
+                f"no depth data to cross-reference — bookticker integrity unverifiable")
+
     click.echo(f"\n{'='*60}")
     click.echo(f"INTEGRITY SUMMARY")
     click.echo(f"{'='*60}")
@@ -238,6 +264,10 @@ def _print_report(report: dict) -> None:
         click.echo(f"  Status:           ALL IDs CONSECUTIVE")
     elif total_breaks > 0:
         click.echo(f"  Status:           INTEGRITY VIOLATIONS FOUND")
+    if bookticker_notes:
+        click.echo(f"\n  Bookticker cross-reference (via depth pu-chain):")
+        for note in bookticker_notes:
+            click.echo(note)
 
 
 @click.command()
