@@ -313,10 +313,10 @@ def _format_duration(ns: int) -> str:
     Zero or negative → "instant".
     """
     if ns <= 0:
-        return "instant"
+        return "<1s"
     total_seconds = int(ns / 1_000_000_000)
     if total_seconds == 0:
-        return "instant"
+        return "<1s"
     days, rem = divmod(total_seconds, 86400)
     hours, rem = divmod(rem, 3600)
     minutes, seconds = divmod(rem, 60)
