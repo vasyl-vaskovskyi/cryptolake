@@ -47,6 +47,7 @@ class WebSocketManager:
         self._running = False
         self._ws_connected: dict[str, bool] = {}  # {socket_name: connected}
         self._last_received_at: dict[tuple[str, str], int] = {}
+        self._pending_disconnects: dict[tuple[str, str], dict] = {}
         self._consecutive_drops = 0
         self._backpressure_threshold = 10  # consecutive drops before pausing WS reads
         self._tasks: list[asyncio.Task] = []
@@ -173,6 +174,26 @@ class WebSocketManager:
                     exchange=self.exchange, symbol=symbol, stream=stream_type,
                 ).observe(latency)
 
+            # Resolve pending disconnect: check if records were actually missed
+            pending = self._pending_disconnects.pop((symbol, stream_type), None)
+            if pending is not None:
+                tracker = None
+                if hasattr(handler, "_seq_trackers"):
+                    tracker = handler._seq_trackers.get(symbol)
+                if tracker is not None and tracker._last_seq is not None:
+                    expected = tracker._last_seq + 1
+                    if seq != expected:
+                        # Real data loss — emit the gap
+                        self.producer.emit_gap(
+                            symbol=symbol, stream=stream_type,
+                            session_seq=seq,
+                            reason="ws_disconnect",
+                            detail=f"WebSocket {pending['socket_name']} disconnected ({seq - expected} records missed)",
+                            gap_start_ts=pending["gap_start_ts"],
+                            gap_end_ts=time.time_ns(),
+                        )
+                    # else: no records missed, discard silently
+
             self._last_received_at[(symbol, stream_type)] = time.time_ns()
             await handler.handle(symbol, raw_text, exchange_ts, seq)
 
@@ -249,7 +270,12 @@ class WebSocketManager:
         )
 
     def _emit_disconnect_gaps(self, socket_name: str) -> None:
-        """Emit gap records for all symbol/stream combos on this socket."""
+        """Record pending disconnect for all symbol/stream combos on this socket.
+
+        Gaps are NOT emitted immediately. When data resumes, _check_seq in the
+        stream handler checks whether records were actually missed. If yes, it
+        emits the gap; if no, the pending disconnect is silently discarded.
+        """
         now = time.time_ns()
         if socket_name == "public":
             affected = _PUBLIC_STREAMS
@@ -263,18 +289,8 @@ class WebSocketManager:
                 if stream not in self.enabled_streams:
                     continue
                 gap_start = self._last_received_at.get((symbol, stream), now)
-                seq = self._next_seq(symbol, stream)
-                self.producer.emit_gap(
-                    symbol=symbol, stream=stream, session_seq=seq,
-                    reason="ws_disconnect",
-                    detail=f"WebSocket {socket_name} disconnected",
-                    gap_start_ts=gap_start, gap_end_ts=now,
-                )
-                # Advance the stream handler's seq tracker past the gap
-                # envelope's seq so the next data message doesn't trigger
-                # a spurious session_seq_skip.
-                handler = self.handlers.get(stream)
-                if handler is not None and hasattr(handler, "_seq_trackers"):
-                    tracker = handler._seq_trackers.get(symbol)
-                    if tracker is not None:
-                        tracker._last_seq = seq
+                self._pending_disconnects[(symbol, stream)] = {
+                    "gap_start_ts": gap_start,
+                    "gap_end_ts": now,
+                    "socket_name": socket_name,
+                }

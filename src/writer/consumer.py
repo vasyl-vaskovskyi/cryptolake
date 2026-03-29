@@ -291,31 +291,58 @@ class WriterConsumer:
                             exchange=exchange, symbol=symbol, stream=stream)
                 return None
 
+            # Read the last data envelope from the most recent archive file
+            # to get gap_start_ts and last_session_seq for continuity check
             hour_files = sorted(stream_dir.rglob("hour-*.jsonl.zst"))
             gap_start_ts = 0
+            last_archive_seq: int | None = None
+            last_archive_session: str | None = None
             for hf in reversed(hour_files):
                 try:
                     dctx = zstd.ZstdDecompressor()
                     with open(hf, "rb") as f:
                         data = dctx.stream_reader(f).read()
                     lines = [l for l in data.strip().split(b"\n") if l]
-                    if lines:
-                        last_env = orjson.loads(lines[-1])
-                        gap_start_ts = last_env.get("received_at", 0)
+                    # Walk backwards to find last data envelope (skip gap envelopes)
+                    for line in reversed(lines):
+                        env = orjson.loads(line)
+                        if env.get("type") == "data":
+                            gap_start_ts = env.get("received_at", 0)
+                            last_archive_seq = env.get("session_seq")
+                            last_archive_session = env.get("collector_session_id")
+                            break
+                    if gap_start_ts > 0:
                         break
                 except Exception:
                     continue
 
             current_received_at = envelope.get("received_at", 0)
             current_session_id = envelope.get("collector_session_id", "")
+            current_seq = envelope.get("session_seq", 0)
+
+            # Check if records were actually missed
+            if (last_archive_session == current_session_id
+                    and last_archive_seq is not None
+                    and current_seq == last_archive_seq + 1):
+                # No records missed — Redpanda buffered everything
+                logger.info("recovery_no_data_loss",
+                            exchange=exchange, symbol=symbol, stream=stream)
+                return None
+
             logger.warning("recovery_gap_no_checkpoint",
                            exchange=exchange, symbol=symbol, stream=stream,
-                           gap_start_ts=gap_start_ts, gap_end_ts=current_received_at)
+                           gap_start_ts=gap_start_ts, gap_end_ts=current_received_at,
+                           last_archive_seq=last_archive_seq, current_seq=current_seq)
 
             writer_metrics.session_gaps_detected_total.labels(
                 exchange=exchange, symbol=symbol, stream=stream,
             ).inc()
             self._recovery_gap_emitted.add(stream_key)
+
+            records_missed = current_seq - last_archive_seq - 1 if last_archive_seq is not None else None
+            detail = "No durable checkpoint; recovered gap bounds from archive"
+            if records_missed is not None:
+                detail += f" ({records_missed} records missed)"
 
             return create_gap_envelope(
                 exchange=exchange,
@@ -326,7 +353,7 @@ class WriterConsumer:
                 gap_start_ts=gap_start_ts,
                 gap_end_ts=current_received_at,
                 reason="checkpoint_lost",
-                detail="No durable checkpoint; recovered gap bounds from archive",
+                detail=detail,
                 received_at=current_received_at,
             )
 
@@ -387,6 +414,41 @@ class WriterConsumer:
             host_evidence=self._host_evidence,
         )
 
+        # Check if records were actually missed by reading the last data
+        # envelope from the archive and comparing session_seq
+        exchange, symbol, stream = stream_key
+        current_seq = envelope.get("session_seq", -1)
+        stream_dir = Path(self.base_dir) / exchange / symbol / stream
+        last_archive_seq: int | None = None
+        last_archive_session: str | None = None
+        if stream_dir.exists():
+            for hf in reversed(sorted(stream_dir.rglob("hour-*.jsonl.zst"))):
+                try:
+                    dctx = zstd.ZstdDecompressor()
+                    with open(hf, "rb") as f:
+                        raw = dctx.stream_reader(f).read()
+                    for line in reversed(raw.strip().split(b"\n")):
+                        if not line:
+                            continue
+                        env = orjson.loads(line)
+                        if env.get("type") == "data":
+                            last_archive_seq = env.get("session_seq")
+                            last_archive_session = env.get("collector_session_id")
+                            break
+                    if last_archive_seq is not None:
+                        break
+                except Exception:
+                    continue
+
+        if (last_archive_session == current_session_id
+                and last_archive_seq is not None
+                and current_seq == last_archive_seq + 1):
+            # No records missed — Redpanda buffered everything
+            logger.info("recovery_no_data_loss",
+                        exchange=exchange, symbol=symbol, stream=stream,
+                        classification=classification)
+            return None
+
         # Compute gap_start_ts from checkpoint
         try:
             cp_dt = datetime.datetime.fromisoformat(checkpoint.last_received_at)
@@ -401,13 +463,14 @@ class WriterConsumer:
         if gap_start_ts > current_received_at > 0:
             gap_start_ts = current_received_at
 
-        exchange, symbol, stream = stream_key
         logger.warning(
             "recovery_gap_detected",
             exchange=exchange,
             symbol=symbol,
             stream=stream,
             classification=classification,
+            last_archive_seq=last_archive_seq,
+            current_seq=current_seq,
         )
         writer_metrics.session_gaps_detected_total.labels(
             exchange=exchange, symbol=symbol, stream=stream,
@@ -416,6 +479,14 @@ class WriterConsumer:
         # Mark this stream so that the runtime _check_session_change path
         # suppresses its first session transition (already covered here).
         self._recovery_gap_emitted.add(stream_key)
+
+        records_missed = current_seq - last_archive_seq - 1 if last_archive_seq is not None else None
+        detail = (
+            f"Writer recovery: {classification.get('cause', 'unknown')} "
+            f"(session {previous_session_id} -> {current_session_id})"
+        )
+        if records_missed is not None:
+            detail += f" ({records_missed} records missed)"
 
         return create_gap_envelope(
             exchange=exchange,
@@ -426,10 +497,7 @@ class WriterConsumer:
             gap_start_ts=gap_start_ts,
             gap_end_ts=current_received_at,
             reason="restart_gap",
-            detail=(
-                f"Writer recovery: {classification.get('cause', 'unknown')} "
-                f"(session {previous_session_id} -> {current_session_id})"
-            ),
+            detail=detail,
             received_at=current_received_at,
             component=classification.get("component"),
             cause=classification.get("cause"),
