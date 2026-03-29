@@ -401,8 +401,8 @@ def _records_missed(gap: dict) -> str:
     m = re.search(r"expected (\d+), got (\d+)", detail)
     if m:
         return str(int(m.group(2)) - int(m.group(1)))
-    # buffer_overflow: "42 messages dropped"
-    m = re.search(r"(\d+) messages dropped", detail)
+    # buffer_overflow: "42 messages dropped" or "42 diffs dropped"
+    m = re.search(r"(\d+) (?:messages|diffs) dropped", detail)
     if m:
         return m.group(1)
     # restart_gap/checkpoint_lost: "(3 records missed)"
