@@ -360,14 +360,12 @@ def _file_status_for_hour(hour: int, hour_map: dict[int, str], stream_name: str)
     return "-"
 
 
-def _format_hours_line(hours: dict[int, str]) -> str:
+def _format_hours_line(hours: dict[int, str], expect_from: int = 0, expect_to: int = 23) -> str:
     """Produce a compact single-line representation of hour coverage.
 
-    Example: "0-15 OK  16 MISSING  17 MISSING  18-23 OK"
+    Only shows hours within the expected recording window [expect_from, expect_to].
+    Example: "15-23 OK" or "0-15 OK  16 MISSING  17 MISSING  18-23 OK"
     """
-    if not hours:
-        return "all 24 hours MISSING"
-
     STATUS_LABEL = {
         "present": "OK",
         "backfilled": "RECOVERED",
@@ -375,17 +373,21 @@ def _format_hours_line(hours: dict[int, str]) -> str:
         "missing": "MISSING",
     }
 
-    all_hours = [(h, hours.get(h, "missing")) for h in range(24)]
+    hour_range = range(expect_from, expect_to + 1)
+    if not hour_range:
+        return "no hours expected"
+
+    all_hours = [(h, hours.get(h, "missing")) for h in hour_range]
 
     segments: list[tuple[int, int, str]] = []
-    run_start = 0
+    run_start = all_hours[0][0]
     run_status = all_hours[0][1]
-    for i in range(1, 24):
-        if all_hours[i][1] != run_status:
-            segments.append((run_start, i - 1, run_status))
-            run_start = i
-            run_status = all_hours[i][1]
-    segments.append((run_start, 23, run_status))
+    for h, status in all_hours[1:]:
+        if status != run_status:
+            segments.append((run_start, h - 1, run_status))
+            run_start = h
+            run_status = status
+    segments.append((run_start, expect_to, run_status))
 
     parts: list[str] = []
     for start, end, status in segments:
@@ -472,11 +474,44 @@ def analyze_archive(
                 else:
                     dates_to_scan = [d for d in sorted(stream_dir.iterdir()) if d.is_dir()]
 
+                # First pass: collect all date/hour data
+                all_dates_data: list[tuple[str, dict[int, str], list[dict]]] = []
                 for date_dir in dates_to_scan:
                     date_name = date_dir.name
                     hour_map = _scan_hours(date_dir)
                     gaps = _scan_gaps(date_dir)
+                    all_dates_data.append((date_name, hour_map, gaps))
+
+                # Determine the recording window for this stream
+                first_hour: int | None = None
+                first_date: str | None = None
+                last_hour: int | None = None
+                last_date: str | None = None
+                for date_name, hour_map, _ in all_dates_data:
+                    if not hour_map:
+                        continue
+                    min_h = min(hour_map.keys())
+                    max_h = max(hour_map.keys())
+                    if first_date is None or date_name < first_date or (date_name == first_date and min_h < first_hour):
+                        first_date = date_name
+                        first_hour = min_h
+                    if last_date is None or date_name > last_date or (date_name == last_date and max_h > last_hour):
+                        last_date = date_name
+                        last_hour = max_h
+
+                # Second pass: build report with correct expected hours
+                for date_name, hour_map, gaps in all_dates_data:
                     covered = len(hour_map)
+
+                    # Determine expected hour range for this date
+                    expect_from = 0
+                    expect_to = 23
+                    if first_date is not None and date_name == first_date:
+                        expect_from = first_hour
+                    if last_date is not None and date_name == last_date:
+                        expect_to = last_hour
+
+                    expected = expect_to - expect_from + 1
 
                     report.setdefault(exch_name, {})
                     report[exch_name].setdefault(sym_name, {})
@@ -485,7 +520,9 @@ def analyze_archive(
                         "hours": hour_map,
                         "gaps": gaps,
                         "covered": covered,
-                        "total": 24,
+                        "total": expected,
+                        "expect_from": expect_from,
+                        "expect_to": expect_to,
                     }
 
     return report
@@ -513,9 +550,11 @@ def _print_report(report: dict) -> None:
                 for date_name, info in sorted(dates.items()):
                     covered = info["covered"]
                     total = info["total"]
-                    hours_line = _format_hours_line(info["hours"])
                     hour_map = info["hours"]
                     gaps = info["gaps"]
+                    expect_from = info.get("expect_from", 0)
+                    expect_to = info.get("expect_to", 23)
+                    hours_line = _format_hours_line(hour_map, expect_from, expect_to)
 
                     click.echo(f"\n  {stream_name} / {date_name}  {covered}/{total} hours")
                     click.echo(f"  Hours: {hours_line}")
@@ -523,8 +562,8 @@ def _print_report(report: dict) -> None:
                     # Build unified gap list: gap records + missing hours (as synthetic entries)
                     all_entries: list[dict] = []
 
-                    # Add missing hours as synthetic gap entries
-                    for h in range(24):
+                    # Add missing hours as synthetic gap entries (only within recording window)
+                    for h in range(expect_from, expect_to + 1):
                         if h not in hour_map:
                             from datetime import datetime, timezone, timedelta
                             dt_start = datetime.strptime(
