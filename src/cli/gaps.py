@@ -332,8 +332,13 @@ def _scan_gaps(date_dir: Path) -> list[dict]:
                 break
 
         # Compute missed count
+        gap_seq = env.get("session_seq")
         if prev_seq is not None and next_seq is not None and next_seq > prev_seq:
             env["_records_missed"] = next_seq - prev_seq - 1
+        elif next_seq is not None and gap_seq is not None and gap_seq >= 0 and next_seq > gap_seq:
+            # No previous data (e.g. gap is first record in file), but we have
+            # the gap's own session_seq and the next data record's seq
+            env["_records_missed"] = next_seq - gap_seq - 1
         else:
             env["_records_missed"] = None
 
@@ -404,7 +409,6 @@ def _records_missed(gap: dict) -> str:
     m = re.search(r"\((\d+) records missed\)", detail)
     if m:
         return m.group(1)
-
     return "?"
 
 
