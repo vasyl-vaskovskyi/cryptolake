@@ -313,10 +313,11 @@ def _format_duration(ns: int) -> str:
     Zero or negative → "instant".
     """
     if ns <= 0:
-        return "<1s"
+        return "0ms"
     total_seconds = int(ns / 1_000_000_000)
     if total_seconds == 0:
-        return "<1s"
+        ms = int(ns / 1_000_000)
+        return f"{ms}ms"
     days, rem = divmod(total_seconds, 86400)
     hours, rem = divmod(rem, 3600)
     minutes, seconds = divmod(rem, 60)
@@ -337,6 +338,17 @@ def _ns_to_time(ns: int) -> str:
         return dt.strftime("%H:%M:%S")
     except (ValueError, OSError, OverflowError):
         return "??:??:??"
+
+
+def _records_missed(gap: dict) -> str:
+    """Extract records missed count from gap detail when available."""
+    import re
+    detail = gap.get("detail", "")
+    # session_seq_skip: "session_seq skip: expected 100, got 105" → 5
+    m = re.search(r"expected (\d+), got (\d+)", detail)
+    if m:
+        return str(int(m.group(2)) - int(m.group(1)))
+    return "?"
 
 
 def _gap_status(gap: dict, stream_name: str) -> str:
@@ -618,10 +630,10 @@ def _print_report(report: dict) -> None:
                     click.echo("")
                     hdr = (
                         f"  {'Reason':<20} {'Start':>8}  {'End':>8}  "
-                        f"{'Duration':>12}  {'Status':<15} {'File Status':<15}"
+                        f"{'Duration':>12}  {'Missed':>6}  {'Status':<15} {'File Status':<15}"
                     )
                     click.echo(hdr)
-                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*15} {'-'*15}")
+                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*6}  {'-'*15} {'-'*15}")
 
                     # Per-stream/date accumulators
                     st_total = 0
@@ -640,6 +652,7 @@ def _print_report(report: dict) -> None:
                         dur_ns = entry["_effective_dur_ns"]
                         gap_status = entry["_gap_status"]
                         file_status = entry["_file_status"]
+                        missed = _records_missed(entry)
 
                         start_str = _ns_to_time(start_ts)
                         end_str = _ns_to_time(end_ts)
@@ -647,7 +660,7 @@ def _print_report(report: dict) -> None:
 
                         click.echo(
                             f"  {reason:<20} {start_str:>8}  {end_str:>8}  "
-                            f"{dur_str:>12}  {gap_status:<15} {file_status:<15}"
+                            f"{dur_str:>12}  {missed:>6}  {gap_status:<15} {file_status:<15}"
                         )
 
                         # Accumulate
