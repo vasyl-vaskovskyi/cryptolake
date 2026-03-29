@@ -74,3 +74,9 @@ kafka_commit_failures_total = Counter(
     "writer_kafka_commit_failures_total",
     "Kafka async offset commit failures",
 )
+
+gap_records_written_total = Counter(
+    "writer_gap_records_written_total",
+    "Gap envelopes persisted to archive",
+    ["exchange", "symbol", "stream", "reason"],
+)

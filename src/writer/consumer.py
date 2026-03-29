@@ -910,6 +910,21 @@ class WriterConsumer:
                 continue  # skip this file, data in buffer is lost
 
             file_size = file_path.stat().st_size
+
+            # Count gap envelopes written to disk
+            for line in result.lines:
+                try:
+                    env = orjson.loads(line)
+                    if env.get("type") == "gap":
+                        writer_metrics.gap_records_written_total.labels(
+                            exchange=result.target.exchange,
+                            symbol=result.target.symbol,
+                            stream=result.target.stream,
+                            reason=env.get("reason", "unknown"),
+                        ).inc()
+                except Exception:
+                    pass
+
             writer_metrics.bytes_written_total.labels(
                 exchange=result.target.exchange,
                 symbol=result.target.symbol,
