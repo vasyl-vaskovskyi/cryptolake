@@ -60,6 +60,12 @@ sparklines:
     sample: |
         curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(writer_write_errors_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
+  - title: Hours Sealed Today
+    position: [[60, 32], [20, 8]]
+    rate-ms: 60000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=min(writer_hours_sealed_today{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
 # ── Tier 2: High ──────────────────────────────────────────────────
 
   - title: Message Throughput msg/s
