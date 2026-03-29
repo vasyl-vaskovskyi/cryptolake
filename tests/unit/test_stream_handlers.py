@@ -205,7 +205,7 @@ class TestProducerOverflow:
         producer.collector_session_id = "s"
         producer._producer = mock_instance
         producer._on_overflow = None
-        producer._overflow_start = {}
+        producer._overflow_windows = {}
         producer._overflow_seq = 0
         producer._buffer_counts = {}
         producer._lock = threading.Lock()
@@ -220,5 +220,6 @@ class TestProducerOverflow:
         )
         result = producer.produce(env)
         assert result is False
-        # Overflow window should be tracked
-        assert ("btcusdt", "trades") in producer._overflow_start
+        # Overflow window should be tracked with drop count
+        assert ("btcusdt", "trades") in producer._overflow_windows
+        assert producer._overflow_windows[("btcusdt", "trades")]["dropped"] == 1

@@ -389,12 +389,21 @@ def _records_missed(gap: dict) -> str:
     if precomputed is not None:
         return str(precomputed)
 
-    # Fallback: parse from detail (session_seq_skip)
+    # Fallback: parse from detail
     import re
     detail = gap.get("detail", "")
+    # session_seq_skip: "expected 100, got 105" → 5
     m = re.search(r"expected (\d+), got (\d+)", detail)
     if m:
         return str(int(m.group(2)) - int(m.group(1)))
+    # buffer_overflow: "42 messages dropped"
+    m = re.search(r"(\d+) messages dropped", detail)
+    if m:
+        return m.group(1)
+    # restart_gap/checkpoint_lost: "(3 records missed)"
+    m = re.search(r"\((\d+) records missed\)", detail)
+    if m:
+        return m.group(1)
 
     return "?"
 

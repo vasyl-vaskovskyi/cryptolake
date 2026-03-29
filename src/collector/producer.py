@@ -37,8 +37,8 @@ class CryptoLakeProducer:
         self._on_overflow = on_overflow
         self._buffer_counts: dict[str, int] = {}
         self._lock = threading.Lock()
-        # Overflow window tracking: {(symbol, stream): start_ts_ns}
-        self._overflow_start: dict[tuple[str, str], int] = {}
+        # Overflow window tracking: {(symbol, stream): {"start_ts": ns, "dropped": count}}
+        self._overflow_windows: dict[tuple[str, str], dict] = {}
         self._overflow_seq: int = 0
 
         from confluent_kafka import Producer as KafkaProducer
@@ -109,8 +109,10 @@ class CryptoLakeProducer:
 
             # Check if we're recovering from overflow for this (symbol, stream)
             overflow_key = (symbol, stream)
-            if overflow_key in self._overflow_start:
-                self._emit_overflow_gap(symbol, stream, self._overflow_start.pop(overflow_key))
+            if overflow_key in self._overflow_windows:
+                window = self._overflow_windows.pop(overflow_key)
+                if window["dropped"] > 0:
+                    self._emit_overflow_gap(symbol, stream, window)
 
             return True
         except BufferError:
@@ -124,10 +126,11 @@ class CryptoLakeProducer:
             return False
 
     def _record_overflow(self, symbol: str, stream: str) -> None:
-        """Track overflow start and notify callback."""
+        """Track overflow window with drop count."""
         overflow_key = (symbol, stream)
-        if overflow_key not in self._overflow_start:
-            self._overflow_start[overflow_key] = time.time_ns()
+        if overflow_key not in self._overflow_windows:
+            self._overflow_windows[overflow_key] = {"start_ts": time.time_ns(), "dropped": 0}
+        self._overflow_windows[overflow_key]["dropped"] += 1
         if self._on_overflow:
             self._on_overflow(self.exchange, symbol, stream)
 
@@ -143,8 +146,9 @@ class CryptoLakeProducer:
                              topic=msg.topic(), key=msg.key())
         return _cb
 
-    def _emit_overflow_gap(self, symbol: str, stream: str, start_ts: int) -> None:
+    def _emit_overflow_gap(self, symbol: str, stream: str, window: dict) -> None:
         """Emit a buffer_overflow gap record when recovering from overflow."""
+        dropped = window["dropped"]
         collector_metrics.gaps_detected_total.labels(
             exchange=self.exchange, symbol=symbol, stream=stream, reason="buffer_overflow",
         ).inc()
@@ -154,10 +158,10 @@ class CryptoLakeProducer:
             stream=stream,
             collector_session_id=self.collector_session_id,
             session_seq=self._overflow_seq,
-            gap_start_ts=start_ts,
+            gap_start_ts=window["start_ts"],
             gap_end_ts=time.time_ns(),
             reason="buffer_overflow",
-            detail=f"Producer buffer was full; messages dropped for {stream}/{symbol}",
+            detail=f"Producer buffer was full; {dropped} messages dropped for {stream}/{symbol}",
         )
         self._overflow_seq += 1
         # Produce the gap record itself (best-effort — buffer just recovered so should succeed)
@@ -214,7 +218,7 @@ class CryptoLakeProducer:
     def is_healthy_for_resync(self) -> bool:
         """True if producer is connected and not actively dropping messages.
         Used as precondition for depth resync (spec 7.2)."""
-        if self._overflow_start:
+        if self._overflow_windows:
             return False  # actively in overflow for at least one stream
         try:
             pending = len(self._producer)
