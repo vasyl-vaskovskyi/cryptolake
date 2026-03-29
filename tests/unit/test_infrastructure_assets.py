@@ -67,6 +67,7 @@ class TestComposeStacks:
             "redpanda",
             "collector",
             "writer",
+            "backfill",
             "prometheus",
             "alertmanager",
             "whatsapp-bridge",
@@ -131,7 +132,7 @@ class TestObservabilityAssets:
         alertmanager = _read_yaml("infra/alertmanager/alertmanager.yml")
 
         job_names = {job["job_name"] for job in prometheus["scrape_configs"]}
-        assert job_names == {"collector", "writer", "redpanda"}
+        assert job_names == {"collector", "writer", "backfill", "redpanda"}
         assert prometheus["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == ["alertmanager:9093"]
 
         rules = alert_rules["groups"][0]["rules"]
@@ -155,7 +156,7 @@ class TestObservabilityAssets:
         }
 
         sampler = _read_yaml("infra/sampler/sampler.yml")
-        assert len(sampler["sparklines"]) == 15
+        assert len(sampler["sparklines"]) == 16
         assert len(sampler["gauges"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]

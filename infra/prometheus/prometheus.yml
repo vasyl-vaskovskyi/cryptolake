@@ -19,6 +19,10 @@ scrape_configs:
     static_configs:
       - targets: ["writer:8001"]
 
+  - job_name: backfill
+    static_configs:
+      - targets: ["backfill:8002"]
+
   - job_name: redpanda
     static_configs:
       - targets: ["redpanda:9644"]

@@ -112,6 +112,12 @@ sparklines:
 
 # ── Tier 3: Operational ──────────────────────────────────────────
 
+  - title: Backfill Last Run
+    position: [[60, 32], [20, 12]]
+    rate-ms: 60000
+    sample: |
+        TS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_last_run_timestamp_seconds' | jq '.data.result[0].value[1] // "0"' -r); RECS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_records_written' | jq '.data.result[0].value[1] // "0"' -r); GAPS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_gaps_found' | jq '.data.result[0].value[1] // "0"' -r); OK=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_last_run_success' | jq '.data.result[0].value[1] // "0"' -r); if [ "$TS" = "0" ]; then echo "no runs yet"; else AGO=$(( $(date +%s) - ${TS%.*} )); if [ "$AGO" -lt 3600 ]; then printf "%dm ago gaps=%s recs=%s %s" $((AGO/60)) "$GAPS" "$RECS" "$([ "$OK" = "1" ] && echo OK || echo FAIL)"; else printf "%dh ago gaps=%s recs=%s %s" $((AGO/3600)) "$GAPS" "$RECS" "$([ "$OK" = "1" ] && echo OK || echo FAIL)"; fi; fi
+
   - title: Compression Ratio
     position: [[20, 32], [20, 8]]
     rate-ms: 10000
