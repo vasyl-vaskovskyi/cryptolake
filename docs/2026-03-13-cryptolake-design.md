@@ -924,8 +924,8 @@ All metrics with `symbol` label provide per-symbol granularity for dashboard fil
 Pre-built dashboard (`infra/grafana/dashboards/cryptolake.json`) with panels:
 
 - **Message throughput**: messages/sec per symbol per stream (stacked area)
-- **Exchange latency heatmap**: `received_at - exchange_ts` distribution over time
-- **Consumer lag**: writer lag per topic (line chart, alerting threshold overlay)
+- **Latency heatmap**: `received_at - exchange_ts` distribution over time
+- **Redpanda -> Writer Lag**: writer lag per topic (line chart, alerting threshold overlay)
 - **Connection status**: WS connections active, reconnect events timeline
 - **Gap timeline**: gap events plotted on time axis per symbol
 - **Disk usage**: storage trend with projected full date

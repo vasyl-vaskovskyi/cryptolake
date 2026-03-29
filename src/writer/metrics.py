@@ -33,7 +33,7 @@ bytes_written_total = Counter(
 compression_ratio = Gauge(
     "writer_compression_ratio",
     "Raw / compressed size ratio",
-    ["exchange", "stream"],
+    ["exchange", "symbol", "stream"],
 )
 
 disk_usage_bytes = Gauge(
@@ -55,14 +55,14 @@ session_gaps_detected_total = Counter(
 flush_duration_ms = Histogram(
     "writer_flush_duration_ms",
     "Time to flush buffer to disk (ms)",
-    ["exchange", "stream"],
+    ["exchange", "symbol", "stream"],
     buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 )
 
 write_errors_total = Counter(
     "writer_write_errors_total",
     "Disk write failures (ENOSPC, permission, etc.)",
-    ["exchange", "stream"],
+    ["exchange", "symbol", "stream"],
 )
 
 pg_commit_failures_total = Counter(

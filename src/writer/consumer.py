@@ -858,6 +858,7 @@ class WriterConsumer:
                 )
                 writer_metrics.write_errors_total.labels(
                     exchange=result.target.exchange,
+                    symbol=result.target.symbol,
                     stream=result.target.stream,
                 ).inc()
                 # Emit gap envelope covering the batch's time range
@@ -875,6 +876,7 @@ class WriterConsumer:
             if len(compressed) > 0:
                 writer_metrics.compression_ratio.labels(
                     exchange=result.target.exchange,
+                    symbol=result.target.symbol,
                     stream=result.target.stream,
                 ).set(raw_size / len(compressed))
 
@@ -947,6 +949,7 @@ class WriterConsumer:
         for result in results:
             writer_metrics.flush_duration_ms.labels(
                 exchange=result.target.exchange,
+                symbol=result.target.symbol,
                 stream=result.target.stream,
             ).observe(elapsed_ms)
         logger.debug("flush_complete", files=len(results), elapsed_ms=round(elapsed_ms, 1))

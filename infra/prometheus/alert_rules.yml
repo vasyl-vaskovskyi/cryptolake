@@ -24,7 +24,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Writer consumer lag is elevated
+          summary: Redpanda -> Writer lag is elevated
           description: "Writer lag exceeded 1,000 messages for more than 2 minutes. Current: {{ $value | printf \"%.0f\" }}."
 
       - alert: WriterLagCritical
@@ -32,7 +32,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: Writer consumer lag is critical
+          summary: Redpanda -> Writer lag is critical
           description: "Writer lag exceeded 100,000 messages. Current: {{ $value | printf \"%.0f\" }}."
 
       - alert: SnapshotsFailing
@@ -65,8 +65,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Exchange latency p99 is elevated
-          description: "Collector exchange latency p99 exceeded 500ms for 5 minutes. Current: {{ $value | printf \"%.0f\" }}ms."
+          summary: Latency p99 is elevated
+          description: "Latency p99 exceeded 500ms for 5 minutes. Current: {{ $value | printf \"%.0f\" }}ms."
 
       - alert: NTPDrift
         expr: collector_ntp_drift_ms > 500

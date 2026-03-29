@@ -212,7 +212,7 @@ variables:
 # ── Tier 1: Critical ──────────────────────────────────────────────
 
 sparklines:
-  - title: Consumer Lag
+  - title: Redpanda -> Writer Lag
     rate-ms: 5000
     sample: >
       curl -s '$PROM/api/v1/query?query=max(writer_consumer_lag)' |
@@ -250,7 +250,7 @@ sparklines:
       curl -s '$PROM/api/v1/query?query=sum(rate(collector_messages_produced_total[1m]))' |
       jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
 
-  - title: Exchange Latency p99 ms
+  - title: Latency p99 ms
     rate-ms: 5000
     sample: >
       curl -s '$PROM/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket[5m])))' |

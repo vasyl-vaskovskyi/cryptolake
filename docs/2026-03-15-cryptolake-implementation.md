@@ -5908,7 +5908,7 @@ providers:
 
 - [ ] **Step 4: Create Grafana dashboard JSON**
 
-`infra/grafana/dashboards/cryptolake.json` — dashboard with panels per spec Section 10.4: message throughput (stacked area), exchange latency heatmap, consumer lag, connection status, gap timeline, disk usage, snapshot health, compression efficiency.
+`infra/grafana/dashboards/cryptolake.json` — dashboard with panels per spec Section 10.4: message throughput (stacked area), latency heatmap, Redpanda -> Writer lag, connection status, gap timeline, disk usage, snapshot health, compression efficiency.
 
 - [ ] **Step 5: Create Alertmanager config**
 
@@ -6292,7 +6292,7 @@ git commit -m "feat: E2E test docker-compose with shortened intervals"
 
 9. **Open Grafana dashboard:**
    Open `http://localhost:3000` in browser, login with credentials from `.env`.
-   **Check:** CryptoLake dashboard loads with populated panels: message throughput, consumer lag, latency heatmap.
+   **Check:** CryptoLake dashboard loads with populated panels: message throughput, Redpanda -> Writer lag, latency heatmap.
 
 10. **Run integration tests:**
     ```bash

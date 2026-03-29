@@ -1,6 +1,19 @@
 # CryptoLake Terminal Dashboard
 # Run: sampler -c infra/sampler/sampler.yml
 # Requires: curl, jq, prometheus on localhost:9090
+#
+# Optional filters (env vars):
+#   EXCHANGE  — filter by exchange (e.g. binance, coinbase). Default: all.
+#   SYMBOL    — filter by trading pair (e.g. BTCUSDT, ETH.*). Default: all.
+#
+# Examples:
+#   sampler -c infra/sampler/sampler.yml                          # all data
+#   EXCHANGE=binance sampler -c infra/sampler/sampler.yml         # binance only
+#   EXCHANGE=binance SYMBOL=BTCUSDT sampler -c ...                # binance BTC only
+#   SYMBOL="BTC.*" sampler -c ...                                 # BTC pairs, all exchanges
+#
+# Note: Disk Usage is global (no labels). Consumer lag, connections, reconnects,
+# and commit failures are exchange-level only (no symbol dimension in these metrics).
 
 gauges:
   - title: Disk Usage %
@@ -17,35 +30,35 @@ gauges:
 sparklines:
 # ── Tier 1: Critical ──────────────────────────────────────────────
 
-  - title: Consumer Lag
+  - title: Redpanda -> Writer Lag
     position: [[40, 8], [20, 12]]
     rate-ms: 5000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=max(writer_consumer_lag)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=max(writer_consumer_lag{exchange=~\"${EXCHANGE:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Gaps Detected /12h
     position: [[0, 0], [20, 8]]
     rate-ms: 30000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(collector_gaps_detected_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_gaps_detected_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Messages Dropped /12h
     position: [[0, 32], [20, 8]]
     rate-ms: 30000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(collector_messages_dropped_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_messages_dropped_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Active Connections
     position: [[0, 20], [20, 12]]
     rate-ms: 5000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(collector_ws_connections_active)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(collector_ws_connections_active{exchange=~\"${EXCHANGE:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Write Errors /12h
     position: [[40, 20], [20, 12]]
     rate-ms: 30000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(writer_write_errors_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(writer_write_errors_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
 # ── Tier 2: High ──────────────────────────────────────────────────
 
@@ -53,31 +66,31 @@ sparklines:
     position: [[40, 0], [20, 8]]
     rate-ms: 5000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total[5m]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[5m]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
 
-  - title: Exchange Latency p99 ms
+  - title: Latency p99 ms
     position: [[40, 32], [40, 8]]
     rate-ms: 5000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket[15m])))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Reconnects /12h
     position: [[20, 8], [20, 12]]
     rate-ms: 30000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(collector_ws_reconnects_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_ws_reconnects_total{exchange=~\"${EXCHANGE:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Snapshots Taken /12h
     position: [[60, 8], [20, 12]]
     rate-ms: 30000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_taken_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_taken_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Snapshots Failed /12h
     position: [[20, 20], [20, 12]]
     rate-ms: 30000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_failed_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_failed_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: DB Commit Failures /12h
     position: [[60, 20], [20, 12]]
@@ -97,10 +110,10 @@ sparklines:
     position: [[20, 32], [20, 8]]
     rate-ms: 10000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=avg(writer_compression_ratio)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.2f'
+        curl -sg "http://localhost:9090/api/v1/query?query=avg(writer_compression_ratio{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.2f'
 
   - title: Flush Duration p99 ms
     position: [[60, 0], [20, 8]]
     rate-ms: 10000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket[15m])))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'

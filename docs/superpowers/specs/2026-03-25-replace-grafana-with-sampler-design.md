@@ -50,7 +50,7 @@ This allows sampler (running on the host) to reach Prometheus. The `host_access`
 
 | # | Panel | Widget | PromQL Query | Notes |
 |---|-------|--------|-------------|-------|
-| 1 | Consumer Lag | sparkline | `max(writer_consumer_lag)` | Primary health indicator, 2 alert thresholds |
+| 1 | Redpanda -> Writer Lag | sparkline | `max(writer_consumer_lag)` | Primary health indicator, 2 alert thresholds |
 | 2 | Gaps Detected/5m | sparkline | `sum(increase(collector_gaps_detected_total[5m]))` | Any gap = data loss |
 | 3 | Messages Dropped/5m | sparkline | `sum(increase(collector_messages_dropped_total[5m]))` | **NEW** — was missing from Grafana despite having critical alert |
 | 4 | Disk Usage % | gauge | `writer_disk_usage_pct` | Prevents storage exhaustion |
@@ -62,7 +62,7 @@ This allows sampler (running on the host) to reach Prometheus. The `host_access`
 | # | Panel | Widget | PromQL Query | Notes |
 |---|-------|--------|-------------|-------|
 | 7 | Message Throughput | sparkline | `sum(rate(collector_messages_produced_total[1m]))` | Ingestion rate baseline |
-| 8 | Exchange Latency p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(collector_exchange_latency_ms_bucket[5m])))` | Alert at >500ms |
+| 8 | Latency p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(collector_exchange_latency_ms_bucket[5m])))` | Alert at >500ms |
 | 9 | Reconnects/5m | sparkline | `sum(increase(collector_ws_reconnects_total[5m]))` | Connection instability signal |
 | 10 | Snapshots Taken/15m | sparkline | `sum(increase(collector_snapshots_taken_total[15m]))` | Snapshot health (success) |
 | 11 | Snapshots Failed/15m | sparkline | `sum(increase(collector_snapshots_failed_total[15m]))` | Snapshot health (failure), has alert |
@@ -77,7 +77,7 @@ This allows sampler (running on the host) to reach Prometheus. The `host_access`
 | 15 | Flush Duration p99 | sparkline | `histogram_quantile(0.99, sum by (le)(rate(writer_flush_duration_ms_bucket[5m])))` | **NEW** — I/O bottleneck detection |
 
 **Design notes:**
-- The Grafana heatmap (Exchange Latency) is converted to a p99 sparkline since terminal UIs cannot render heatmaps.
+- The Grafana heatmap (Latency) is converted to a p99 sparkline since terminal UIs cannot render heatmaps.
 - Connection Status (Grafana panel with two queries) is split: Active Connections (Tier 1) and Reconnects (Tier 2).
 - Snapshot Health (Grafana panel with two queries) is split: Taken and Failed (both Tier 2).
 - Queries that used `sum by (symbol, stream)` in Grafana are aggregated to a single value in sampler, since sampler sparklines display one series per widget. Per-symbol debugging is done via ad-hoc PromQL queries.
@@ -86,7 +86,7 @@ This allows sampler (running on the host) to reach Prometheus. The `host_access`
 Each widget polls every 5000ms using a shell command like:
 ```yaml
 sparklines:
-  - title: Consumer Lag
+  - title: Redpanda -> Writer Lag
     rate-ms: 5000
     sample: >
       curl -s 'http://localhost:9090/api/v1/query?query=max(writer_consumer_lag)' |
