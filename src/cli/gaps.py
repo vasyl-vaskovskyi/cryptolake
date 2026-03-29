@@ -306,6 +306,60 @@ def _scan_gaps(date_dir: Path) -> list[dict]:
     return gaps
 
 
+def _format_duration(ns: int) -> str:
+    """Format a nanosecond duration into human-readable form.
+
+    <60s → "42s", <60m → "3m12s", <24h → "2h14m3s", >=24h → "1d2h14m3s".
+    Zero or negative → "instant".
+    """
+    if ns <= 0:
+        return "instant"
+    total_seconds = int(ns / 1_000_000_000)
+    if total_seconds == 0:
+        return "instant"
+    days, rem = divmod(total_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if days > 0:
+        return f"{days}d{hours}h{minutes}m{seconds}s"
+    if hours > 0:
+        return f"{hours}h{minutes}m{seconds}s"
+    if minutes > 0:
+        return f"{minutes}m{seconds}s"
+    return f"{seconds}s"
+
+
+def _ns_to_time(ns: int) -> str:
+    """Format nanosecond timestamp to HH:mm:ss UTC."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromtimestamp(ns / 1_000_000_000, tz=timezone.utc)
+        return dt.strftime("%H:%M:%S")
+    except (ValueError, OSError, OverflowError):
+        return "??:??:??"
+
+
+def _gap_status(gap: dict, stream_name: str) -> str:
+    """Determine the status of a gap record."""
+    if stream_name in NON_BACKFILLABLE_STREAMS:
+        return "UNRECOVERABLE"
+    # TODO: check for IN PROGRESS state when backfill tracking is added
+    return "MISSING"
+
+
+def _file_status_for_hour(hour: int, hour_map: dict[int, str], stream_name: str) -> str:
+    """Determine file-level status for an hour."""
+    status = hour_map.get(hour)
+    if status is None:
+        if stream_name in NON_BACKFILLABLE_STREAMS:
+            return "UNRECOVERABLE"
+        return "MISSING"
+    if status == "backfilled":
+        return "RECOVERED"
+    # present or late — file exists
+    return "-"
+
+
 def _format_hours_line(hours: dict[int, str]) -> str:
     """Produce a compact single-line representation of hour coverage.
 
@@ -316,16 +370,14 @@ def _format_hours_line(hours: dict[int, str]) -> str:
 
     STATUS_LABEL = {
         "present": "OK",
-        "backfilled": "BACKFILLED",
-        "late": "LATE",
+        "backfilled": "RECOVERED",
+        "late": "OK",
         "missing": "MISSING",
     }
 
-    # Build sequence for all 24 hours
     all_hours = [(h, hours.get(h, "missing")) for h in range(24)]
 
-    # Compress into runs
-    segments: list[tuple[int, int, str]] = []  # (start, end, status)
+    segments: list[tuple[int, int, str]] = []
     run_start = 0
     run_status = all_hours[0][1]
     for i in range(1, 24):
@@ -440,31 +492,146 @@ def analyze_archive(
 
 
 def _print_report(report: dict) -> None:
-    """Print a human-readable coverage report."""
+    """Print a human-readable coverage report with gap table and summaries."""
+    # Accumulators for grand total
+    grand_total_gaps = 0
+    grand_total_gaps_dur = 0
+    grand_restored_gaps = 0
+    grand_restored_gaps_dur = 0
+    grand_unrecoverable_gaps = 0
+    grand_unrecoverable_gaps_dur = 0
+    grand_remaining_gaps = 0
+    grand_remaining_gaps_dur = 0
+
     for exch_name, symbols in sorted(report.items()):
-        click.echo(f"Exchange: {exch_name}")
         for sym_name, streams in sorted(symbols.items()):
-            click.echo(f"  Symbol: {sym_name}")
+            click.echo(f"\n{exch_name} / {sym_name}")
+            click.echo("=" * 80)
+
             for stream_name, dates in sorted(streams.items()):
-                click.echo(f"    Stream: {stream_name}")
                 for date_name, info in sorted(dates.items()):
                     covered = info["covered"]
                     total = info["total"]
                     hours_line = _format_hours_line(info["hours"])
+                    hour_map = info["hours"]
                     gaps = info["gaps"]
-                    gap_str = f"  gaps={len(gaps)}" if gaps else ""
-                    status = "OK" if covered == total else "MISSING"
-                    click.echo(
-                        f"      {date_name}  {covered}/{total}  [{status}]{gap_str}"
+
+                    click.echo(f"\n  {stream_name} / {date_name}  {covered}/{total} hours")
+                    click.echo(f"  Hours: {hours_line}")
+
+                    # Build unified gap list: gap records + missing hours (as synthetic entries)
+                    all_entries: list[dict] = []
+
+                    # Add missing hours as synthetic gap entries
+                    for h in range(24):
+                        if h not in hour_map:
+                            from datetime import datetime, timezone, timedelta
+                            dt_start = datetime.strptime(
+                                f"{date_name} {h:02d}:00:00", "%Y-%m-%d %H:%M:%S"
+                            ).replace(tzinfo=timezone.utc)
+                            dt_end = dt_start + timedelta(hours=1) - timedelta(milliseconds=1)
+                            start_ns = int(dt_start.timestamp() * 1_000_000_000)
+                            end_ns = int(dt_end.timestamp() * 1_000_000_000)
+                            file_st = _file_status_for_hour(h, hour_map, stream_name)
+                            all_entries.append({
+                                "reason": "missing_hour",
+                                "gap_start_ts": start_ns,
+                                "gap_end_ts": end_ns,
+                                "_gap_status": file_st,  # MISSING, RECOVERED, UNRECOVERABLE
+                                "_file_status": file_st,
+                                "_is_hour_gap": True,
+                            })
+
+                    # Add actual gap records from files
+                    for g in gaps:
+                        g_status = _gap_status(g, stream_name)
+                        all_entries.append({
+                            **g,
+                            "_gap_status": g_status,
+                            "_file_status": "-",
+                            "_is_hour_gap": False,
+                        })
+
+                    # Sort all entries by start timestamp
+                    all_entries.sort(key=lambda e: e.get("gap_start_ts", 0))
+
+                    if not all_entries:
+                        click.echo("  No gaps.")
+                        continue
+
+                    # Print table header
+                    click.echo("")
+                    hdr = (
+                        f"  {'Reason':<20} {'Start':>8}  {'End':>8}  "
+                        f"{'Duration':>12}  {'Status':<15} {'File Status':<15}"
                     )
-                    click.echo(f"        {hours_line}")
-                    if gaps:
-                        for g in gaps:
-                            click.echo(
-                                f"        GAP  reason={g.get('reason')}  "
-                                f"start={g.get('gap_start_ts')}  "
-                                f"end={g.get('gap_end_ts')}"
-                            )
+                    click.echo(hdr)
+                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*15} {'-'*15}")
+
+                    # Per-stream/date accumulators
+                    st_total = 0
+                    st_total_dur = 0
+                    st_restored = 0
+                    st_restored_dur = 0
+                    st_unrecoverable = 0
+                    st_unrecoverable_dur = 0
+                    st_remaining = 0
+                    st_remaining_dur = 0
+
+                    for entry in all_entries:
+                        reason = entry.get("reason", "unknown")
+                        start_ts = entry.get("gap_start_ts", 0)
+                        end_ts = entry.get("gap_end_ts", 0)
+                        dur_ns = max(0, end_ts - start_ts)
+                        gap_status = entry["_gap_status"]
+                        file_status = entry["_file_status"]
+
+                        start_str = _ns_to_time(start_ts)
+                        end_str = _ns_to_time(end_ts)
+                        dur_str = _format_duration(dur_ns)
+
+                        click.echo(
+                            f"  {reason:<20} {start_str:>8}  {end_str:>8}  "
+                            f"{dur_str:>12}  {gap_status:<15} {file_status:<15}"
+                        )
+
+                        # Accumulate
+                        st_total += 1
+                        st_total_dur += dur_ns
+                        if gap_status == "RECOVERED" or file_status == "RECOVERED":
+                            st_restored += 1
+                            st_restored_dur += dur_ns
+                        elif gap_status == "UNRECOVERABLE" or file_status == "UNRECOVERABLE":
+                            st_unrecoverable += 1
+                            st_unrecoverable_dur += dur_ns
+                        else:
+                            st_remaining += 1
+                            st_remaining_dur += dur_ns
+
+                    # Per-stream/date summary
+                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*15} {'-'*15}")
+                    click.echo(f"  Total gaps:          {st_total:>4} / {_format_duration(st_total_dur)}")
+                    click.echo(f"  Restored:            {st_restored:>4} / {_format_duration(st_restored_dur)}")
+                    click.echo(f"  Unrecoverable:       {st_unrecoverable:>4} / {_format_duration(st_unrecoverable_dur)}")
+                    click.echo(f"  Remaining to restore:{st_remaining:>4} / {_format_duration(st_remaining_dur)}")
+
+                    grand_total_gaps += st_total
+                    grand_total_gaps_dur += st_total_dur
+                    grand_restored_gaps += st_restored
+                    grand_restored_gaps_dur += st_restored_dur
+                    grand_unrecoverable_gaps += st_unrecoverable
+                    grand_unrecoverable_gaps_dur += st_unrecoverable_dur
+                    grand_remaining_gaps += st_remaining
+                    grand_remaining_gaps_dur += st_remaining_dur
+
+    # Grand total
+    click.echo(f"\n{'=' * 80}")
+    click.echo("TOTAL SUMMARY")
+    click.echo(f"{'=' * 80}")
+    click.echo(f"  Total gaps:          {grand_total_gaps:>4} / {_format_duration(grand_total_gaps_dur)}")
+    click.echo(f"  Restored:            {grand_restored_gaps:>4} / {_format_duration(grand_restored_gaps_dur)}")
+    click.echo(f"  Unrecoverable:       {grand_unrecoverable_gaps:>4} / {_format_duration(grand_unrecoverable_gaps_dur)}")
+    click.echo(f"  Remaining to restore:{grand_remaining_gaps:>4} / {_format_duration(grand_remaining_gaps_dur)}")
 
 
 @click.group()
