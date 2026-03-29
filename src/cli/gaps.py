@@ -502,6 +502,7 @@ def _print_report(report: dict) -> None:
     grand_unrecoverable_gaps_dur = 0
     grand_remaining_gaps = 0
     grand_remaining_gaps_dur = 0
+    grand_recorded_dur = 0
 
     for exch_name, symbols in sorted(report.items()):
         for sym_name, streams in sorted(symbols.items()):
@@ -623,8 +624,12 @@ def _print_report(report: dict) -> None:
                             st_remaining += 1
                             st_remaining_dur += dur_ns
 
+                    # Total recorded duration = covered hours × 1h in nanoseconds
+                    recorded_dur_ns = covered * 3_600_000_000_000
+
                     # Per-stream/date summary
                     click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*15} {'-'*15}")
+                    click.echo(f"  Total recorded:      {covered:>4}h / {_format_duration(recorded_dur_ns)}")
                     click.echo(f"  Total gaps:          {st_total:>4} / {_format_duration(st_total_dur)}")
                     click.echo(f"  Restored:            {st_restored:>4} / {_format_duration(st_restored_dur)}")
                     click.echo(f"  Unrecoverable:       {st_unrecoverable:>4} / {_format_duration(st_unrecoverable_dur)}")
@@ -638,11 +643,13 @@ def _print_report(report: dict) -> None:
                     grand_unrecoverable_gaps_dur += st_unrecoverable_dur
                     grand_remaining_gaps += st_remaining
                     grand_remaining_gaps_dur += st_remaining_dur
+                    grand_recorded_dur += recorded_dur_ns
 
     # Grand total
     click.echo(f"\n{'=' * 80}")
     click.echo("TOTAL SUMMARY")
     click.echo(f"{'=' * 80}")
+    click.echo(f"  Total recorded:            {_format_duration(grand_recorded_dur)}")
     click.echo(f"  Total gaps:          {grand_total_gaps:>4} / {_format_duration(grand_total_gaps_dur)}")
     click.echo(f"  Restored:            {grand_restored_gaps:>4} / {_format_duration(grand_restored_gaps_dur)}")
     click.echo(f"  Unrecoverable:       {grand_unrecoverable_gaps:>4} / {_format_duration(grand_unrecoverable_gaps_dur)}")
