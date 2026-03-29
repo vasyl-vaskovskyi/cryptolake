@@ -604,3 +604,7 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, base_d
             click.echo(f"  Wrote {n} records -> {out_path}")
 
     click.echo(f"Backfill complete: {total_written} total records written.")
+
+
+if __name__ == "__main__":
+    cli()
