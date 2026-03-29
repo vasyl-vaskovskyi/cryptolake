@@ -552,12 +552,27 @@ def _print_report(report: dict) -> None:
                             "_is_hour_gap": False,
                         })
 
-                    # Sort all entries by start timestamp
-                    all_entries.sort(key=lambda e: e.get("gap_start_ts", 0))
+                    # Sort all entries by start timestamp, then by end
+                    all_entries.sort(key=lambda e: (e.get("gap_start_ts", 0), e.get("gap_end_ts", 0)))
 
                     if not all_entries:
                         click.echo("  No gaps.")
                         continue
+
+                    # Compute effective (non-overlapping) duration for each gap.
+                    # Gaps from sparse streams (e.g. liquidations) record gap_start_ts
+                    # as the last message received_at, which can be hours before the
+                    # actual disconnect.  By tracking a high-water mark we count each
+                    # moment of gap time only once.
+                    high_water = 0
+                    for entry in all_entries:
+                        start_ts = entry.get("gap_start_ts", 0)
+                        end_ts = entry.get("gap_end_ts", 0)
+                        effective_start = max(start_ts, high_water)
+                        effective_dur = max(0, end_ts - effective_start)
+                        entry["_effective_dur_ns"] = effective_dur
+                        if end_ts > high_water:
+                            high_water = end_ts
 
                     # Print table header
                     click.echo("")
@@ -582,7 +597,7 @@ def _print_report(report: dict) -> None:
                         reason = entry.get("reason", "unknown")
                         start_ts = entry.get("gap_start_ts", 0)
                         end_ts = entry.get("gap_end_ts", 0)
-                        dur_ns = max(0, end_ts - start_ts)
+                        dur_ns = entry["_effective_dur_ns"]
                         gap_status = entry["_gap_status"]
                         file_status = entry["_file_status"]
 
