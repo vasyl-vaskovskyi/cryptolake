@@ -151,10 +151,11 @@ class TestObservabilityAssets:
             "WriteErrors",
             "PostgresCommitFailing",
             "KafkaCommitFailing",
+            "IncompleteDay",
         }
 
         sampler = _read_yaml("infra/sampler/sampler.yml")
-        assert len(sampler["sparklines"]) == 14
+        assert len(sampler["sparklines"]) == 15
         assert len(sampler["gauges"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
