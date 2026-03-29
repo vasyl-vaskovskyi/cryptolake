@@ -145,6 +145,9 @@ class CryptoLakeProducer:
 
     def _emit_overflow_gap(self, symbol: str, stream: str, start_ts: int) -> None:
         """Emit a buffer_overflow gap record when recovering from overflow."""
+        collector_metrics.gaps_detected_total.labels(
+            exchange=self.exchange, symbol=symbol, stream=stream, reason="buffer_overflow",
+        ).inc()
         gap = create_gap_envelope(
             exchange=self.exchange,
             symbol=symbol,
