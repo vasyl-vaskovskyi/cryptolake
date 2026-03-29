@@ -588,7 +588,7 @@ def _print_report(report: dict) -> None:
                         all_entries.append({
                             **g,
                             "_gap_status": g_status,
-                            "_file_status": "-",
+                            "_file_status": "OK",
                             "_is_hour_gap": False,
                         })
 
