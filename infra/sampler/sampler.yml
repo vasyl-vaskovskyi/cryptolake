@@ -87,7 +87,7 @@ asciiboxes:
     font: 2d
     border: true
     sample: |
-        printf "%s-%s %s" "${EXCHANGE:-BNB}" "${SYMBOL:-BTCUSDT}" "$(TZ=UTC date +'%b %d %H:%M')" | tr '[:lower:]' '[:upper:]'
+        printf "%s-%s  %s  %s" "${EXCHANGE:-BNB}" "${SYMBOL:-BTCUSDT}" "$(TZ=UTC date +'%b %d')" "$(TZ=UTC date +'%H:%M')" | tr '[:lower:]' '[:upper:]'
 
 textboxes:
   - title: Health Counters /12h
