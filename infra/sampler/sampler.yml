@@ -23,19 +23,13 @@ barcharts:
     items:
       - label: CPU
         sample: |
-            ps -A -o %cpu | awk '{s+=$1} END {printf "%.0f\n", s}'
-        color: 178
+            CORES=$(sysctl -n hw.ncpu); ps -A -o %cpu | awk -v c="$CORES" '{s+=$1} END {v=s/c; if(v>100)v=100; printf "%.0f\n", v}'
       - label: MEM
         sample: |
             vm_stat | awk '/Pages active/{a=$3}/Pages wired/{w=$4}/Pages occupied/{o=$5}/page size/{p=$8}END{gsub(/\./,"",a);gsub(/\./,"",w);gsub(/\./,"",o);used=(a+w+o)*p;total='"$(sysctl -n hw.memsize)"';printf "%.0f\n",used/total*100}'
-        color: 33
       - label: DISK
         sample: |
             curl -sg 'http://localhost:9090/api/v1/query?query=writer_disk_usage_pct' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-        color: 161
-      - label: "100"
-        sample: echo 100
-        color: 0
 
 sparklines:
 # ── Tier 1: Critical ──────────────────────────────────────────────
