@@ -70,8 +70,9 @@ async def _run_backfill_cycle(base_dir: str) -> None:
     from src.exchanges.binance import BinanceAdapter
     from src.cli.gaps import (
         _fetch_historical_all, _write_backfill_files,
-        _next_backfill_seq,
+        _next_backfill_seq, find_time_based_gaps, _fetch_by_id,
     )
+    from src.cli.integrity import find_backfillable_gaps
 
     start = time.monotonic()
     run_ts = time.time()
@@ -81,19 +82,20 @@ async def _run_backfill_cycle(base_dir: str) -> None:
     try:
         report = analyze_archive(Path(base_dir))
         missing = _collect_missing_hours(report)
-        backfill_gaps_found.set(len(missing))
 
+        # Initialize adapter and session_id for both missing hours and deep backfill
+        adapter = BinanceAdapter(
+            ws_base="wss://fstream.binance.com",
+            rest_base="https://fapi.binance.com",
+            symbols=[],
+        )
+        session_id = f"backfill-{datetime.now(timezone.utc).isoformat()}"
+
+        # ── Missing hours backfill ──
         if not missing:
             logger.info("backfill_no_gaps_found")
         else:
             logger.info("backfill_starting", gaps=len(missing))
-
-            adapter = BinanceAdapter(
-                ws_base="wss://fstream.binance.com",
-                rest_base="https://fapi.binance.com",
-                symbols=[],
-            )
-            session_id = f"backfill-{datetime.now(timezone.utc).isoformat()}"
 
             for exch, sym, stream, date_name, hour in missing:
                 start_ms, end_ms = _hour_to_ms_range(date_name, hour)
@@ -122,6 +124,60 @@ async def _run_backfill_cycle(base_dir: str) -> None:
                     logger.error("backfill_hour_failed",
                                  exchange=exch, symbol=sym, stream=stream,
                                  date=date_name, hour=hour, error=str(e))
+                    success = False
+
+        # ── Deep backfill: in-file gaps ──
+        id_gaps = find_backfillable_gaps(Path(base_dir))
+        time_gaps = find_time_based_gaps(Path(base_dir))
+        deep_gaps = id_gaps + time_gaps
+        backfill_gaps_found.set(len(missing) + len(deep_gaps))
+
+        if deep_gaps:
+            logger.info("backfill_deep_starting", id_gaps=len(id_gaps), time_gaps=len(time_gaps))
+
+            for g in id_gaps:
+                try:
+                    records = await _fetch_by_id(adapter, g["symbol"], g["from_id"], g["to_id"])
+                    if records:
+                        backfill_seq = _next_backfill_seq(
+                            Path(base_dir), g["exchange"], g["symbol"],
+                            g["stream"], g["date"], g["hour"])
+                        n, _ = _write_backfill_files(
+                            records, base_dir=base_dir, exchange=g["exchange"],
+                            symbol=g["symbol"], stream=g["stream"], date=g["date"],
+                            session_id=session_id, seq_offset=total_written,
+                            backfill_seq=backfill_seq,
+                        )
+                        total_written += n
+                        logger.info("backfill_id_gap_done",
+                                    exchange=g["exchange"], symbol=g["symbol"],
+                                    stream=g["stream"], records=n)
+                except Exception as e:
+                    logger.error("backfill_id_gap_failed", error=str(e),
+                                 exchange=g["exchange"], symbol=g["symbol"])
+                    success = False
+
+            for g in time_gaps:
+                try:
+                    records = await _fetch_historical_all(
+                        adapter, g["symbol"], g["stream"], g["start_ms"], g["end_ms"])
+                    if records:
+                        backfill_seq = _next_backfill_seq(
+                            Path(base_dir), g["exchange"], g["symbol"],
+                            g["stream"], g["date"], g["hour"])
+                        n, _ = _write_backfill_files(
+                            records, base_dir=base_dir, exchange=g["exchange"],
+                            symbol=g["symbol"], stream=g["stream"], date=g["date"],
+                            session_id=session_id, seq_offset=total_written,
+                            backfill_seq=backfill_seq,
+                        )
+                        total_written += n
+                        logger.info("backfill_time_gap_done",
+                                    exchange=g["exchange"], symbol=g["symbol"],
+                                    stream=g["stream"], records=n)
+                except Exception as e:
+                    logger.error("backfill_time_gap_failed", error=str(e),
+                                 exchange=g["exchange"], symbol=g["symbol"])
                     success = False
 
     except Exception as e:
