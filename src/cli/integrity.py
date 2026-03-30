@@ -140,6 +140,9 @@ def check_integrity(
     """Check ID continuity across archive files. Returns structured report."""
     report: dict = {}
 
+    if not base_dir.exists():
+        return report
+
     for exch_dir in sorted(base_dir.iterdir()):
         if not exch_dir.is_dir():
             continue
