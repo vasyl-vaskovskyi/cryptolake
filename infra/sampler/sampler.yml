@@ -15,17 +15,23 @@
 # Note: Disk Usage is global (no labels). Consumer lag, connections, reconnects,
 # and commit failures are exchange-level only (no symbol dimension in these metrics).
 
-gauges:
-  - title: Disk Usage %
+barcharts:
+  - title: System Resources %
     position: [[0, 8], [20, 12]]
-    rate-ms: 10000
-    cur:
+    rate-ms: 5000
+    items:
+      - label: CPU
+        sample: |
+            ps -A -o %cpu | awk '{s+=$1} END {printf "%.0f\n", s}'
+      - label: MEM
+        sample: |
+            vm_stat | awk '/Pages active/{a=$3}/Pages wired/{w=$4}/Pages occupied/{o=$5}/page size/{p=$8}END{gsub(/\./,"",a);gsub(/\./,"",w);gsub(/\./,"",o);used=(a+w+o)*p;total='"$(sysctl -n hw.memsize)"';printf "%.0f\n",used/total*100}'
+      - label: DISK
         sample: |
             curl -sg 'http://localhost:9090/api/v1/query?query=writer_disk_usage_pct' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-    max:
-        sample: echo 100
-    min:
-        sample: echo 0
+      - label: NET
+        sample: |
+            netstat -ib | awk '/en0.*<Link/{printf "%.0f\n", ($7+$10)/1048576}'
 
 sparklines:
 # ── Tier 1: Critical ──────────────────────────────────────────────

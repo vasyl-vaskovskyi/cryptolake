@@ -157,7 +157,9 @@ class TestObservabilityAssets:
 
         sampler = _read_yaml("infra/sampler/sampler.yml")
         assert len(sampler["sparklines"]) == 15
-        assert len(sampler["gauges"]) == 1
+        assert len(sampler["barcharts"]) == 1
+        assert sampler["barcharts"][0]["title"] == "System Resources %"
+        assert len(sampler["barcharts"][0]["items"]) == 4
         assert len(sampler["textboxes"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
