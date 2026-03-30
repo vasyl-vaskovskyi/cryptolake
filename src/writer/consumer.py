@@ -1091,9 +1091,16 @@ class WriterConsumer:
         for cp in checkpoints:
             self._durable_checkpoints[cp.checkpoint_key] = cp
 
-        # Commit Kafka offsets
+        # Commit Kafka offsets only for partitions we've actually consumed from
         assert self._consumer is not None, "call start() first"
-        self._consumer.commit(asynchronous=True)
+        from confluent_kafka import TopicPartition
+        offsets_to_commit = []
+        for tp in self._consumer.assignment():
+            positions = self._consumer.position([TopicPartition(tp.topic, tp.partition)])
+            if positions and positions[0].offset > 0:
+                offsets_to_commit.append(positions[0])
+        if offsets_to_commit:
+            self._consumer.commit(offsets=offsets_to_commit, asynchronous=True)
 
         elapsed_ms = (time.monotonic() - start) * 1000
         for result in results:
