@@ -61,7 +61,7 @@ sparklines:
         curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(writer_write_errors_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
   - title: Hours Sealed Today
-    position: [[60, 32], [20, 8]]
+    position: [[60, 8], [20, 4]]
     rate-ms: 60000
     sample: |
         curl -sg "http://localhost:9090/api/v1/query?query=min(writer_hours_sealed_today{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
@@ -75,7 +75,7 @@ sparklines:
         curl -sg "http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[5m]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
 
   - title: Latency p99 ms
-    position: [[40, 32], [40, 8]]
+    position: [[40, 32], [20, 8]]
     rate-ms: 5000
     sample: |
         curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
@@ -126,7 +126,7 @@ sparklines:
 
 textboxes:
   - title: Backfill Last Run
-    position: [[60, 32], [20, 12]]
+    position: [[60, 32], [20, 8]]
     rate-ms: 60000
     sample: |
         TS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_last_run_timestamp_seconds' | jq '.data.result[0].value[1] // "0"' -r); RECS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_records_written' | jq '.data.result[0].value[1] // "0"' -r); GAPS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_gaps_found' | jq '.data.result[0].value[1] // "0"' -r); OK=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_last_run_success' | jq '.data.result[0].value[1] // "0"' -r); if [ "$TS" = "0" ]; then echo "no runs yet"; else AGO=$(( $(date +%s) - ${TS%.*} )); if [ "$AGO" -lt 3600 ]; then printf "%dm ago\ngaps=%s recs=%s\n%s" $((AGO/60)) "$GAPS" "$RECS" "$([ "$OK" = "1" ] && echo OK || echo FAIL)"; else printf "%dh ago\ngaps=%s recs=%s\n%s" $((AGO/3600)) "$GAPS" "$RECS" "$([ "$OK" = "1" ] && echo OK || echo FAIL)"; fi; fi
