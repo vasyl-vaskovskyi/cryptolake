@@ -72,7 +72,7 @@ sparklines:
     position: [[20, 32], [20, 4]]
     rate-ms: 10000
     sample: |
-        curl -sg "http://localhost:9090/api/v1/query?query=avg(writer_compression_ratio{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.2f'
+        curl -sg "http://localhost:9090/api/v1/query?query=avg(avg_over_time(writer_compression_ratio{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[5m]))" | jq '[.data.result[].value[1] // "0"] | map(tonumber) | add / length' -r | xargs printf '%.1f'
 
   - title: Flush Duration p99 ms
     position: [[60, 0], [20, 8]]
