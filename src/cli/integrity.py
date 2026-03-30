@@ -198,6 +198,46 @@ def check_integrity(
     return report
 
 
+def find_backfillable_gaps(
+    base_dir: Path,
+    exchange: str | None = None,
+    symbol: str | None = None,
+    date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    """Find trade ID gaps suitable for backfill via fromId API."""
+    report = check_integrity(
+        base_dir, exchange=exchange, symbol=symbol, stream="trades",
+        date=date, date_from=date_from, date_to=date_to,
+    )
+    gaps: list[dict] = []
+    for (exch, sym, stream_name, date_name), info in report.items():
+        for b in info["breaks"]:
+            if b["field"] != "a" or b["missing"] is None or b["missing"] <= 0:
+                continue
+            hour = 0
+            if b["at_received"]:
+                from datetime import datetime, timezone
+                try:
+                    dt = datetime.fromtimestamp(b["at_received"] / 1_000_000_000, tz=timezone.utc)
+                    hour = dt.hour
+                except (ValueError, OSError):
+                    pass
+            gaps.append({
+                "type": "id_gap",
+                "exchange": exch,
+                "symbol": sym,
+                "stream": stream_name,
+                "date": date_name,
+                "hour": hour,
+                "from_id": b["expected"],
+                "to_id": b["actual"] - 1,
+                "missing": b["missing"],
+            })
+    return gaps
+
+
 def _print_report(report: dict) -> None:
     total_records = 0
     total_breaks = 0
