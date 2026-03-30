@@ -15,21 +15,45 @@
 # Note: Disk Usage is global (no labels). Consumer lag, connections, reconnects,
 # and commit failures are exchange-level only (no symbol dimension in these metrics).
 
-barcharts:
-  - title: System Resources %
-    position: [[0, 8], [20, 12]]
+gauges:
+  - title: CPU %
+    position: [[0, 8], [7, 12]]
     rate-ms: 5000
     scale: 0
-    items:
-      - label: CPU
+    color: 178
+    cur:
         sample: |
             CORES=$(sysctl -n hw.ncpu); ps -A -o %cpu | awk -v c="$CORES" '{s+=$1} END {v=s/c; if(v>100)v=100; printf "%.0f\n", v}'
-      - label: MEM
+    max:
+        sample: echo 100
+    min:
+        sample: echo 0
+
+  - title: MEM %
+    position: [[7, 8], [7, 12]]
+    rate-ms: 5000
+    scale: 0
+    color: 33
+    cur:
         sample: |
             vm_stat | awk '/Pages active/{a=$3}/Pages wired/{w=$4}/Pages occupied/{o=$5}/page size/{p=$8}END{gsub(/\./,"",a);gsub(/\./,"",w);gsub(/\./,"",o);used=(a+w+o)*p;total='"$(sysctl -n hw.memsize)"';printf "%.0f\n",used/total*100}'
-      - label: DISK
+    max:
+        sample: echo 100
+    min:
+        sample: echo 0
+
+  - title: DISK %
+    position: [[14, 8], [6, 12]]
+    rate-ms: 10000
+    scale: 0
+    color: 161
+    cur:
         sample: |
             curl -sg 'http://localhost:9090/api/v1/query?query=writer_disk_usage_pct' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+    max:
+        sample: echo 100
+    min:
+        sample: echo 0
 
 sparklines:
 # ── Tier 1: Critical ──────────────────────────────────────────────
