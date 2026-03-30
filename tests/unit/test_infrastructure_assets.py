@@ -159,7 +159,7 @@ class TestObservabilityAssets:
         assert len(sampler["sparklines"]) == 16
         assert len(sampler["barcharts"]) == 1
         assert sampler["barcharts"][0]["title"] == "System Resources %"
-        assert len(sampler["barcharts"][0]["items"]) == 3
+        assert len(sampler["barcharts"][0]["items"]) == 4
         assert len(sampler["textboxes"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
