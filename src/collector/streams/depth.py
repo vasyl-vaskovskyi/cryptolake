@@ -37,9 +37,17 @@ class DepthHandler(StreamHandler):
             s: [] for s in symbols
         }
         self._on_pu_chain_break = on_pu_chain_break
-        # Track depth diffs dropped while awaiting snapshot (per symbol)
+        # Track ALL depth diffs dropped during resync (per symbol):
+        # buffer overflow, stale diffs, pu chain breaks
         self._pending_drops: dict[str, int] = {s: 0 for s in symbols}
         self._pending_drop_start: dict[str, int | None] = {s: None for s in symbols}
+
+    def _record_drop(self, symbol: str) -> None:
+        """Record a dropped depth diff. Gap emitted later by set_sync_point."""
+        import time as _time
+        if self._pending_drop_start[symbol] is None:
+            self._pending_drop_start[symbol] = _time.time_ns()
+        self._pending_drops[symbol] += 1
 
     async def handle(self, symbol: str, raw_text: str, exchange_ts: int | None, session_seq: int) -> None:
         detector = self.detectors.get(symbol)
@@ -50,17 +58,16 @@ class DepthHandler(StreamHandler):
         result = detector.validate_diff(U=U, u=u, pu=pu)
 
         if result.stale:
-            logger.debug("depth_stale_diff_dropped", symbol=symbol, u=u)
+            # Diff is older than current sync point — dropped during resync.
+            # Count it; gap will be emitted when next set_sync_point completes.
+            self._record_drop(symbol)
             return
 
         if result.gap:
             logger.warning("depth_pu_chain_break", symbol=symbol,
                            expected_pu=detector._last_u, actual_pu=pu)
-            self.producer.emit_gap(
-                symbol=symbol, stream="depth", session_seq=session_seq,
-                reason="pu_chain_break",
-                detail=f"pu chain break: expected pu={detector._last_u}, got pu={pu}",
-            )
+            # Count this diff as dropped; the resync will record the total
+            self._record_drop(symbol)
             if self._on_pu_chain_break:
                 self._on_pu_chain_break(symbol)
             return
@@ -73,11 +80,7 @@ class DepthHandler(StreamHandler):
             else:
                 # Buffer full — count the drop, don't emit gap yet.
                 # Gap will be emitted when snapshot arrives (set_sync_point)
-                # or if the buffer fills again after a reset.
-                if self._pending_drop_start[symbol] is None:
-                    import time
-                    self._pending_drop_start[symbol] = time.time_ns()
-                self._pending_drops[symbol] += 1
+                self._record_drop(symbol)
                 if self._pending_drops[symbol] == 1:
                     # First drop — reset detector and clear buffer
                     logger.warning("depth_pending_buffer_full", symbol=symbol)
@@ -105,17 +108,20 @@ class DepthHandler(StreamHandler):
         if detector is None:
             return
 
-        # Emit deferred gap for any diffs that were dropped while awaiting this snapshot
+        # Emit deferred gap for any diffs dropped during resync
+        # (stale diffs, pu chain breaks, buffer overflow)
         dropped = self._pending_drops.get(symbol, 0)
         if dropped > 0:
             import time
             start_ts = self._pending_drop_start.get(symbol) or time.time_ns()
             self.producer.emit_gap(
                 symbol=symbol, stream="depth", session_seq=-1,
-                reason="buffer_overflow",
-                detail=f"Depth pending-diff buffer full; {dropped} diffs dropped while awaiting snapshot",
+                reason="pu_chain_break",
+                detail=f"Depth resync: {dropped} diffs dropped (stale/chain-break/overflow) while awaiting snapshot",
+                gap_start_ts=start_ts,
+                gap_end_ts=time.time_ns(),
             )
-            logger.info("depth_pending_drops_emitted", symbol=symbol, dropped=dropped)
+            logger.info("depth_resync_drops_emitted", symbol=symbol, dropped=dropped)
             self._pending_drops[symbol] = 0
             self._pending_drop_start[symbol] = None
 
