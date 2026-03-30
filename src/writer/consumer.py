@@ -102,7 +102,13 @@ class WriterConsumer:
 
         def _on_commit(err, partitions):
             if err is not None:
-                logger.error("kafka_commit_failed", error=str(err))
+                failed_parts = []
+                if partitions:
+                    for tp in partitions:
+                        if tp.error is not None:
+                            failed_parts.append(f"{tp.topic}[{tp.partition}]@{tp.offset}: {tp.error}")
+                logger.error("kafka_commit_failed", error=str(err),
+                             partitions=failed_parts or str(partitions))
                 writer_metrics.kafka_commit_failures_total.inc()
 
         self._consumer = KafkaConsumer({
