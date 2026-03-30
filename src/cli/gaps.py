@@ -347,6 +347,69 @@ def _scan_gaps(date_dir: Path) -> list[dict]:
     return gaps
 
 
+TIME_BASED_BACKFILL_STREAMS = frozenset({"funding_rate", "liquidations", "open_interest"})
+
+
+def find_time_based_gaps(
+    base_dir: Path,
+    exchange: str | None = None,
+    symbol: str | None = None,
+    date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    """Find ws_disconnect gap envelopes in time-based backfillable streams."""
+    gaps: list[dict] = []
+    for exch_dir in sorted(base_dir.iterdir()):
+        if not exch_dir.is_dir():
+            continue
+        if exchange and exch_dir.name != exchange:
+            continue
+        for sym_dir in sorted(exch_dir.iterdir()):
+            if not sym_dir.is_dir():
+                continue
+            if symbol and sym_dir.name != symbol:
+                continue
+            for stream_dir in sorted(sym_dir.iterdir()):
+                if not stream_dir.is_dir():
+                    continue
+                if stream_dir.name not in TIME_BASED_BACKFILL_STREAMS:
+                    continue
+                for date_dir in sorted(stream_dir.iterdir()):
+                    if not date_dir.is_dir():
+                        continue
+                    date_name = date_dir.name
+                    if date and date_name != date:
+                        continue
+                    if date_from and date_name < date_from:
+                        continue
+                    if date_to and date_name > date_to:
+                        continue
+                    gap_envs = _scan_gaps(date_dir)
+                    for g in gap_envs:
+                        start_ns = g.get("gap_start_ts", 0)
+                        end_ns = g.get("gap_end_ts", 0)
+                        if end_ns <= start_ns:
+                            continue
+                        from datetime import datetime, timezone
+                        try:
+                            dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
+                            hour = dt.hour
+                        except (ValueError, OSError):
+                            hour = 0
+                        gaps.append({
+                            "type": "time_gap",
+                            "exchange": exch_dir.name,
+                            "symbol": sym_dir.name,
+                            "stream": stream_dir.name,
+                            "date": date_name,
+                            "hour": hour,
+                            "start_ms": start_ns // 1_000_000,
+                            "end_ms": end_ns // 1_000_000,
+                        })
+    return gaps
+
+
 def _format_duration(ns: int) -> str:
     """Format a nanosecond duration into human-readable form.
 
