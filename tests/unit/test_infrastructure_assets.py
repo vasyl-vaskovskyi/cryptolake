@@ -156,8 +156,9 @@ class TestObservabilityAssets:
         }
 
         sampler = _read_yaml("infra/sampler/sampler.yml")
-        assert len(sampler["sparklines"]) == 16
+        assert len(sampler["sparklines"]) == 15
         assert len(sampler["gauges"]) == 1
+        assert len(sampler["textboxes"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
         assert receiver["url"] == "${WEBHOOK_URL}"
