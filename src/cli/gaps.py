@@ -129,6 +129,34 @@ async def _fetch_historical_all(
     return all_records
 
 
+async def _fetch_by_id(
+    adapter: BinanceAdapter,
+    symbol: str,
+    from_id: int,
+    to_id: int,
+) -> list[dict]:
+    """Fetch trades by aggregate trade ID range using fromId pagination."""
+    all_records: list[dict] = []
+    current_id = from_id
+
+    async with aiohttp.ClientSession() as session:
+        while current_id <= to_id:
+            url = adapter.build_historical_trades_url(symbol, from_id=current_id, limit=1000)
+            page = await _fetch_historical_page(session, url)
+            if not page:
+                break
+            for rec in page:
+                if rec.get("a", 0) > to_id:
+                    break
+                all_records.append(rec)
+            last_a = page[-1].get("a", 0)
+            if last_a >= to_id or len(page) < 1000:
+                break
+            current_id = last_a + 1
+
+    return all_records
+
+
 def _write_backfill_files(
     records: list[dict],
     *,
@@ -884,12 +912,13 @@ def analyze(exchange, symbol, stream, date, date_from, date_to, output_json, bas
 @click.option("--date-from", default=None, help="Start date inclusive (YYYY-MM-DD)")
 @click.option("--date-to", default=None, help="End date inclusive (YYYY-MM-DD)")
 @click.option("--dry-run", is_flag=True, help="Print backfill plan without fetching data")
+@click.option("--deep", is_flag=True, help="Also backfill gaps within existing files")
 @click.option(
     "--base-dir",
     default=DEFAULT_ARCHIVE_DIR,
     help="Archive base directory",
 )
-def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, base_dir):
+def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, base_dir):
     """Find gaps and backfill missing hours from Binance historical REST API."""
     base = Path(base_dir)
 
@@ -921,54 +950,161 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, base_d
 
     missing = _collect_missing_hours(report)
 
-    if not missing:
-        click.echo("Nothing to backfill: all backfillable hours are covered.")
-        return
-
-    if dry_run:
-        click.echo(f"Dry-run: {len(missing)} missing hour(s) to backfill:")
-        for exch_name, sym_name, stream_name, date_name, h in missing:
-            click.echo(f"  {exch_name}/{sym_name}/{stream_name}/{date_name}  hour={h}")
-        return
-
-    # Actual backfill
+    # Initialize shared state
     adapter = BinanceAdapter(ws_base="wss://fstream.binance.com", rest_base=BINANCE_REST_BASE)
     session_id = str(uuid.uuid4())
     total_written = 0
 
-    for exch_name, sym_name, stream_name, date_name, hour in missing:
-        start_ms, end_ms = _hour_to_ms_range(date_name, hour)
-        click.echo(f"Fetching {exch_name}/{sym_name}/{stream_name}/{date_name} hour={hour}...")
+    if not missing:
+        click.echo("Nothing to backfill: all backfillable hours are covered.")
+    elif dry_run:
+        click.echo(f"Dry-run: {len(missing)} missing hour(s) to backfill:")
+        for exch_name, sym_name, stream_name, date_name, h in missing:
+            click.echo(f"  {exch_name}/{sym_name}/{stream_name}/{date_name}  hour={h}")
+    else:
+        for exch_name, sym_name, stream_name, date_name, hour in missing:
+            start_ms, end_ms = _hour_to_ms_range(date_name, hour)
+            click.echo(f"Fetching {exch_name}/{sym_name}/{stream_name}/{date_name} hour={hour}...")
 
-        try:
-            records = asyncio.run(
-                _fetch_historical_all(adapter, sym_name, stream_name, start_ms, end_ms)
+            try:
+                records = asyncio.run(
+                    _fetch_historical_all(adapter, sym_name, stream_name, start_ms, end_ms)
+                )
+            except Exception as exc:
+                click.echo(f"  ERROR fetching: {exc}")
+                continue
+
+            if not records:
+                click.echo(f"  No records returned for hour {hour}.")
+                continue
+
+            backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
+            out_path, n = _write_backfill_files(
+                records,
+                base_dir=str(base),
+                exchange=exch_name,
+                symbol=sym_name,
+                stream=stream_name,
+                date=date_name,
+                session_id=session_id,
+                seq_offset=total_written,
+                backfill_seq=backfill_seq,
             )
-        except Exception as exc:
-            click.echo(f"  ERROR fetching: {exc}")
-            continue
+            total_written += n
+            if out_path:
+                click.echo(f"  Wrote {n} records -> {out_path}")
 
-        if not records:
-            click.echo(f"  No records returned for hour {hour}.")
-            continue
+        click.echo(f"Backfill complete: {total_written} total records written.")
 
-        backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
-        out_path, n = _write_backfill_files(
-            records,
-            base_dir=str(base),
-            exchange=exch_name,
-            symbol=sym_name,
-            stream=stream_name,
-            date=date_name,
-            session_id=session_id,
-            seq_offset=total_written,
-            backfill_seq=backfill_seq,
+    # Deep backfill: fill gaps within existing files
+    if deep:
+        from src.cli.integrity import find_backfillable_gaps
+        id_gaps = find_backfillable_gaps(
+            base,
+            exchange=exchange,
+            symbol=symbol,
+            date=date,
+            date_from=date_from,
+            date_to=date_to,
         )
-        total_written += n
-        if out_path:
-            click.echo(f"  Wrote {n} records -> {out_path}")
+        time_gaps = find_time_based_gaps(
+            base,
+            exchange=exchange,
+            symbol=symbol,
+            date=date,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        all_deep_gaps = id_gaps + time_gaps
 
-    click.echo(f"Backfill complete: {total_written} total records written.")
+        if not all_deep_gaps:
+            click.echo("Deep: no in-file gaps found.")
+        elif dry_run:
+            click.echo(f"Deep dry-run: {len(all_deep_gaps)} in-file gap(s) found:")
+            for g in id_gaps:
+                click.echo(
+                    f"  id_gap  {g['exchange']}/{g['symbol']}/{g['stream']}/{g['date']}"
+                    f"  from_id={g['from_id']} to_id={g['to_id']} missing={g['missing']}"
+                )
+            for g in time_gaps:
+                click.echo(
+                    f"  time_gap  {g['exchange']}/{g['symbol']}/{g['stream']}/{g['date']}"
+                    f"  start_ms={g['start_ms']} end_ms={g['end_ms']}"
+                )
+        else:
+            for g in id_gaps:
+                exch_name = g["exchange"]
+                sym_name = g["symbol"]
+                stream_name = g["stream"]
+                date_name = g["date"]
+                hour = g["hour"]
+                click.echo(
+                    f"Deep fetching id_gap {exch_name}/{sym_name}/{stream_name}/{date_name}"
+                    f"  from_id={g['from_id']} to_id={g['to_id']}..."
+                )
+                try:
+                    records = asyncio.run(
+                        _fetch_by_id(adapter, sym_name, g["from_id"], g["to_id"])
+                    )
+                except Exception as exc:
+                    click.echo(f"  ERROR fetching: {exc}")
+                    continue
+                if not records:
+                    click.echo("  No records returned.")
+                    continue
+                backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
+                out_path, n = _write_backfill_files(
+                    records,
+                    base_dir=str(base),
+                    exchange=exch_name,
+                    symbol=sym_name,
+                    stream=stream_name,
+                    date=date_name,
+                    session_id=session_id,
+                    seq_offset=total_written,
+                    backfill_seq=backfill_seq,
+                )
+                total_written += n
+                if out_path:
+                    click.echo(f"  Wrote {n} records -> {out_path}")
+
+            for g in time_gaps:
+                exch_name = g["exchange"]
+                sym_name = g["symbol"]
+                stream_name = g["stream"]
+                date_name = g["date"]
+                hour = g["hour"]
+                click.echo(
+                    f"Deep fetching time_gap {exch_name}/{sym_name}/{stream_name}/{date_name}"
+                    f"  start_ms={g['start_ms']} end_ms={g['end_ms']}..."
+                )
+                try:
+                    records = asyncio.run(
+                        _fetch_historical_all(adapter, sym_name, stream_name, g["start_ms"], g["end_ms"])
+                    )
+                except Exception as exc:
+                    click.echo(f"  ERROR fetching: {exc}")
+                    continue
+                if not records:
+                    click.echo("  No records returned.")
+                    continue
+                backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
+                out_path, n = _write_backfill_files(
+                    records,
+                    base_dir=str(base),
+                    exchange=exch_name,
+                    symbol=sym_name,
+                    stream=stream_name,
+                    date=date_name,
+                    session_id=session_id,
+                    seq_offset=total_written,
+                    backfill_seq=backfill_seq,
+                )
+                total_written += n
+                if out_path:
+                    click.echo(f"  Wrote {n} records -> {out_path}")
+
+            click.echo(f"Deep backfill complete: {total_written} total records written.")
 
 
 if __name__ == "__main__":

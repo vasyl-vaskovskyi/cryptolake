@@ -2,7 +2,8 @@ from pathlib import Path
 import hashlib
 import zstandard
 import orjson
-from src.cli.gaps import find_time_based_gaps
+from click.testing import CliRunner
+from src.cli.gaps import find_time_based_gaps, cli
 
 def _write_hour_file(base, exchange, symbol, stream, date, hour, envelopes):
     dir_path = base / exchange / symbol / stream / date
@@ -55,3 +56,26 @@ def test_find_time_based_gaps_ignores_depth(tmp_path):
     _write_hour_file(tmp_path, "binance", "btcusdt", "depth", "2026-03-30", 20, [data, gap])
     gaps = find_time_based_gaps(tmp_path, exchange="binance", symbol="btcusdt")
     assert len(gaps) == 0
+
+
+def _make_trade_env(a, seq):
+    raw = {"e": "aggTrade", "a": a, "s": "BTCUSDT", "p": "67000", "q": "0.1", "T": 1774900000000, "m": True}
+    raw_text = orjson.dumps(raw).decode()
+    return {
+        "v": 1, "type": "data", "exchange": "binance", "symbol": "btcusdt",
+        "stream": "trades", "received_at": 1774900000000000000, "exchange_ts": 1774900000000,
+        "collector_session_id": "test", "session_seq": seq,
+        "raw_text": raw_text, "raw_sha256": hashlib.sha256(raw_text.encode()).hexdigest(),
+        "_topic": "binance.trades", "_partition": 0, "_offset": seq,
+    }
+
+
+def test_deep_dry_run_shows_id_gaps(tmp_path):
+    envs = [_make_trade_env(100, 0), _make_trade_env(101, 1), _make_trade_env(110, 2), _make_trade_env(111, 3)]
+    _write_hour_file(tmp_path, "binance", "btcusdt", "trades", "2026-03-30", 20, envs)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["backfill", "--base-dir", str(tmp_path),
+                                 "--exchange", "binance", "--symbol", "btcusdt",
+                                 "--deep", "--dry-run"])
+    assert result.exit_code == 0
+    assert "id_gap" in result.output or "102" in result.output or "109" in result.output
