@@ -156,7 +156,7 @@ class TestObservabilityAssets:
         }
 
         sampler = _read_yaml("infra/sampler/sampler.yml")
-        assert len(sampler["sparklines"]) == 8
+        assert len(sampler["sparklines"]) == 7
         assert len(sampler["barcharts"]) == 1
         assert len(sampler["textboxes"]) == 1
         assert sampler["textboxes"][0]["title"] == "Health Counters /12h"
