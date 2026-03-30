@@ -82,12 +82,12 @@ sparklines:
 
 asciiboxes:
   - title: CryptoLake
-    position: [[0, 0], [40, 8]]
+    position: [[0, 0], [80, 6]]
     rate-ms: 1000
     font: 2d
     border: true
     sample: |
-        echo "${EXCHANGE:-BINANCE} ${SYMBOL:-BTCUSDT}" | tr '[:lower:]' '[:upper:]'
+        echo "${EXCHANGE:-BINANCE} - ${SYMBOL:-BTCUSDT}" | tr '[:lower:]' '[:upper:]'
 
 textboxes:
   - title: Health Counters /12h
