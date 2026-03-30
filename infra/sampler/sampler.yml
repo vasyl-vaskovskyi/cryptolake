@@ -40,12 +40,6 @@ sparklines:
     sample: |
         curl -sg "http://localhost:9090/api/v1/query?query=max(writer_consumer_lag{exchange=~\"${EXCHANGE:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
-  - title: Messages Dropped /12h
-    position: [[0, 0], [20, 8]]
-    rate-ms: 30000
-    sample: |
-        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_messages_dropped_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
-
   - title: Hours Sealed Today
     position: [[0, 20], [20, 8]]
     rate-ms: 60000
@@ -93,14 +87,8 @@ sparklines:
         curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
 textboxes:
-  - title: Backfill Last Run
-    position: [[60, 32], [20, 8]]
-    rate-ms: 60000
-    sample: |
-        TS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_last_run_timestamp_seconds' | jq '.data.result[0].value[1] // "0"' -r); RECS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_records_written' | jq '.data.result[0].value[1] // "0"' -r); GAPS=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_gaps_found' | jq '.data.result[0].value[1] // "0"' -r); OK=$(curl -sg 'http://localhost:9090/api/v1/query?query=backfill_last_run_success' | jq '.data.result[0].value[1] // "0"' -r); if [ "$TS" = "0" ]; then echo "no runs yet"; else AGO=$(( $(date +%s) - ${TS%.*} )); if [ "$AGO" -lt 3600 ]; then printf "%dm ago\ngaps=%s recs=%s\n%s" $((AGO/60)) "$GAPS" "$RECS" "$([ "$OK" = "1" ] && echo OK || echo FAIL)"; else printf "%dh ago\ngaps=%s recs=%s\n%s" $((AGO/3600)) "$GAPS" "$RECS" "$([ "$OK" = "1" ] && echo OK || echo FAIL)"; fi; fi
-
   - title: Health Counters /12h
     position: [[20, 8], [40, 20]]
     rate-ms: 30000
     sample: |
-        P="http://localhost:9090/api/v1/query?query="; E="exchange=~\"${EXCHANGE:-.*}\""; S="symbol=~\"${SYMBOL:-.*}\""; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; GAPS=$(q "sum(increase(collector_gaps_detected_total{${E},${S}}[12h]))"); KAFKA=$(q "sum(increase(writer_kafka_commit_failures_total[12h]))"); RECON=$(q "sum(increase(collector_ws_reconnects_total{${E}}[12h]))"); SFAIL=$(q "sum(increase(collector_snapshots_failed_total{${E},${S}}[12h]))"); CONN=$(q "sum(collector_ws_connections_active{${E}})"); WERR=$(q "sum(increase(writer_write_errors_total{${E},${S}}[12h]))"); DBFAIL=$(q "sum(increase(writer_pg_commit_failures_total[12h]))"); printf "%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s" "Gaps Detected" "$GAPS" "Kafka Commit Fail" "$KAFKA" "Reconnects" "$RECON" "Snapshots Failed" "$SFAIL" "Active Connections" "$CONN" "Write Errors" "$WERR" "DB Commit Fail" "$DBFAIL"
+        P="http://localhost:9090/api/v1/query?query="; E="exchange=~\"${EXCHANGE:-.*}\""; S="symbol=~\"${SYMBOL:-.*}\""; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; GAPS=$(q "sum(increase(collector_gaps_detected_total{${E},${S}}[12h]))"); DROPPED=$(q "sum(increase(collector_messages_dropped_total{${E},${S}}[12h]))"); KAFKA=$(q "sum(increase(writer_kafka_commit_failures_total[12h]))"); RECON=$(q "sum(increase(collector_ws_reconnects_total{${E}}[12h]))"); SFAIL=$(q "sum(increase(collector_snapshots_failed_total{${E},${S}}[12h]))"); CONN=$(q "sum(collector_ws_connections_active{${E}})"); WERR=$(q "sum(increase(writer_write_errors_total{${E},${S}}[12h]))"); DBFAIL=$(q "sum(increase(writer_pg_commit_failures_total[12h]))"); BFILL=$(q "backfill_runs_total"); printf "%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s\n%-22s %6s" "Gaps Detected" "$GAPS" "Messages Dropped" "$DROPPED" "Kafka Commit Fail" "$KAFKA" "Reconnects" "$RECON" "Snapshots Failed" "$SFAIL" "Active Connections" "$CONN" "Write Errors" "$WERR" "DB Commit Fail" "$DBFAIL" "Backfill Runs" "$BFILL"

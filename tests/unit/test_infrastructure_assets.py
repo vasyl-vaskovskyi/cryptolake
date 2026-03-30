@@ -156,12 +156,10 @@ class TestObservabilityAssets:
         }
 
         sampler = _read_yaml("infra/sampler/sampler.yml")
-        assert len(sampler["sparklines"]) == 9
+        assert len(sampler["sparklines"]) == 8
         assert len(sampler["barcharts"]) == 1
-        assert len(sampler["textboxes"]) == 2
-        textbox_titles = {t["title"] for t in sampler["textboxes"]}
-        assert "Health Counters /12h" in textbox_titles
-        assert "Backfill Last Run" in textbox_titles
+        assert len(sampler["textboxes"]) == 1
+        assert sampler["textboxes"][0]["title"] == "Health Counters /12h"
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
         assert receiver["url"] == "${WEBHOOK_URL}"
