@@ -80,6 +80,15 @@ sparklines:
     sample: |
         curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
+asciiboxes:
+  - title: CryptoLake
+    position: [[0, 0], [40, 8]]
+    rate-ms: 1000
+    font: 2d
+    border: true
+    sample: |
+        echo "${EXCHANGE:-BINANCE} ${SYMBOL:-BTCUSDT}" | tr '[:lower:]' '[:upper:]'
+
 textboxes:
   - title: Health Counters /12h
     position: [[20, 8], [40, 20]]
