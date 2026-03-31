@@ -314,17 +314,25 @@ def _scan_hours(date_dir: Path) -> dict[int, str]:
 
 
 def _scan_gaps(date_dir: Path) -> list[dict]:
-    """Read all .jsonl.zst files in date_dir and return gap envelopes.
+    """Read .jsonl.zst files in date_dir and return gap envelopes.
 
-    Enriches each gap with ``_records_missed`` by examining the session_seq
-    of neighbouring data envelopes.
+    Enriches each gap with ``_records_missed`` by tracking the session_seq
+    of the data envelope immediately before and after each gap — streams
+    through files without loading all records into memory.
     """
     if not date_dir.exists():
         return []
 
-    # Read ALL envelopes across all files for this date, preserving order
-    all_envs: list[dict] = []
+    gaps: list[dict] = []
     dctx = zstd.ZstdDecompressor()
+
+    # Stream through all files, tracking only what we need:
+    # - last data record's session_seq + session_id (for "before" context)
+    # - pending gaps waiting for the next data record (for "after" context)
+    last_data_seq: int | None = None
+    last_data_session: str | None = None
+    pending_gaps: list[dict] = []  # gaps waiting for next data record
+
     for f in sorted(date_dir.glob("*.jsonl.zst")):
         try:
             with open(f, "rb") as fh:
@@ -332,45 +340,50 @@ def _scan_gaps(date_dir: Path) -> list[dict]:
             for line in data.strip().split(b"\n"):
                 if not line:
                     continue
-                all_envs.append(orjson.loads(line))
+                env = orjson.loads(line)
+
+                if env.get("type") == "gap":
+                    # Store gap with its "before" context
+                    env["_prev_seq"] = last_data_seq
+                    env["_prev_session"] = last_data_session
+                    pending_gaps.append(env)
+
+                elif env.get("type") == "data":
+                    cur_seq = env.get("session_seq")
+                    cur_session = env.get("collector_session_id")
+
+                    # Resolve any pending gaps with this "after" context
+                    for g in pending_gaps:
+                        prev_seq = g.pop("_prev_seq", None)
+                        prev_session = g.pop("_prev_session", None)
+                        gap_seq = g.get("session_seq")
+                        gap_session = g.get("collector_session_id")
+
+                        if (prev_seq is not None and prev_session == gap_session
+                                and cur_session == gap_session and cur_seq is not None
+                                and cur_seq > prev_seq):
+                            g["_records_missed"] = cur_seq - prev_seq - 1
+                        elif (cur_session == gap_session and gap_seq is not None
+                              and gap_seq >= 0 and cur_seq is not None
+                              and cur_seq > gap_seq):
+                            g["_records_missed"] = cur_seq - gap_seq - 1
+                        else:
+                            g["_records_missed"] = None
+
+                    gaps.extend(pending_gaps)
+                    pending_gaps.clear()
+
+                    last_data_seq = cur_seq
+                    last_data_session = cur_session
         except Exception:
             pass
 
-    # Build gap list and compute records missed from surrounding data records
-    gaps: list[dict] = []
-    for i, env in enumerate(all_envs):
-        if env.get("type") != "gap":
-            continue
-
-        # Walk backwards to find the previous data envelope in the same session
-        prev_seq: int | None = None
-        gap_session = env.get("collector_session_id")
-        for j in range(i - 1, -1, -1):
-            prev = all_envs[j]
-            if prev.get("type") == "data" and prev.get("collector_session_id") == gap_session:
-                prev_seq = prev.get("session_seq")
-                break
-
-        # Walk forwards to find the next data envelope in the same session
-        next_seq: int | None = None
-        for j in range(i + 1, len(all_envs)):
-            nxt = all_envs[j]
-            if nxt.get("type") == "data" and nxt.get("collector_session_id") == gap_session:
-                next_seq = nxt.get("session_seq")
-                break
-
-        # Compute missed count
-        gap_seq = env.get("session_seq")
-        if prev_seq is not None and next_seq is not None and next_seq > prev_seq:
-            env["_records_missed"] = next_seq - prev_seq - 1
-        elif next_seq is not None and gap_seq is not None and gap_seq >= 0 and next_seq > gap_seq:
-            # No previous data (e.g. gap is first record in file), but we have
-            # the gap's own session_seq and the next data record's seq
-            env["_records_missed"] = next_seq - gap_seq - 1
-        else:
-            env["_records_missed"] = None
-
-        gaps.append(env)
+    # Any remaining pending gaps (no data record after them)
+    for g in pending_gaps:
+        g.pop("_prev_seq", None)
+        g.pop("_prev_session", None)
+        g["_records_missed"] = None
+    gaps.extend(pending_gaps)
 
     return gaps
 
