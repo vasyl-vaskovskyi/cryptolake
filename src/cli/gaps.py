@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import time
 import uuid
@@ -314,76 +315,30 @@ def _scan_hours(date_dir: Path) -> dict[int, str]:
 
 
 def _scan_gaps(date_dir: Path) -> list[dict]:
-    """Read .jsonl.zst files in date_dir and return gap envelopes.
+    """Read .jsonl.zst files in date_dir and return gap envelopes only.
 
-    Enriches each gap with ``_records_missed`` by tracking the session_seq
-    of the data envelope immediately before and after each gap — streams
-    through files without loading all records into memory.
+    Lightweight scan — uses streaming decompression and skips lines that
+    don't contain '"gap"'. Does NOT compute _records_missed (that's the
+    integrity checker's job).
     """
     if not date_dir.exists():
         return []
 
     gaps: list[dict] = []
-    dctx = zstd.ZstdDecompressor()
-
-    # Stream through all files, tracking only what we need:
-    # - last data record's session_seq + session_id (for "before" context)
-    # - pending gaps waiting for the next data record (for "after" context)
-    last_data_seq: int | None = None
-    last_data_session: str | None = None
-    pending_gaps: list[dict] = []  # gaps waiting for next data record
-
     for f in sorted(date_dir.glob("*.jsonl.zst")):
         try:
+            dctx = zstd.ZstdDecompressor()
             with open(f, "rb") as fh:
-                data = dctx.stream_reader(fh).read()
-            for line in data.strip().split(b"\n"):
-                if not line:
-                    continue
-                env = orjson.loads(line)
-
-                if env.get("type") == "gap":
-                    # Store gap with its "before" context
-                    env["_prev_seq"] = last_data_seq
-                    env["_prev_session"] = last_data_session
-                    pending_gaps.append(env)
-
-                elif env.get("type") == "data":
-                    cur_seq = env.get("session_seq")
-                    cur_session = env.get("collector_session_id")
-
-                    # Resolve any pending gaps with this "after" context
-                    for g in pending_gaps:
-                        prev_seq = g.pop("_prev_seq", None)
-                        prev_session = g.pop("_prev_session", None)
-                        gap_seq = g.get("session_seq")
-                        gap_session = g.get("collector_session_id")
-
-                        if (prev_seq is not None and prev_session == gap_session
-                                and cur_session == gap_session and cur_seq is not None
-                                and cur_seq > prev_seq):
-                            g["_records_missed"] = cur_seq - prev_seq - 1
-                        elif (cur_session == gap_session and gap_seq is not None
-                              and gap_seq >= 0 and cur_seq is not None
-                              and cur_seq > gap_seq):
-                            g["_records_missed"] = cur_seq - gap_seq - 1
-                        else:
-                            g["_records_missed"] = None
-
-                    gaps.extend(pending_gaps)
-                    pending_gaps.clear()
-
-                    last_data_seq = cur_seq
-                    last_data_session = cur_session
+                reader = dctx.stream_reader(fh)
+                text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+                for line in text_reader:
+                    if '"gap"' not in line:
+                        continue
+                    env = orjson.loads(line)
+                    if env.get("type") == "gap":
+                        gaps.append(env)
         except Exception:
             pass
-
-    # Any remaining pending gaps (no data record after them)
-    for g in pending_gaps:
-        g.pop("_prev_seq", None)
-        g.pop("_prev_session", None)
-        g["_records_missed"] = None
-    gaps.extend(pending_gaps)
 
     return gaps
 
@@ -488,17 +443,11 @@ def _ns_to_time(ns: int) -> str:
 def _records_missed(gap: dict) -> str:
     """Return records missed count as a string.
 
-    Uses the precomputed ``_records_missed`` field from ``_scan_gaps`` (based
-    on session_seq difference of surrounding data records). Falls back to
-    parsing the gap detail for session_seq_skip gaps. Shows "?" for missing
-    hour entries and gaps where the count cannot be determined.
+    Parses the count from the gap envelope's detail field. Shows "?" for
+    missing hour entries and gaps where the count cannot be determined.
+    For exact record counts, use the integrity checker instead.
     """
-    # Precomputed from surrounding data envelopes
-    precomputed = gap.get("_records_missed")
-    if precomputed is not None:
-        return str(precomputed)
-
-    # Fallback: parse from detail
+    # Parse from detail
     import re
     detail = gap.get("detail", "")
     # session_seq_skip: "expected 100, got 105" → 5
@@ -656,8 +605,7 @@ def analyze_archive(
                 for date_dir in dates_to_scan:
                     date_name = date_dir.name
                     hour_map = _scan_hours(date_dir)
-                    gaps = _scan_gaps(date_dir)
-                    all_dates_data.append((date_name, hour_map, gaps))
+                    all_dates_data.append((date_name, hour_map, []))
 
                 # Determine the recording window for this stream
                 first_hour: int | None = None
