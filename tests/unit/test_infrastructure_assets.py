@@ -155,13 +155,14 @@ class TestObservabilityAssets:
             "IncompleteDay",
         }
 
-        sampler = _read_yaml("infra/sampler/sampler.yml")
-        assert len(sampler["sparklines"]) == 7
-        assert len(sampler["barcharts"]) == 1
-        assert len(sampler["textboxes"]) == 1
-        assert len(sampler["asciiboxes"]) == 1
-        assert sampler["asciiboxes"][0]["title"] == "CryptoLake"
-        assert sampler["textboxes"][0]["title"] == "Health Counters /12h"
+        health = _read_yaml("infra/sampler/sampler-health.yml")
+        assert len(health["barcharts"]) == 1
+        assert len(health["sparklines"]) == 5
+
+        market = _read_yaml("infra/sampler/sampler-market.yml")
+        assert len(market["asciiboxes"]) == 1
+        assert len(market["sparklines"]) == 6
+        assert len(market["textboxes"]) == 1
 
         receiver = alertmanager["receivers"][0]["webhook_configs"][0]
         assert receiver["url"] == "${WEBHOOK_URL}"

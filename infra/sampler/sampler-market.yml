@@ -1,0 +1,63 @@
+# CryptoLake Market Dashboard — Per exchange/coin metrics
+# Run: EXCHANGE=binance SYMBOL=BTCUSDT sampler -c infra/sampler/sampler-market.yml
+#
+# Env vars:
+#   EXCHANGE  — filter by exchange (default: all)
+#   SYMBOL    — filter by trading pair (default: all)
+
+asciiboxes:
+  - title: CryptoLake
+    position: [[0, 0], [80, 6]]
+    rate-ms: 1000
+    font: 2d
+    border: true
+    sample: |
+        printf "%s-%s  %s  %s" "${EXCHANGE:-BNB}" "${SYMBOL:-BTCUSDT}" "$(TZ=UTC date +'%b %d')" "$(TZ=UTC date +'%H:%M')" | tr '[:lower:]' '[:upper:]'
+
+sparklines:
+# ── Row 1: Critical ──────────────────────────────────────────────
+
+  - title: Redpanda -> Writer Lag
+    position: [[0, 6], [27, 10]]
+    rate-ms: 5000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=max(writer_consumer_lag{exchange=~\"${EXCHANGE:-.*}\"})" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+  - title: Message Throughput msg/s
+    position: [[27, 6], [27, 10]]
+    rate-ms: 5000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(rate(collector_messages_produced_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[5m]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
+
+  - title: Latency p99 ms
+    position: [[54, 6], [26, 10]]
+    rate-ms: 5000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(collector_exchange_latency_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+# ── Row 2: Operational ───────────────────────────────────────────
+
+  - title: Compression Ratio
+    position: [[0, 16], [27, 8]]
+    rate-ms: 10000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=avg(avg_over_time(writer_compression_ratio{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[5m]))" | jq '[.data.result[].value[1] // "0"] | map(tonumber) | add / length' -r | xargs printf '%.1f'
+
+  - title: Flush Duration p99 ms
+    position: [[27, 16], [27, 8]]
+    rate-ms: 10000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,sum+by(le)(rate(writer_flush_duration_ms_bucket{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[15m])))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+  - title: Snapshots Taken /12h
+    position: [[54, 16], [26, 8]]
+    rate-ms: 30000
+    sample: |
+        curl -sg "http://localhost:9090/api/v1/query?query=sum(increase(collector_snapshots_taken_total{exchange=~\"${EXCHANGE:-.*}\",symbol=~\"${SYMBOL:-.*}\"}[12h]))" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+textboxes:
+  - title: Counters /12h
+    position: [[0, 24], [80, 16]]
+    rate-ms: 30000
+    sample: |
+        P="http://localhost:9090/api/v1/query?query="; E="exchange=~\"${EXCHANGE:-.*}\""; S="symbol=~\"${SYMBOL:-.*}\""; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; GAPS=$(q "sum(increase(collector_gaps_detected_total{${E},${S}}[12h]))"); DROPPED=$(q "sum(increase(collector_messages_dropped_total{${E},${S}}[12h]))"); RECON=$(q "sum(increase(collector_ws_reconnects_total{${E}}[12h]))"); SFAIL=$(q "sum(increase(collector_snapshots_failed_total{${E},${S}}[12h]))"); WERR=$(q "sum(increase(writer_write_errors_total{${E},${S}}[12h]))"); SEALED=$(q "min(writer_hours_sealed_today{${E},${S}})"); printf "%-22s %6s     %-22s %6s\n%-22s %6s     %-22s %6s\n%-22s %6s     %-22s %6s" "Gaps Detected" "$GAPS" "Messages Dropped" "$DROPPED" "Reconnects" "$RECON" "Snapshots Failed" "$SFAIL" "Write Errors" "$WERR" "Hours Sealed Today" "$SEALED"

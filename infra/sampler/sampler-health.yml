@@ -1,0 +1,49 @@
+# CryptoLake Health Dashboard — System-wide metrics (no exchange/coin filters)
+# Run: sampler -c infra/sampler/sampler-health.yml
+
+barcharts:
+  - title: System Resources %
+    position: [[0, 0], [26, 14]]
+    rate-ms: 5000
+    scale: 0
+    items:
+      - label: CPU
+        sample: |
+            CORES=$(sysctl -n hw.ncpu); ps -A -o %cpu | awk -v c="$CORES" '{s+=$1} END {v=s/c; if(v>100)v=100; printf "%.0f\n", v}'
+      - label: MEM
+        sample: |
+            vm_stat | awk '/Pages active/{a=$3}/Pages wired/{w=$4}/Pages occupied/{o=$5}/page size/{p=$8}END{gsub(/\./,"",a);gsub(/\./,"",w);gsub(/\./,"",o);used=(a+w+o)*p;total='"$(sysctl -n hw.memsize)"';printf "%.0f\n",used/total*100}'
+      - label: DISK
+        sample: |
+            curl -sg 'http://localhost:9090/api/v1/query?query=writer_disk_usage_pct' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+sparklines:
+  - title: Net KB/s
+    position: [[0, 14], [26, 10]]
+    rate-ms: 5000
+    sample: |
+        B=$(netstat -ib | awk '/en0.*<Link/{print $7+$10; exit}'); if [ -f /tmp/.sampler_net_prev ]; then PREV=$(cat /tmp/.sampler_net_prev); echo "$B" > /tmp/.sampler_net_prev; printf "%.0f" $(( (B - PREV) / 5 / 1024 )); else echo "$B" > /tmp/.sampler_net_prev; echo 0; fi
+
+  - title: Active Connections
+    position: [[26, 0], [27, 12]]
+    rate-ms: 5000
+    sample: |
+        curl -sg 'http://localhost:9090/api/v1/query?query=sum(collector_ws_connections_active)' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+  - title: Kafka Commit Fail /12h
+    position: [[26, 12], [27, 12]]
+    rate-ms: 30000
+    sample: |
+        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(writer_kafka_commit_failures_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+  - title: DB Commit Fail /12h
+    position: [[53, 0], [27, 12]]
+    rate-ms: 30000
+    sample: |
+        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(writer_pg_commit_failures_total[12h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+
+  - title: Backfill Runs
+    position: [[53, 12], [27, 12]]
+    rate-ms: 60000
+    sample: |
+        curl -sg 'http://localhost:9090/api/v1/query?query=backfill_runs_total' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
