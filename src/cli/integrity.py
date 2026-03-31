@@ -14,9 +14,11 @@ Streams NOT checked (no sequential ID):
 """
 from __future__ import annotations
 
+import io
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import Iterator
 
 import click
 import orjson
@@ -29,27 +31,36 @@ DEFAULT_ARCHIVE_DIR = default_archive_dir()
 CHECKABLE_STREAMS = {"trades", "depth", "bookticker"}
 
 
-def _decompress_data_records(file_path: Path) -> list[dict]:
-    """Decompress a .jsonl.zst file and return only data envelopes."""
-    dctx = zstd.ZstdDecompressor()
-    with open(file_path, "rb") as f:
-        data = dctx.stream_reader(f).read()
-    records = []
-    for line in data.strip().split(b"\n"):
-        if not line:
-            continue
-        env = orjson.loads(line)
-        if env.get("type") == "data":
-            records.append(env)
-    return records
+def _stream_data_records(files: list[Path]) -> Iterator[tuple[bytes, int]]:
+    """Stream (raw_text bytes, received_at) from sorted .jsonl.zst files.
+
+    Yields only data records. Uses streaming decompression — O(1) memory
+    regardless of file size.
+    """
+    for f in files:
+        try:
+            dctx = zstd.ZstdDecompressor()
+            with open(f, "rb") as fh:
+                reader = dctx.stream_reader(fh)
+                text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+                for line in text_reader:
+                    if '"data"' not in line:
+                        continue
+                    env = orjson.loads(line)
+                    if env.get("type") == "data":
+                        yield env["raw_text"].encode(), env.get("received_at", 0)
+        except Exception:
+            pass
 
 
-def _check_trades(records: list[dict]) -> list[dict]:
-    """Check aggregate trade ID ("a") continuity."""
+def _check_trades(files: list[Path]) -> tuple[int, list[dict]]:
+    """Check aggregate trade ID ("a") continuity. Returns (record_count, breaks)."""
     breaks: list[dict] = []
     prev_a: int | None = None
-    for rec in records:
-        raw = orjson.loads(rec["raw_text"])
+    count = 0
+    for raw_bytes, received_at in _stream_data_records(files):
+        count += 1
+        raw = orjson.loads(raw_bytes)
         a = raw.get("a")
         if a is None:
             continue
@@ -59,19 +70,20 @@ def _check_trades(records: list[dict]) -> list[dict]:
                 "expected": prev_a + 1,
                 "actual": a,
                 "missing": a - prev_a - 1,
-                "at_received": rec.get("received_at"),
+                "at_received": received_at,
             })
         prev_a = a
-    return breaks
+    return count, breaks
 
 
-def _check_depth(records: list[dict]) -> list[dict]:
-    """Check depth pu-chain continuity: each diff's pu must equal previous u."""
+def _check_depth(files: list[Path]) -> tuple[int, list[dict]]:
+    """Check depth pu-chain continuity. Returns (record_count, breaks)."""
     breaks: list[dict] = []
     prev_u: int | None = None
-    for rec in records:
-        raw = orjson.loads(rec["raw_text"])
-        U = raw.get("U", 0)
+    count = 0
+    for raw_bytes, received_at in _stream_data_records(files):
+        count += 1
+        raw = orjson.loads(raw_bytes)
         u = raw.get("u", 0)
         pu = raw.get("pu", 0)
         if prev_u is not None and pu != prev_u:
@@ -80,14 +92,14 @@ def _check_depth(records: list[dict]) -> list[dict]:
                 "expected": prev_u,
                 "actual": pu,
                 "missing": None,
-                "at_received": rec.get("received_at"),
+                "at_received": received_at,
             })
         prev_u = u
-    return breaks
+    return count, breaks
 
 
-def _check_bookticker(records: list[dict]) -> list[dict]:
-    """Check bookticker update ID ("u") for backwards jumps.
+def _check_bookticker(files: list[Path]) -> tuple[int, list[dict]]:
+    """Check bookticker update ID ("u") for backwards jumps. Returns (record_count, breaks).
 
     The "u" field is a GLOBAL order book update ID shared across all symbols.
     Forward jumps are normal (other symbols' updates consume IDs). Only
@@ -95,8 +107,10 @@ def _check_bookticker(records: list[dict]) -> list[dict]:
     """
     breaks: list[dict] = []
     prev_u: int | None = None
-    for rec in records:
-        raw = orjson.loads(rec["raw_text"])
+    count = 0
+    for raw_bytes, received_at in _stream_data_records(files):
+        count += 1
+        raw = orjson.loads(raw_bytes)
         u = raw.get("u")
         if u is None:
             continue
@@ -106,10 +120,10 @@ def _check_bookticker(records: list[dict]) -> list[dict]:
                 "expected": prev_u + 1,
                 "actual": u,
                 "missing": None,
-                "at_received": rec.get("received_at"),
+                "at_received": received_at,
             })
         prev_u = u
-    return breaks
+    return count, breaks
 
 
 CHECKERS = {
@@ -177,24 +191,18 @@ def check_integrity(
                     if date_to and date_name > date_to:
                         continue
 
-                    # Read all data records across all hour files for this date,
-                    # sorted by file name (hour order)
-                    all_records: list[dict] = []
                     files = sorted(date_dir.glob("hour-*.jsonl.zst"))
-                    for f in files:
-                        try:
-                            all_records.extend(_decompress_data_records(f))
-                        except Exception:
-                            pass
-
-                    if not all_records:
+                    if not files:
                         continue
 
-                    breaks = checker(all_records)
+                    count, breaks = checker(files)
+
+                    if count == 0:
+                        continue
 
                     key = (exch_dir.name, sym_dir.name, stream_name, date_name)
                     report[key] = {
-                        "records": len(all_records),
+                        "records": count,
                         "breaks": breaks,
                     }
 
