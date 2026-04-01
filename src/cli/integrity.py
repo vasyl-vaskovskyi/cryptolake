@@ -191,7 +191,8 @@ def check_integrity(
                     if date_to and date_name > date_to:
                         continue
 
-                    files = sorted(date_dir.glob("hour-*.jsonl.zst"))
+                    files = sorted(date_dir.glob("hour-*.jsonl.zst"),
+                                   key=lambda f: int(f.name.split(".")[0].replace("hour-", "")))
                     if not files:
                         continue
 
