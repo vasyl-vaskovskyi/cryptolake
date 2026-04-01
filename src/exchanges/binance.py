@@ -124,6 +124,30 @@ class BinanceAdapter:
             f"?symbol={symbol.upper()}&period=5m&startTime={start_time}&endTime={end_time}&limit={limit}"
         )
 
+    def build_mark_price_klines_url(
+        self, symbol: str, *, start_time: int, end_time: int, interval: str = "1m", limit: int = 1000,
+    ) -> str:
+        return (
+            f"{self.rest_base}/fapi/v1/markPriceKlines"
+            f"?symbol={symbol.upper()}&interval={interval}&startTime={start_time}&endTime={end_time}&limit={limit}"
+        )
+
+    def build_index_price_klines_url(
+        self, symbol: str, *, start_time: int, end_time: int, interval: str = "1m", limit: int = 1000,
+    ) -> str:
+        return (
+            f"{self.rest_base}/fapi/v1/indexPriceKlines"
+            f"?symbol={symbol.upper()}&pair={symbol.upper()}&interval={interval}&startTime={start_time}&endTime={end_time}&limit={limit}"
+        )
+
+    def build_premium_index_klines_url(
+        self, symbol: str, *, start_time: int, end_time: int, interval: str = "1m", limit: int = 1000,
+    ) -> str:
+        return (
+            f"{self.rest_base}/fapi/v1/premiumIndexKlines"
+            f"?symbol={symbol.upper()}&interval={interval}&startTime={start_time}&endTime={end_time}&limit={limit}"
+        )
+
     def parse_snapshot_last_update_id(self, raw_text: str) -> int:
         parsed = orjson.loads(raw_text)
         return parsed["lastUpdateId"]
