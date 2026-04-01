@@ -82,6 +82,96 @@ async def _fetch_historical_page(session: aiohttp.ClientSession, url: str) -> li
         return await resp.json(content_type=None)
 
 
+def _compute_next_funding_time(event_time_ms: int) -> int:
+    from datetime import datetime, timezone, timedelta
+    dt = datetime.fromtimestamp(event_time_ms / 1000, tz=timezone.utc)
+    hour = dt.hour
+    if hour < 8:
+        next_dt = dt.replace(hour=8, minute=0, second=0, microsecond=0)
+    elif hour < 16:
+        next_dt = dt.replace(hour=16, minute=0, second=0, microsecond=0)
+    else:
+        next_day = (dt + timedelta(days=1))
+        next_dt = next_day.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(next_dt.timestamp() * 1000)
+
+
+def _build_mark_price_update(symbol, mark_kline, index_kline, premium_kline, funding_rate):
+    event_time = mark_kline[6] + 1
+    return {
+        "e": "markPriceUpdate",
+        "E": event_time,
+        "s": symbol,
+        "p": mark_kline[4],
+        "ap": mark_kline[4],
+        "P": premium_kline[4],
+        "i": index_kline[4],
+        "r": funding_rate,
+        "T": _compute_next_funding_time(event_time),
+    }
+
+
+async def _fetch_funding_rate_composite(adapter, symbol, start_ms, end_ms):
+    async with aiohttp.ClientSession() as session:
+        mark_klines = []
+        index_klines = []
+        premium_klines = []
+
+        current = start_ms
+        while current <= end_ms:
+            mark_url = adapter.build_mark_price_klines_url(symbol, start_time=current, end_time=end_ms)
+            index_url = adapter.build_index_price_klines_url(symbol, start_time=current, end_time=end_ms)
+            premium_url = adapter.build_premium_index_klines_url(symbol, start_time=current, end_time=end_ms)
+
+            mark_page, index_page, premium_page = await asyncio.gather(
+                _fetch_historical_page(session, mark_url),
+                _fetch_historical_page(session, index_url),
+                _fetch_historical_page(session, premium_url),
+            )
+
+            if not mark_page:
+                break
+
+            mark_klines.extend(mark_page)
+            index_klines.extend(index_page or [])
+            premium_klines.extend(premium_page or [])
+
+            last_open = mark_page[-1][0]
+            if last_open >= end_ms or len(mark_page) < 1000:
+                break
+            current = last_open + 60000
+
+        if not mark_klines:
+            return []
+
+        funding_url = adapter.build_historical_funding_url(symbol, start_time=start_ms, end_time=end_ms)
+        funding_records = await _fetch_historical_page(session, funding_url) or []
+
+        funding_rates = sorted([(fr["fundingTime"], fr["fundingRate"]) for fr in funding_records])
+
+        def _get_rate(event_ms):
+            rate = "0"
+            for ft, fr in funding_rates:
+                if ft <= event_ms:
+                    rate = fr
+                else:
+                    break
+            return rate
+
+        index_by_time = {k[0]: k for k in index_klines}
+        premium_by_time = {k[0]: k for k in premium_klines}
+
+        records = []
+        for mk in mark_klines:
+            open_time = mk[0]
+            ik = index_by_time.get(open_time, mk)
+            pk = premium_by_time.get(open_time, [open_time, "0", "0", "0", "0"])
+            rate = _get_rate(mk[6] + 1)
+            records.append(_build_mark_price_update(symbol.upper(), mk, ik, pk, rate))
+
+    return records
+
+
 async def _fetch_historical_all(
     adapter: BinanceAdapter,
     symbol: str,
@@ -90,6 +180,9 @@ async def _fetch_historical_all(
     end_ms: int,
 ) -> list[dict]:
     """Fetch all records for the given stream/symbol in [start_ms, end_ms] with pagination."""
+    if stream == "funding_rate":
+        return await _fetch_funding_rate_composite(adapter, symbol, start_ms, end_ms)
+
     ts_key = STREAM_TS_KEYS[stream]
     all_records: list[dict] = []
 
@@ -98,10 +191,6 @@ async def _fetch_historical_all(
         while current_start <= end_ms:
             if stream == "trades":
                 url = adapter.build_historical_trades_url(
-                    symbol, start_time=current_start, end_time=end_ms, limit=1000
-                )
-            elif stream == "funding_rate":
-                url = adapter.build_historical_funding_url(
                     symbol, start_time=current_start, end_time=end_ms, limit=1000
                 )
             elif stream == "liquidations":
