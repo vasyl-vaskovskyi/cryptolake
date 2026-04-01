@@ -24,7 +24,7 @@ NON_BACKFILLABLE_STREAMS = frozenset({"depth", "depth_snapshot", "bookticker"})
 
 STREAM_TS_KEYS = {
     "trades": "T",
-    "funding_rate": "fundingTime",
+    "funding_rate": "E",
     "liquidations": "time",
     "open_interest": "timestamp",
 }
@@ -76,10 +76,19 @@ def _wrap_backfill_envelope(
     }
 
 
-async def _fetch_historical_page(session: aiohttp.ClientSession, url: str) -> list[dict]:
-    async with session.get(url) as resp:
-        resp.raise_for_status()
-        return await resp.json(content_type=None)
+async def _fetch_historical_page(
+    session: aiohttp.ClientSession,
+    url: str,
+    max_retries: int = 5,
+) -> list[dict]:
+    for attempt in range(max_retries + 1):
+        async with session.get(url) as resp:
+            if resp.status in (429, 418) and attempt < max_retries:
+                retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
+                await asyncio.sleep(retry_after)
+                continue
+            resp.raise_for_status()
+            return await resp.json(content_type=None)
 
 
 def _compute_next_funding_time(event_time_ms: int) -> int:
