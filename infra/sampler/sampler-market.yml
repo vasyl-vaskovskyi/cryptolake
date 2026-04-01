@@ -12,7 +12,7 @@ asciiboxes:
     font: 2d
     border: true
     sample: |
-        printf "%s-%s  %s  %s" "${EXCHANGE:-BNB}" "${SYMBOL:-BTCUSDT}" "$(TZ=UTC date +'%b %d')" "$(TZ=UTC date +'%H:%M')" | tr '[:lower:]' '[:upper:]'
+        E="${EXCHANGE:-binance}"; case "$E" in binance) E=BNB;; esac; printf "%s-%s  %s  %s" "$E" "${SYMBOL:-BTCUSDT}" "$(TZ=UTC date +'%b %d')" "$(TZ=UTC date +'%H:%M')" | tr '[:lower:]' '[:upper:]'
 
 sparklines:
 # ── Row 1: Critical ──────────────────────────────────────────────
