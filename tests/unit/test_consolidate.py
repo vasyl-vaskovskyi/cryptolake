@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from src.common.envelope import VALID_GAP_REASONS, create_gap_envelope
-from src.cli.consolidate import discover_hour_files, merge_hour, synthesize_missing_hour_gap
+from src.cli.consolidate import discover_hour_files, merge_hour, synthesize_missing_hour_gap, write_daily_file
 
 
 def _make_data_env(exchange_ts=1000):
@@ -180,3 +180,54 @@ def test_synthesize_missing_hour_gap_hour_boundaries():
     )
     expected_end = int(datetime(2026, 3, 29, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000) - 1
     assert env["gap_end_ts"] == expected_end
+
+
+# --- Task 5: Streaming daily file writer ---
+
+def test_write_daily_file_creates_compressed_output(tmp_path):
+    output_path = tmp_path / "2026-03-28.jsonl.zst"
+    records_by_hour = {
+        0: [_make_data_env(exchange_ts=100), _make_data_env(exchange_ts=200)],
+        1: [_make_data_env(exchange_ts=300)],
+    }
+
+    def hour_iterator():
+        for h in range(24):
+            if h in records_by_hour:
+                yield h, records_by_hour[h]
+
+    stats = write_daily_file(output_path, hour_iterator())
+    assert output_path.exists()
+    assert stats["total_records"] == 3
+    assert stats["data_records"] == 3
+    assert stats["gap_records"] == 0
+
+    dctx = zstandard.ZstdDecompressor()
+    with open(output_path, "rb") as fh:
+        data = dctx.stream_reader(fh).read()
+    lines = [l for l in data.strip().split(b"\n") if l]
+    assert len(lines) == 3
+    first = orjson.loads(lines[0])
+    assert first["exchange_ts"] == 100
+
+
+def test_write_daily_file_with_gap_envelopes(tmp_path):
+    output_path = tmp_path / "2026-03-28.jsonl.zst"
+    gap_env = {
+        "v": 1, "type": "gap", "exchange": "binance", "symbol": "btcusdt",
+        "stream": "trades", "received_at": 500,
+        "collector_session_id": "test", "session_seq": -1,
+        "gap_start_ts": 200_000_000_000, "gap_end_ts": 300_000_000_000,
+        "reason": "missing_hour", "detail": "test",
+    }
+
+    def hour_iterator():
+        yield 0, [_make_data_env(exchange_ts=100)]
+        yield 1, [gap_env]
+
+    stats = write_daily_file(output_path, hour_iterator())
+    assert stats["total_records"] == 2
+    assert stats["data_records"] == 1
+    assert stats["gap_records"] == 1
+    assert stats["hours"][0]["data_records"] == 1
+    assert stats["hours"][1]["data_records"] == 0

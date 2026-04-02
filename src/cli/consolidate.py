@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Iterator
 
 import orjson
 import structlog
@@ -113,3 +114,37 @@ def synthesize_missing_hour_gap(
         reason="missing_hour",
         detail=f"No data files found for hour {hour}; not recoverable via backfill",
     )
+
+
+def write_daily_file(
+    output_path: Path,
+    hour_records: Iterator[tuple[int, list[dict]]],
+) -> dict:
+    cctx = zstd.ZstdCompressor(level=3)
+    stats = {
+        "total_records": 0,
+        "data_records": 0,
+        "gap_records": 0,
+        "hours": {},
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "wb") as fh:
+        with cctx.stream_writer(fh) as writer:
+            for hour, records in hour_records:
+                hour_data = 0
+                hour_gaps = 0
+                for record in records:
+                    line = orjson.dumps(record) + b"\n"
+                    writer.write(line)
+                    if record.get("type") == "gap":
+                        hour_gaps += 1
+                    else:
+                        hour_data += 1
+                stats["hours"][hour] = {
+                    "data_records": hour_data,
+                    "gap_records": hour_gaps,
+                }
+                stats["total_records"] += hour_data + hour_gaps
+                stats["data_records"] += hour_data
+                stats["gap_records"] += hour_gaps
+    return stats
