@@ -703,7 +703,8 @@ def analyze_archive(
                 for date_dir in dates_to_scan:
                     date_name = date_dir.name
                     hour_map = _scan_hours(date_dir)
-                    all_dates_data.append((date_name, hour_map, []))
+                    gap_envs = _scan_gaps(date_dir) if date_dir.exists() else []
+                    all_dates_data.append((date_name, hour_map, gap_envs))
 
                 # Determine the recording window for this stream
                 first_hour: int | None = None
