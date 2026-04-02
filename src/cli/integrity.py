@@ -255,48 +255,63 @@ def _print_report(report: dict) -> None:
     total_breaks = 0
     total_missing = 0
 
-    for (exch, sym, stream, date_name), info in sorted(report.items()):
+    # Collect all rows for a single table
+    rows: list[tuple[str, str, str, int, str, str, str, str]] = []
+
+    for (exch, sym, stream_name, date_name), info in sorted(report.items()):
         records = info["records"]
         breaks = info["breaks"]
         total_records += records
 
+        path = f"{exch}/{sym}/{stream_name}/{date_name}"
+
         if not breaks:
-            click.echo(f"  {exch}/{sym}/{stream}/{date_name}  {records:>8} records  OK")
+            rows.append((path, str(records), "OK", "", "", "", "", ""))
             continue
 
         total_breaks += len(breaks)
         missing_sum = sum(b["missing"] or 0 for b in breaks)
         total_missing += missing_sum
 
-        click.echo(f"  {exch}/{sym}/{stream}/{date_name}  {records:>8} records  {len(breaks)} BREAKS  {missing_sum} missing")
-        click.echo("")
-        click.echo(f"    {'Field':<6} {'Expected':>14}  {'Actual':>14}  {'Missing':>8}  {'Time':>8}")
-        click.echo(f"    {'-'*6} {'-'*14}  {'-'*14}  {'-'*8}  {'-'*8}")
         for b in breaks:
             missing_str = str(b["missing"]) if b["missing"] is not None else "chain"
             time_str = _ns_to_time(b["at_received"]) if b["at_received"] else ""
-            click.echo(
-                f"    {b['field']:<6} {b['expected']:>14}  {b['actual']:>14}  {missing_str:>8}  {time_str:>8}"
-            )
-        click.echo("")
+            rows.append((
+                path, str(records), "BREAK",
+                b["field"], str(b["expected"]), str(b["actual"]),
+                missing_str, time_str,
+            ))
+
+    # Print table
+    click.echo("")
+    hdr = (
+        f"  {'Path':<42} {'Records':>8}  {'Status':<6}  "
+        f"{'Field':<6} {'Expected':>16}  {'Actual':>16}  {'Missing':>8}  {'Time':>8}"
+    )
+    click.echo(hdr)
+    click.echo(f"  {'-'*42} {'-'*8}  {'-'*6}  {'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}")
+
+    for path, records, status, field, expected, actual, missing, time_str in rows:
+        click.echo(
+            f"  {path:<42} {records:>8}  {status:<6}  "
+            f"{field:<6} {expected:>16}  {actual:>16}  {missing:>8}  {time_str:>8}"
+        )
 
     # Cross-reference: bookticker integrity via depth chain
-    # Group results by (exchange, symbol, date) to check if depth is clean
-    # for the same symbol/date where bookticker was checked
     by_sym_date: dict[tuple, dict[str, bool]] = defaultdict(dict)
-    for (exch, sym, stream, date_name), info in report.items():
+    for (exch, sym, stream_name, date_name), info in report.items():
         key = (exch, sym, date_name)
-        by_sym_date[key][stream] = len(info["breaks"]) == 0
+        by_sym_date[key][stream_name] = len(info["breaks"]) == 0
 
     bookticker_notes: list[str] = []
-    for (exch, sym, date_name), streams in sorted(by_sym_date.items()):
-        if "bookticker" not in streams:
+    for (exch, sym, date_name), streams_map in sorted(by_sym_date.items()):
+        if "bookticker" not in streams_map:
             continue
-        if "depth" in streams:
-            if streams["depth"]:
+        if "depth" in streams_map:
+            if streams_map["depth"]:
                 bookticker_notes.append(
                     f"  {exch}/{sym}/bookticker/{date_name}: "
-                    f"depth chain OK — bookticker integrity confirmed (same WebSocket, no drops)")
+                    f"depth chain OK — bookticker confirmed")
             else:
                 bookticker_notes.append(
                     f"  {exch}/{sym}/bookticker/{date_name}: "
@@ -304,20 +319,16 @@ def _print_report(report: dict) -> None:
         else:
             bookticker_notes.append(
                 f"  {exch}/{sym}/bookticker/{date_name}: "
-                f"no depth data to cross-reference — bookticker integrity unverifiable")
+                f"no depth data — bookticker unverifiable")
 
-    click.echo(f"\n{'='*60}")
-    click.echo(f"INTEGRITY SUMMARY")
-    click.echo(f"{'='*60}")
-    click.echo(f"  Records checked:  {total_records}")
-    click.echo(f"  ID breaks found:  {total_breaks}")
-    click.echo(f"  Records missing:  {total_missing}")
-    if total_records > 0 and total_breaks == 0:
-        click.echo(f"  Status:           ALL IDs CONSECUTIVE")
-    elif total_breaks > 0:
-        click.echo(f"  Status:           INTEGRITY VIOLATIONS FOUND")
+    click.echo(f"\n  {'─'*42} {'-'*8}  {'-'*6}  {'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}")
+    click.echo(
+        f"  {'TOTAL':<42} {total_records:>8}  "
+        f"{'OK' if total_breaks == 0 else f'{total_breaks} breaks':<6}  "
+        f"{'':6} {'':>16}  {'':>16}  {total_missing:>8}"
+    )
     if bookticker_notes:
-        click.echo(f"\n  Bookticker cross-reference (via depth pu-chain):")
+        click.echo(f"\n  Notes:")
         for note in bookticker_notes:
             click.echo(note)
 

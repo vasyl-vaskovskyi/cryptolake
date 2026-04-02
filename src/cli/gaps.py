@@ -753,23 +753,17 @@ def analyze_archive(
 
 
 def _print_report(report: dict) -> None:
-    """Print a human-readable coverage report with gap table and summaries."""
-    # Accumulators for grand total
+    """Print a single unified table of all gaps across all streams."""
+    # Collect all rows and totals
+    rows: list[dict] = []
     grand_total_gaps = 0
-    grand_total_gaps_dur = 0
-    grand_restored_gaps = 0
-    grand_restored_gaps_dur = 0
-    grand_unrecoverable_gaps = 0
-    grand_unrecoverable_gaps_dur = 0
-    grand_remaining_gaps = 0
-    grand_remaining_gaps_dur = 0
-    grand_recorded_dur = 0
+    grand_restored = 0
+    grand_unrecoverable = 0
+    grand_remaining = 0
+    grand_total_dur = 0
 
     for exch_name, symbols in sorted(report.items()):
         for sym_name, streams in sorted(symbols.items()):
-            click.echo(f"\n{exch_name} / {sym_name}")
-            click.echo("=" * 80)
-
             for stream_name, dates in sorted(streams.items()):
                 for date_name, info in sorted(dates.items()):
                     covered = info["covered"]
@@ -778,15 +772,13 @@ def _print_report(report: dict) -> None:
                     gaps = info["gaps"]
                     expect_from = info.get("expect_from", 0)
                     expect_to = info.get("expect_to", 23)
-                    hours_line = _format_hours_line(hour_map, expect_from, expect_to)
 
-                    click.echo(f"\n  {stream_name} / {date_name}  {covered}/{total} hours")
-                    click.echo(f"  Hours: {hours_line}")
+                    path = f"{exch_name}/{sym_name}/{stream_name}/{date_name}"
+                    hours_str = f"{covered}/{total}h"
 
-                    # Build unified gap list: gap records + missing hours (as synthetic entries)
+                    # Build unified gap list
                     all_entries: list[dict] = []
 
-                    # Add missing hours as synthetic gap entries (only within recording window)
                     for h in range(expect_from, expect_to + 1):
                         if h not in hour_map:
                             from datetime import datetime, timezone, timedelta
@@ -801,123 +793,86 @@ def _print_report(report: dict) -> None:
                                 "reason": "missing_hour",
                                 "gap_start_ts": start_ns,
                                 "gap_end_ts": end_ns,
-                                "_gap_status": file_st,  # MISSING, RECOVERED, UNRECOVERABLE
-                                "_file_status": file_st,
-                                "_is_hour_gap": True,
+                                "_status": file_st,
                             })
 
-                    # Add actual gap records from files
                     for g in gaps:
-                        g_status = _gap_status(g, stream_name)
                         all_entries.append({
                             **g,
-                            "_gap_status": g_status,
-                            "_file_status": "OK",
-                            "_is_hour_gap": False,
+                            "_status": _gap_status(g, stream_name),
                         })
 
-                    # Sort all entries by start timestamp, then by end
                     all_entries.sort(key=lambda e: (e.get("gap_start_ts", 0), e.get("gap_end_ts", 0)))
 
                     if not all_entries:
-                        click.echo("  No gaps.")
+                        rows.append({
+                            "path": path, "hours": hours_str,
+                            "reason": "", "start": "", "end": "",
+                            "duration": "", "missed": "", "status": "OK",
+                        })
                         continue
 
-                    # Compute effective (non-overlapping) duration for each gap.
-                    # Gaps from sparse streams (e.g. liquidations) record gap_start_ts
-                    # as the last message received_at, which can be hours before the
-                    # actual disconnect.  By tracking a high-water mark we count each
-                    # moment of gap time only once.
+                    # Compute effective durations
                     high_water = 0
                     for entry in all_entries:
                         start_ts = entry.get("gap_start_ts", 0)
                         end_ts = entry.get("gap_end_ts", 0)
                         effective_start = max(start_ts, high_water)
-                        effective_dur = max(0, end_ts - effective_start)
-                        entry["_effective_dur_ns"] = effective_dur
+                        entry["_dur_ns"] = max(0, end_ts - effective_start)
                         if end_ts > high_water:
                             high_water = end_ts
 
-                    # Print table header
-                    click.echo("")
-                    hdr = (
-                        f"  {'Reason':<20} {'Start':>8}  {'End':>8}  "
-                        f"{'Duration':>12}  {'Missed':>6}  {'Status':<15} {'File Status':<15}"
-                    )
-                    click.echo(hdr)
-                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*6}  {'-'*15} {'-'*15}")
-
-                    # Per-stream/date accumulators
-                    st_total = 0
-                    st_total_dur = 0
-                    st_restored = 0
-                    st_restored_dur = 0
-                    st_unrecoverable = 0
-                    st_unrecoverable_dur = 0
-                    st_remaining = 0
-                    st_remaining_dur = 0
-
                     for entry in all_entries:
-                        reason = entry.get("reason", "unknown")
-                        start_ts = entry.get("gap_start_ts", 0)
-                        end_ts = entry.get("gap_end_ts", 0)
-                        dur_ns = entry["_effective_dur_ns"]
-                        gap_status = entry["_gap_status"]
-                        file_status = entry["_file_status"]
-                        missed = _records_missed(entry)
-
-                        start_str = _ns_to_time(start_ts)
-                        end_str = _ns_to_time(end_ts)
-                        dur_str = _format_duration(dur_ns)
-
-                        click.echo(
-                            f"  {reason:<20} {start_str:>8}  {end_str:>8}  "
-                            f"{dur_str:>12}  {missed:>6}  {gap_status:<15} {file_status:<15}"
-                        )
-
-                        # Accumulate
-                        st_total += 1
-                        st_total_dur += dur_ns
-                        if gap_status == "RECOVERED" or file_status == "RECOVERED":
-                            st_restored += 1
-                            st_restored_dur += dur_ns
-                        elif gap_status == "UNRECOVERABLE" or file_status == "UNRECOVERABLE":
-                            st_unrecoverable += 1
-                            st_unrecoverable_dur += dur_ns
+                        status = entry["_status"]
+                        dur_ns = entry["_dur_ns"]
+                        grand_total_gaps += 1
+                        grand_total_dur += dur_ns
+                        if status == "RECOVERED":
+                            grand_restored += 1
+                        elif status == "UNRECOVERABLE":
+                            grand_unrecoverable += 1
                         else:
-                            st_remaining += 1
-                            st_remaining_dur += dur_ns
+                            grand_remaining += 1
 
-                    # Total recorded duration = covered hours × 1h in nanoseconds
-                    recorded_dur_ns = covered * 3_600_000_000_000
+                        rows.append({
+                            "path": path, "hours": hours_str,
+                            "reason": entry.get("reason", "unknown"),
+                            "start": _ns_to_time(entry.get("gap_start_ts", 0)),
+                            "end": _ns_to_time(entry.get("gap_end_ts", 0)),
+                            "duration": _format_duration(dur_ns),
+                            "missed": _records_missed(entry),
+                            "status": status,
+                        })
 
-                    # Per-stream/date summary
-                    click.echo(f"  {'-'*20} {'-'*8}  {'-'*8}  {'-'*12}  {'-'*6}  {'-'*15} {'-'*15}")
-                    click.echo(f"  Total recorded:      {_format_duration(recorded_dur_ns)}")
-                    click.echo(f"  Total gaps:          {st_total:>4} / {_format_duration(st_total_dur)}")
-                    click.echo(f"  Restored:            {st_restored:>4} / {_format_duration(st_restored_dur)}")
-                    click.echo(f"  Unrecoverable:       {st_unrecoverable:>4} / {_format_duration(st_unrecoverable_dur)}")
-                    click.echo(f"  Remaining to restore:{st_remaining:>4} / {_format_duration(st_remaining_dur)}")
+    # Print table
+    click.echo("")
+    hdr = (
+        f"  {'Path':<42} {'Hours':>5}  {'Reason':<16} "
+        f"{'Start':>8}  {'End':>8}  {'Duration':>10}  {'Missed':>7}  {'Status':<14}"
+    )
+    click.echo(hdr)
+    click.echo(
+        f"  {'-'*42} {'-'*5}  {'-'*16} "
+        f"{'-'*8}  {'-'*8}  {'-'*10}  {'-'*7}  {'-'*14}"
+    )
 
-                    grand_total_gaps += st_total
-                    grand_total_gaps_dur += st_total_dur
-                    grand_restored_gaps += st_restored
-                    grand_restored_gaps_dur += st_restored_dur
-                    grand_unrecoverable_gaps += st_unrecoverable
-                    grand_unrecoverable_gaps_dur += st_unrecoverable_dur
-                    grand_remaining_gaps += st_remaining
-                    grand_remaining_gaps_dur += st_remaining_dur
-                    grand_recorded_dur += recorded_dur_ns
+    for row in rows:
+        click.echo(
+            f"  {row['path']:<42} {row['hours']:>5}  {row['reason']:<16} "
+            f"{row['start']:>8}  {row['end']:>8}  {row['duration']:>10}  "
+            f"{row['missed']:>7}  {row['status']:<14}"
+        )
 
-    # Grand total
-    click.echo(f"\n{'=' * 80}")
-    click.echo("TOTAL SUMMARY")
-    click.echo(f"{'=' * 80}")
-    click.echo(f"  Total recorded:            {_format_duration(grand_recorded_dur)}")
-    click.echo(f"  Total gaps:          {grand_total_gaps:>4} / {_format_duration(grand_total_gaps_dur)}")
-    click.echo(f"  Restored:            {grand_restored_gaps:>4} / {_format_duration(grand_restored_gaps_dur)}")
-    click.echo(f"  Unrecoverable:       {grand_unrecoverable_gaps:>4} / {_format_duration(grand_unrecoverable_gaps_dur)}")
-    click.echo(f"  Remaining to restore:{grand_remaining_gaps:>4} / {_format_duration(grand_remaining_gaps_dur)}")
+    click.echo(
+        f"  {'-'*42} {'-'*5}  {'-'*16} "
+        f"{'-'*8}  {'-'*8}  {'-'*10}  {'-'*7}  {'-'*14}"
+    )
+    click.echo(
+        f"  {'TOTAL':<42} {'':>5}  "
+        f"{grand_total_gaps} gaps{'':<11} {'':>8}  {'':>8}  "
+        f"{_format_duration(grand_total_dur):>10}  {'':>7}  "
+        f"R:{grand_restored} U:{grand_unrecoverable} M:{grand_remaining}"
+    )
 
 
 @click.group()
