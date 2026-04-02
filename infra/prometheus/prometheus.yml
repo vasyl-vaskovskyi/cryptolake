@@ -23,6 +23,10 @@ scrape_configs:
     static_configs:
       - targets: ["backfill:8002"]
 
+  - job_name: consolidation
+    static_configs:
+      - targets: ["consolidation:8003"]
+
   - job_name: redpanda
     static_configs:
       - targets: ["redpanda:9644"]
