@@ -379,3 +379,66 @@ def consolidate_day(
         "total_records": stats["total_records"],
         "missing_hours": missing_hours,
     }
+
+
+import click
+
+
+ALL_STREAMS = [
+    "trades", "depth", "depth_snapshot", "bookticker",
+    "funding_rate", "liquidations", "open_interest",
+]
+
+
+@click.group()
+def cli():
+    """Daily consolidation CLI."""
+    pass
+
+
+@cli.command()
+@click.option("--base-dir", default=None, help="Archive base directory")
+@click.option("--exchange", default="binance", help="Exchange name")
+@click.option("--symbol", required=True, help="Trading symbol (e.g. btcusdt)")
+@click.option("--stream", default=None, help="Specific stream to consolidate (default: all)")
+@click.option("--date", "target_date", required=True, help="Date to consolidate (YYYY-MM-DD)")
+def run(base_dir, exchange, symbol, stream, target_date):
+    """Consolidate hourly files into a daily file."""
+    from src.common.config import default_archive_dir
+    from src.common.logging import setup_logging
+
+    setup_logging()
+
+    if base_dir is None:
+        base_dir = default_archive_dir()
+
+    streams = [stream] if stream else ALL_STREAMS
+
+    for s in streams:
+        date_dir = Path(base_dir) / exchange / symbol.lower() / s / target_date
+        if not date_dir.is_dir():
+            continue
+
+        result = consolidate_day(
+            base_dir=base_dir,
+            exchange=exchange,
+            symbol=symbol,
+            stream=s,
+            date=target_date,
+        )
+
+        if result.get("skipped"):
+            click.echo(f"[{s}] Skipped (already consolidated or no data)")
+        elif result.get("success"):
+            click.echo(
+                f"[{s}] Complete: {result['total_records']} records, "
+                f"{len(result.get('missing_hours', []))} missing hours"
+            )
+        else:
+            click.echo(f"[{s}] FAILED: {result.get('error', 'unknown error')}")
+
+    click.echo("Consolidation finished.")
+
+
+if __name__ == "__main__":
+    cli()

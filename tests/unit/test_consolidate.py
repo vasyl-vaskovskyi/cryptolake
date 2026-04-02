@@ -478,3 +478,36 @@ def test_consolidate_day_skips_already_consolidated(tmp_path):
         date="2026-03-28",
     )
     assert result["skipped"] is True
+
+
+# --- Task 10: CLI entry point ---
+
+from click.testing import CliRunner
+from src.cli.consolidate import cli
+
+
+def test_cli_consolidate_full_day(tmp_path):
+    base_dir = _setup_full_day(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "run", "--base-dir", str(base_dir),
+        "--exchange", "binance", "--symbol", "btcusdt",
+        "--date", "2026-03-28",
+    ])
+    assert result.exit_code == 0
+    assert "complete" in result.output.lower() or "finished" in result.output.lower()
+    daily = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.jsonl.zst"
+    assert daily.exists()
+
+
+def test_cli_consolidate_specific_stream(tmp_path):
+    base_dir = _setup_full_day(tmp_path, stream="depth")
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "run", "--base-dir", str(base_dir),
+        "--exchange", "binance", "--symbol", "btcusdt",
+        "--stream", "depth", "--date", "2026-03-28",
+    ])
+    assert result.exit_code == 0
+    daily = base_dir / "binance" / "btcusdt" / "depth" / "2026-03-28.jsonl.zst"
+    assert daily.exists()
