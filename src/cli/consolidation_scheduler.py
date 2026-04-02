@@ -6,8 +6,9 @@ Runs once daily at a configurable hour (default 02:30 UTC).
 from __future__ import annotations
 
 import asyncio
+import os
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import structlog
@@ -58,8 +59,8 @@ consolidation_missing_hours = Counter(
 
 
 def _get_target_date() -> str:
-    """Return yesterday's date as YYYY-MM-DD string."""
-    yesterday = date.today() - timedelta(days=1)
+    """Return yesterday's date as YYYY-MM-DD string (UTC)."""
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
     return yesterday.isoformat()
 
 
@@ -162,7 +163,7 @@ async def _run_consolidation_cycle(base_dir: str) -> None:
 
 async def main() -> None:
     base_dir = default_archive_dir()
-    start_hour = DEFAULT_START_HOUR
+    start_hour = int(os.environ.get("CONSOLIDATION_START_HOUR_UTC", DEFAULT_START_HOUR))
     start_minute = DEFAULT_START_MINUTE
 
     logger.info("consolidation_scheduler_starting",
