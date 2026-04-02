@@ -811,11 +811,6 @@ def _print_report(report: dict) -> None:
                     all_entries.sort(key=lambda e: (e.get("gap_start_ts", 0), e.get("gap_end_ts", 0)))
 
                     if not all_entries:
-                        rows.append({
-                            "entity": stream_name, "date": date_name, "hour": "",
-                            "reason": "", "start": "", "end": "",
-                            "duration": "", "missed": "", "status": "OK",
-                        })
                         continue
 
                     # Compute effective durations

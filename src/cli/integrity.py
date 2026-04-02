@@ -274,11 +274,6 @@ def _print_report(report: dict) -> None:
         entity = f"{stream_name}"
 
         if not breaks:
-            rows.append({
-                "entity": entity, "date": date_name, "hour": "",
-                "records": str(records), "status": "OK",
-                "field": "", "expected": "", "actual": "", "missing": "", "time": "",
-            })
             continue
 
         total_breaks += len(breaks)
