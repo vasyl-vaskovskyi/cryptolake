@@ -209,3 +209,45 @@ def verify_daily_file(
         return False, f"Record count mismatch: expected {expected_count}, got {count}"
 
     return True, None
+
+
+def write_manifest(
+    *,
+    manifest_path: Path,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    date: str,
+    daily_file_name: str,
+    daily_file_sha256: str,
+    stats: dict,
+    hour_details: dict[int, dict],
+    source_files: list[str],
+    missing_hours: list[int],
+) -> None:
+    manifest = {
+        "version": 1,
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "date": date,
+        "consolidated_at": datetime.now(timezone.utc).isoformat(),
+        "daily_file": daily_file_name,
+        "daily_file_sha256": daily_file_sha256,
+        "total_records": stats["total_records"],
+        "data_records": stats["data_records"],
+        "gap_records": stats["gap_records"],
+        "hours": {},
+        "missing_hours": missing_hours,
+        "source_files": source_files,
+    }
+
+    all_hours = set(stats.get("hours", {}).keys()) | set(hour_details.keys())
+    for h in sorted(all_hours):
+        hour_key = str(h)
+        entry = dict(hour_details.get(h, {}))
+        if h in stats.get("hours", {}):
+            entry.update(stats["hours"][h])
+        manifest["hours"][hour_key] = entry
+
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

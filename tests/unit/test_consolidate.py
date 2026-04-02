@@ -12,6 +12,7 @@ from src.cli.consolidate import (
     synthesize_missing_hour_gap,
     write_daily_file,
     verify_daily_file,
+    write_manifest,
 )
 from src.writer.file_rotator import compute_sha256, write_sha256_sidecar, sidecar_path
 
@@ -303,3 +304,52 @@ def test_verify_daily_file_fails_on_decreasing_ts(tmp_path):
     ok, error = verify_daily_file(output_path, expected_count=2, sha256_path=sc)
     assert ok is False
     assert "order" in error.lower()
+
+
+# --- Task 7: Manifest writer ---
+
+def test_write_manifest_structure(tmp_path):
+    manifest_path = tmp_path / "2026-03-28.manifest.json"
+    write_manifest(
+        manifest_path=manifest_path,
+        exchange="binance",
+        symbol="btcusdt",
+        stream="trades",
+        date="2026-03-28",
+        daily_file_name="2026-03-28.jsonl.zst",
+        daily_file_sha256="abc123",
+        stats={
+            "total_records": 100,
+            "data_records": 98,
+            "gap_records": 2,
+            "hours": {
+                0: {"data_records": 50, "gap_records": 0},
+                1: {"data_records": 48, "gap_records": 0},
+                14: {"data_records": 0, "gap_records": 2},
+            },
+        },
+        hour_details={
+            0: {"status": "present", "sources": ["hour-0.jsonl.zst"]},
+            1: {"status": "present", "sources": ["hour-1.jsonl.zst", "hour-1.late-1.jsonl.zst"]},
+            14: {"status": "missing", "synthesized_gap": True},
+        },
+        source_files=["hour-0.jsonl.zst", "hour-1.jsonl.zst", "hour-1.late-1.jsonl.zst"],
+        missing_hours=[14],
+    )
+
+    assert manifest_path.exists()
+    m = json.loads(manifest_path.read_text())
+    assert m["version"] == 1
+    assert m["exchange"] == "binance"
+    assert m["symbol"] == "btcusdt"
+    assert m["stream"] == "trades"
+    assert m["date"] == "2026-03-28"
+    assert m["daily_file"] == "2026-03-28.jsonl.zst"
+    assert m["daily_file_sha256"] == "abc123"
+    assert m["total_records"] == 100
+    assert m["data_records"] == 98
+    assert m["gap_records"] == 2
+    assert m["missing_hours"] == [14]
+    assert "14" in m["hours"]
+    assert m["hours"]["14"]["status"] == "missing"
+    assert "consolidated_at" in m
