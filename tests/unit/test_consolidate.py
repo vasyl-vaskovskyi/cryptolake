@@ -2,8 +2,10 @@ import zstandard
 import orjson
 from pathlib import Path
 
+from datetime import datetime, timezone
+
 from src.common.envelope import VALID_GAP_REASONS, create_gap_envelope
-from src.cli.consolidate import discover_hour_files, merge_hour
+from src.cli.consolidate import discover_hour_files, merge_hour, synthesize_missing_hour_gap
 
 
 def _make_data_env(exchange_ts=1000):
@@ -137,3 +139,44 @@ def test_merge_hour_preserves_gap_envelopes(tmp_path):
     types = [r["type"] for r in records]
     assert "gap" in types
     assert "data" in types
+
+
+# --- Task 4: Gap envelope synthesis for missing hours ---
+
+def test_synthesize_missing_hour_gap_structure():
+    env = synthesize_missing_hour_gap(
+        exchange="binance",
+        symbol="btcusdt",
+        stream="trades",
+        date="2026-03-28",
+        hour=14,
+        session_id="consolidation-2026-03-29T02:30:00Z",
+    )
+    assert env["v"] == 1
+    assert env["type"] == "gap"
+    assert env["exchange"] == "binance"
+    assert env["symbol"] == "btcusdt"
+    assert env["stream"] == "trades"
+    assert env["reason"] == "missing_hour"
+    assert env["session_seq"] == -1
+    assert "hour 14" in env["detail"]
+    expected_start = int(datetime(2026, 3, 28, 14, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    assert env["gap_start_ts"] == expected_start
+    expected_end = int(datetime(2026, 3, 28, 15, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000) - 1
+    assert env["gap_end_ts"] == expected_end
+
+
+def test_synthesize_missing_hour_gap_hour_boundaries():
+    env = synthesize_missing_hour_gap(
+        exchange="binance", symbol="btcusdt", stream="depth",
+        date="2026-03-28", hour=0, session_id="consolidation-test",
+    )
+    expected_start = int(datetime(2026, 3, 28, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    assert env["gap_start_ts"] == expected_start
+
+    env = synthesize_missing_hour_gap(
+        exchange="binance", symbol="btcusdt", stream="depth",
+        date="2026-03-28", hour=23, session_id="consolidation-test",
+    )
+    expected_end = int(datetime(2026, 3, 29, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000) - 1
+    assert env["gap_end_ts"] == expected_end

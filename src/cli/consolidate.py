@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import orjson
 import structlog
 import zstandard as zstd
+
+from src.common.envelope import create_gap_envelope
 
 logger = structlog.get_logger()
 
@@ -83,3 +86,30 @@ def merge_hour(hour: int, file_group: dict) -> list[dict]:
         all_records.extend(_decompress_and_parse(path))
     all_records.sort(key=_sort_key)
     return all_records
+
+
+def synthesize_missing_hour_gap(
+    *,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    date: str,
+    hour: int,
+    session_id: str,
+) -> dict:
+    year, month, day = (int(x) for x in date.split("-"))
+    hour_start = datetime(year, month, day, hour, 0, 0, tzinfo=timezone.utc)
+    hour_end_exclusive = hour_start + timedelta(hours=1)
+    gap_start_ns = int(hour_start.timestamp() * 1_000_000_000)
+    gap_end_ns = int(hour_end_exclusive.timestamp() * 1_000_000_000) - 1
+    return create_gap_envelope(
+        exchange=exchange,
+        symbol=symbol,
+        stream=stream,
+        collector_session_id=session_id,
+        session_seq=-1,
+        gap_start_ts=gap_start_ns,
+        gap_end_ts=gap_end_ns,
+        reason="missing_hour",
+        detail=f"No data files found for hour {hour}; not recoverable via backfill",
+    )
