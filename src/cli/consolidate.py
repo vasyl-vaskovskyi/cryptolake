@@ -4,7 +4,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import orjson
 import structlog
+import zstandard as zstd
 
 logger = structlog.get_logger()
 
@@ -52,3 +54,32 @@ def discover_hour_files(date_dir: Path) -> dict[int, dict]:
         hour_data["backfill"].sort(key=lambda p: int(_RE_BACKFILL.match(p.name).group(2)))
 
     return groups
+
+
+def _decompress_and_parse(file_path: Path) -> list[dict]:
+    dctx = zstd.ZstdDecompressor()
+    with open(file_path, "rb") as fh:
+        data = dctx.stream_reader(fh).read()
+    result = []
+    for line in data.strip().split(b"\n"):
+        if line:
+            result.append(orjson.loads(line))
+    return result
+
+
+def _sort_key(record: dict) -> int:
+    if record.get("type") == "gap":
+        return record["gap_start_ts"]
+    return record["exchange_ts"]
+
+
+def merge_hour(hour: int, file_group: dict) -> list[dict]:
+    all_records: list[dict] = []
+    if file_group["base"] is not None:
+        all_records.extend(_decompress_and_parse(file_group["base"]))
+    for path in file_group["late"]:
+        all_records.extend(_decompress_and_parse(path))
+    for path in file_group["backfill"]:
+        all_records.extend(_decompress_and_parse(path))
+    all_records.sort(key=_sort_key)
+    return all_records
