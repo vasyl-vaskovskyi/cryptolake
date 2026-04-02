@@ -395,3 +395,86 @@ def test_cleanup_does_not_remove_unrelated_files(tmp_path):
 
     assert not zst_file.exists()
     assert unrelated.exists()
+
+
+# --- Task 9: Main orchestrator ---
+
+from src.cli.consolidate import consolidate_day
+
+
+def _setup_full_day(tmp_path, hours=range(24), stream="trades"):
+    """Create a full day of hourly files for testing."""
+    base_dir = tmp_path
+    date_dir = base_dir / "binance" / "btcusdt" / stream / "2026-03-28"
+    # 2026-03-28 00:00:00 UTC in nanoseconds
+    _day_start_ns = int(datetime(2026, 3, 28, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    for h in hours:
+        # Use epoch-based nanosecond timestamps to be consistent with gap envelope timestamps
+        envs = [_make_data_env(exchange_ts=_day_start_ns + h * 3_600_000_000_000 + i) for i in range(3)]
+        _write_zst_file(date_dir / f"hour-{h}.jsonl.zst", envs)
+        from src.writer.file_rotator import write_sha256_sidecar, sidecar_path as sc_path
+        data_path = date_dir / f"hour-{h}.jsonl.zst"
+        write_sha256_sidecar(data_path, sc_path(data_path))
+    return base_dir
+
+
+def test_consolidate_day_full_day(tmp_path):
+    base_dir = _setup_full_day(tmp_path)
+    result = consolidate_day(
+        base_dir=str(base_dir),
+        exchange="binance",
+        symbol="btcusdt",
+        stream="trades",
+        date="2026-03-28",
+    )
+    assert result["success"] is True
+    assert result["total_records"] == 72  # 24 hours * 3 records
+
+    daily = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.jsonl.zst"
+    assert daily.exists()
+    assert daily.with_suffix(".zst.sha256").exists()
+
+    manifest = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.manifest.json"
+    assert manifest.exists()
+
+    date_dir = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28"
+    zst_files = list(date_dir.glob("hour-*.jsonl.zst"))
+    assert len(zst_files) == 0
+    sha_files = list(date_dir.glob("*.sha256"))
+    assert len(sha_files) == 24
+
+
+def test_consolidate_day_with_missing_hours(tmp_path):
+    hours = [h for h in range(23) if h != 14]
+    base_dir = _setup_full_day(tmp_path, hours=hours)
+    result = consolidate_day(
+        base_dir=str(base_dir),
+        exchange="binance",
+        symbol="btcusdt",
+        stream="trades",
+        date="2026-03-28",
+    )
+    assert result["success"] is True
+    assert result["missing_hours"] == [14, 23]
+    assert result["total_records"] == 68  # 22 hours * 3 records + 2 gap envelopes
+
+    m = json.loads(
+        (base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.manifest.json").read_text()
+    )
+    assert 14 in m["missing_hours"]
+
+
+def test_consolidate_day_skips_already_consolidated(tmp_path):
+    base_dir = _setup_full_day(tmp_path)
+    daily = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.jsonl.zst"
+    daily.parent.mkdir(parents=True, exist_ok=True)
+    daily.write_bytes(b"fake")
+
+    result = consolidate_day(
+        base_dir=str(base_dir),
+        exchange="binance",
+        symbol="btcusdt",
+        stream="trades",
+        date="2026-03-28",
+    )
+    assert result["skipped"] is True

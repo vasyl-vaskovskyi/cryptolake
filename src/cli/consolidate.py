@@ -12,7 +12,7 @@ import structlog
 import zstandard as zstd
 
 from src.common.envelope import create_gap_envelope
-from src.writer.file_rotator import compute_sha256
+from src.writer.file_rotator import compute_sha256, write_sha256_sidecar, sidecar_path
 
 logger = structlog.get_logger()
 
@@ -262,3 +262,120 @@ def cleanup_hourly_files(date_dir: Path, consolidated_files: list[Path]) -> int:
             removed += 1
             logger.info("cleanup_removed", file=f.name)
     return removed
+
+
+def consolidate_day(
+    *,
+    base_dir: str,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    date: str,
+) -> dict:
+    """Consolidate all hourly files for one exchange/symbol/stream/date into a daily file."""
+    session_id = f"consolidation-{datetime.now(timezone.utc).isoformat()}"
+    base = Path(base_dir)
+    stream_dir = base / exchange / symbol.lower() / stream
+    date_dir = stream_dir / date
+    daily_path = stream_dir / f"{date}.jsonl.zst"
+    sha_path = sidecar_path(daily_path)
+    manifest_path = stream_dir / f"{date}.manifest.json"
+
+    if daily_path.exists():
+        logger.info("consolidation_skipped", exchange=exchange, symbol=symbol,
+                     stream=stream, date=date, reason="daily file already exists")
+        return {"skipped": True, "success": True}
+
+    if not date_dir.is_dir():
+        logger.warning("consolidation_no_date_dir", exchange=exchange, symbol=symbol,
+                       stream=stream, date=date)
+        return {"skipped": True, "success": True}
+
+    hour_files = discover_hour_files(date_dir)
+
+    missing_hours = []
+    source_files = []
+    hour_details: dict[int, dict] = {}
+
+    for h in range(24):
+        if h not in hour_files:
+            missing_hours.append(h)
+            hour_details[h] = {"status": "missing", "synthesized_gap": True}
+        else:
+            fg = hour_files[h]
+            sources = []
+            if fg["base"]:
+                sources.append(fg["base"].name)
+            sources.extend(f.name for f in fg["late"])
+            sources.extend(f.name for f in fg["backfill"])
+            source_files.extend(sources)
+
+            if fg["base"]:
+                status = "present"
+            elif fg["backfill"]:
+                status = "backfilled"
+            else:
+                status = "late"
+            hour_details[h] = {"status": status, "sources": sources}
+
+    logger.info("consolidation_starting", exchange=exchange, symbol=symbol,
+                stream=stream, date=date, present_hours=24 - len(missing_hours),
+                missing_hours=len(missing_hours))
+
+    def hour_iterator():
+        for h in range(24):
+            if h in hour_files:
+                records = merge_hour(h, hour_files[h])
+                yield h, records
+            else:
+                gap = synthesize_missing_hour_gap(
+                    exchange=exchange, symbol=symbol, stream=stream,
+                    date=date, hour=h, session_id=session_id,
+                )
+                yield h, [gap]
+
+    stats = write_daily_file(daily_path, hour_iterator())
+    write_sha256_sidecar(daily_path, sha_path)
+    daily_sha = compute_sha256(daily_path)
+
+    write_manifest(
+        manifest_path=manifest_path,
+        exchange=exchange,
+        symbol=symbol,
+        stream=stream,
+        date=date,
+        daily_file_name=daily_path.name,
+        daily_file_sha256=daily_sha,
+        stats=stats,
+        hour_details=hour_details,
+        source_files=source_files,
+        missing_hours=missing_hours,
+    )
+
+    ok, error = verify_daily_file(daily_path, stats["total_records"], sha_path)
+    if not ok:
+        logger.error("consolidation_verification_failed", exchange=exchange,
+                     symbol=symbol, stream=stream, date=date, error=error)
+        daily_path.unlink(missing_ok=True)
+        sha_path.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+        return {"success": False, "error": error}
+
+    consolidated_files = []
+    for h, fg in hour_files.items():
+        if fg["base"]:
+            consolidated_files.append(fg["base"])
+        consolidated_files.extend(fg["late"])
+        consolidated_files.extend(fg["backfill"])
+    cleanup_hourly_files(date_dir, consolidated_files)
+
+    logger.info("consolidation_complete", exchange=exchange, symbol=symbol,
+                stream=stream, date=date, total_records=stats["total_records"],
+                missing_hours=len(missing_hours))
+
+    return {
+        "success": True,
+        "skipped": False,
+        "total_records": stats["total_records"],
+        "missing_hours": missing_hours,
+    }
