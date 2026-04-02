@@ -13,6 +13,7 @@ from src.cli.consolidate import (
     write_daily_file,
     verify_daily_file,
     write_manifest,
+    cleanup_hourly_files,
 )
 from src.writer.file_rotator import compute_sha256, write_sha256_sidecar, sidecar_path
 
@@ -353,3 +354,44 @@ def test_write_manifest_structure(tmp_path):
     assert "14" in m["hours"]
     assert m["hours"]["14"]["status"] == "missing"
     assert "consolidated_at" in m
+
+
+# --- Task 8: Cleanup function ---
+
+def test_cleanup_removes_zst_keeps_sha256(tmp_path):
+    date_dir = tmp_path / "2026-03-28"
+    date_dir.mkdir()
+
+    zst_file = date_dir / "hour-0.jsonl.zst"
+    sha_file = date_dir / "hour-0.jsonl.zst.sha256"
+    zst_file.write_bytes(b"data")
+    sha_file.write_text("abc  hour-0.jsonl.zst\n")
+
+    late_zst = date_dir / "hour-0.late-1.jsonl.zst"
+    late_sha = date_dir / "hour-0.late-1.jsonl.zst.sha256"
+    late_zst.write_bytes(b"data")
+    late_sha.write_text("abc  hour-0.late-1.jsonl.zst\n")
+
+    consolidated = [zst_file, late_zst]
+    cleanup_hourly_files(date_dir, consolidated)
+
+    assert not zst_file.exists()
+    assert not late_zst.exists()
+    assert sha_file.exists()
+    assert late_sha.exists()
+
+
+def test_cleanup_does_not_remove_unrelated_files(tmp_path):
+    date_dir = tmp_path / "2026-03-28"
+    date_dir.mkdir()
+
+    unrelated = date_dir / "something_else.txt"
+    unrelated.write_text("keep me")
+
+    zst_file = date_dir / "hour-0.jsonl.zst"
+    zst_file.write_bytes(b"data")
+
+    cleanup_hourly_files(date_dir, [zst_file])
+
+    assert not zst_file.exists()
+    assert unrelated.exists()

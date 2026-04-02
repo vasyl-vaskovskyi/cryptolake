@@ -251,3 +251,14 @@ def write_manifest(
         manifest["hours"][hour_key] = entry
 
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def cleanup_hourly_files(date_dir: Path, consolidated_files: list[Path]) -> int:
+    """Remove consolidated .jsonl.zst files, keep .sha256 sidecars."""
+    removed = 0
+    for f in consolidated_files:
+        if f.exists():
+            f.unlink()
+            removed += 1
+            logger.info("cleanup_removed", file=f.name)
+    return removed
