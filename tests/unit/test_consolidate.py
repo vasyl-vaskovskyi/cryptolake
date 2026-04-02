@@ -1,3 +1,4 @@
+import json
 import zstandard
 import orjson
 from pathlib import Path
@@ -5,7 +6,14 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from src.common.envelope import VALID_GAP_REASONS, create_gap_envelope
-from src.cli.consolidate import discover_hour_files, merge_hour, synthesize_missing_hour_gap, write_daily_file
+from src.cli.consolidate import (
+    discover_hour_files,
+    merge_hour,
+    synthesize_missing_hour_gap,
+    write_daily_file,
+    verify_daily_file,
+)
+from src.writer.file_rotator import compute_sha256, write_sha256_sidecar, sidecar_path
 
 
 def _make_data_env(exchange_ts=1000):
@@ -231,3 +239,67 @@ def test_write_daily_file_with_gap_envelopes(tmp_path):
     assert stats["gap_records"] == 1
     assert stats["hours"][0]["data_records"] == 1
     assert stats["hours"][1]["data_records"] == 0
+
+
+# --- Task 6: Daily file verification ---
+
+def test_verify_daily_file_passes_valid_file(tmp_path):
+    output_path = tmp_path / "2026-03-28.jsonl.zst"
+    records = [_make_data_env(exchange_ts=100), _make_data_env(exchange_ts=200)]
+
+    def hour_iterator():
+        yield 0, records
+
+    write_daily_file(output_path, hour_iterator())
+    sc = sidecar_path(output_path)
+    write_sha256_sidecar(output_path, sc)
+
+    ok, error = verify_daily_file(output_path, expected_count=2, sha256_path=sc)
+    assert ok is True
+    assert error is None
+
+
+def test_verify_daily_file_fails_on_wrong_count(tmp_path):
+    output_path = tmp_path / "2026-03-28.jsonl.zst"
+
+    def hour_iterator():
+        yield 0, [_make_data_env(exchange_ts=100)]
+
+    write_daily_file(output_path, hour_iterator())
+    sc = sidecar_path(output_path)
+    write_sha256_sidecar(output_path, sc)
+
+    ok, error = verify_daily_file(output_path, expected_count=999, sha256_path=sc)
+    assert ok is False
+    assert "count" in error.lower()
+
+
+def test_verify_daily_file_fails_on_wrong_sha256(tmp_path):
+    output_path = tmp_path / "2026-03-28.jsonl.zst"
+
+    def hour_iterator():
+        yield 0, [_make_data_env(exchange_ts=100)]
+
+    write_daily_file(output_path, hour_iterator())
+    sc = sidecar_path(output_path)
+    sc.write_text("0000bad  2026-03-28.jsonl.zst\n")
+
+    ok, error = verify_daily_file(output_path, expected_count=1, sha256_path=sc)
+    assert ok is False
+    assert "sha256" in error.lower()
+
+
+def test_verify_daily_file_fails_on_decreasing_ts(tmp_path):
+    output_path = tmp_path / "2026-03-28.jsonl.zst"
+
+    cctx = zstandard.ZstdCompressor(level=3)
+    records = [_make_data_env(exchange_ts=200), _make_data_env(exchange_ts=100)]
+    data = b"\n".join(orjson.dumps(r) for r in records) + b"\n"
+    output_path.write_bytes(cctx.compress(data))
+
+    sc = sidecar_path(output_path)
+    write_sha256_sidecar(output_path, sc)
+
+    ok, error = verify_daily_file(output_path, expected_count=2, sha256_path=sc)
+    assert ok is False
+    assert "order" in error.lower()

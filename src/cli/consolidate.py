@@ -1,6 +1,7 @@
 """Daily consolidation: merge hourly archive files into single daily files."""
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ import structlog
 import zstandard as zstd
 
 from src.common.envelope import create_gap_envelope
+from src.writer.file_rotator import compute_sha256
 
 logger = structlog.get_logger()
 
@@ -148,3 +150,62 @@ def write_daily_file(
                 stats["data_records"] += hour_data
                 stats["gap_records"] += hour_gaps
     return stats
+
+
+def verify_daily_file(
+    daily_path: Path,
+    expected_count: int,
+    sha256_path: Path,
+) -> tuple[bool, str | None]:
+    """Verify a daily file: record count, ordering, and SHA256."""
+    actual_sha = compute_sha256(daily_path)
+    expected_sha = sha256_path.read_text().strip().split()[0]
+    if actual_sha != expected_sha:
+        return False, f"SHA256 mismatch: expected {expected_sha}, got {actual_sha}"
+
+    dctx = zstd.ZstdDecompressor()
+    count = 0
+    prev_ts = -1
+
+    with open(daily_path, "rb") as fh:
+        reader = dctx.stream_reader(fh)
+        buf = b""
+        while True:
+            chunk = reader.read(65536)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if not line:
+                    continue
+                record = orjson.loads(line)
+                count += 1
+                if record.get("type") == "gap":
+                    ts = record["gap_start_ts"]
+                else:
+                    ts = record["exchange_ts"]
+                if ts < prev_ts:
+                    return False, (
+                        f"Order violation at record {count}: "
+                        f"ts {ts} < previous {prev_ts}"
+                    )
+                prev_ts = ts
+
+        if buf.strip():
+            record = orjson.loads(buf.strip())
+            count += 1
+            if record.get("type") == "gap":
+                ts = record["gap_start_ts"]
+            else:
+                ts = record["exchange_ts"]
+            if ts < prev_ts:
+                return False, (
+                    f"Order violation at record {count}: "
+                    f"ts {ts} < previous {prev_ts}"
+                )
+
+    if count != expected_count:
+        return False, f"Record count mismatch: expected {expected_count}, got {count}"
+
+    return True, None
