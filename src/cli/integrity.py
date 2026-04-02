@@ -142,6 +142,15 @@ def _ns_to_time(ns: int) -> str:
         return "??:??:??"
 
 
+def _ns_to_hour(ns: int) -> str:
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromtimestamp(ns / 1_000_000_000, tz=timezone.utc)
+        return str(dt.hour)
+    except (ValueError, OSError, OverflowError):
+        return "?"
+
+
 def check_integrity(
     base_dir: Path,
     exchange: str | None = None,
@@ -255,49 +264,72 @@ def _print_report(report: dict) -> None:
     total_breaks = 0
     total_missing = 0
 
-    # Collect all rows for a single table
-    rows: list[tuple[str, str, str, int, str, str, str, str]] = []
+    # Collect rows: (entity, date, hour, records, status, field, expected, actual, missing, time)
+    rows: list[dict] = []
 
-    for (exch, sym, stream_name, date_name), info in sorted(report.items()):
+    for (exch, sym, stream_name, date_name), info in report.items():
         records = info["records"]
         breaks = info["breaks"]
         total_records += records
-
-        path = f"{exch}/{sym}/{stream_name}/{date_name}"
+        entity = f"{stream_name}"
 
         if not breaks:
-            rows.append((path, str(records), "OK", "", "", "", "", ""))
+            rows.append({
+                "entity": entity, "date": date_name, "hour": "",
+                "records": str(records), "status": "OK",
+                "field": "", "expected": "", "actual": "", "missing": "", "time": "",
+            })
             continue
 
         total_breaks += len(breaks)
-        missing_sum = sum(b["missing"] or 0 for b in breaks)
-        total_missing += missing_sum
+        total_missing += sum(b["missing"] or 0 for b in breaks)
 
         for b in breaks:
-            missing_str = str(b["missing"]) if b["missing"] is not None else "chain"
-            time_str = _ns_to_time(b["at_received"]) if b["at_received"] else ""
-            rows.append((
-                path, str(records), "BREAK",
-                b["field"], str(b["expected"]), str(b["actual"]),
-                missing_str, time_str,
-            ))
+            hour = _ns_to_hour(b["at_received"]) if b["at_received"] else ""
+            rows.append({
+                "entity": entity, "date": date_name, "hour": hour,
+                "records": str(records), "status": "BREAK",
+                "field": b["field"],
+                "expected": str(b["expected"]),
+                "actual": str(b["actual"]),
+                "missing": str(b["missing"]) if b["missing"] is not None else "chain",
+                "time": _ns_to_time(b["at_received"]) if b["at_received"] else "",
+            })
+
+    # Sort descending by entity, date, hour
+    rows.sort(key=lambda r: (r["entity"], r["date"], r["hour"]), reverse=True)
 
     # Print table
     click.echo("")
     hdr = (
-        f"  {'Path':<42} {'Records':>8}  {'Status':<6}  "
-        f"{'Field':<6} {'Expected':>16}  {'Actual':>16}  {'Missing':>8}  {'Time':>8}"
+        f"  {'ENTITY':<14} {'DATE':<12} {'HOUR':>4}  {'RECORDS':>8}  {'STATUS':<6}  "
+        f"{'FIELD':<6} {'EXPECTED':>16}  {'ACTUAL':>16}  {'MISSING':>8}  {'TIME':>8}"
     )
     click.echo(hdr)
-    click.echo(f"  {'-'*42} {'-'*8}  {'-'*6}  {'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}")
+    click.echo(
+        f"  {'-'*14} {'-'*12} {'-'*4}  {'-'*8}  {'-'*6}  "
+        f"{'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}"
+    )
 
-    for path, records, status, field, expected, actual, missing, time_str in rows:
+    for row in rows:
         click.echo(
-            f"  {path:<42} {records:>8}  {status:<6}  "
-            f"{field:<6} {expected:>16}  {actual:>16}  {missing:>8}  {time_str:>8}"
+            f"  {row['entity']:<14} {row['date']:<12} {row['hour']:>4}  "
+            f"{row['records']:>8}  {row['status']:<6}  "
+            f"{row['field']:<6} {row['expected']:>16}  {row['actual']:>16}  "
+            f"{row['missing']:>8}  {row['time']:>8}"
         )
 
-    # Cross-reference: bookticker integrity via depth chain
+    click.echo(
+        f"  {'-'*14} {'-'*12} {'-'*4}  {'-'*8}  {'-'*6}  "
+        f"{'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}"
+    )
+    click.echo(
+        f"  {'TOTAL':<14} {'':12} {'':>4}  {total_records:>8}  "
+        f"{'OK' if total_breaks == 0 else f'{total_breaks} brk':<6}  "
+        f"{'':6} {'':>16}  {'':>16}  {total_missing:>8}"
+    )
+
+    # Cross-reference notes
     by_sym_date: dict[tuple, dict[str, bool]] = defaultdict(dict)
     for (exch, sym, stream_name, date_name), info in report.items():
         key = (exch, sym, date_name)
@@ -308,11 +340,7 @@ def _print_report(report: dict) -> None:
         if "bookticker" not in streams_map:
             continue
         if "depth" in streams_map:
-            if streams_map["depth"]:
-                bookticker_notes.append(
-                    f"  {exch}/{sym}/bookticker/{date_name}: "
-                    f"depth chain OK — bookticker confirmed")
-            else:
+            if not streams_map["depth"]:
                 bookticker_notes.append(
                     f"  {exch}/{sym}/bookticker/{date_name}: "
                     f"depth chain BROKEN — bookticker may have gaps too")
@@ -321,12 +349,6 @@ def _print_report(report: dict) -> None:
                 f"  {exch}/{sym}/bookticker/{date_name}: "
                 f"no depth data — bookticker unverifiable")
 
-    click.echo(f"\n  {'─'*42} {'-'*8}  {'-'*6}  {'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}")
-    click.echo(
-        f"  {'TOTAL':<42} {total_records:>8}  "
-        f"{'OK' if total_breaks == 0 else f'{total_breaks} breaks':<6}  "
-        f"{'':6} {'':>16}  {'':>16}  {total_missing:>8}"
-    )
     if bookticker_notes:
         click.echo(f"\n  Notes:")
         for note in bookticker_notes:

@@ -752,9 +752,18 @@ def analyze_archive(
     return report
 
 
+def _ns_to_hour_str(ns: int) -> str:
+    """Extract hour from nanosecond timestamp."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromtimestamp(ns / 1_000_000_000, tz=timezone.utc)
+        return str(dt.hour)
+    except (ValueError, OSError, OverflowError):
+        return "?"
+
+
 def _print_report(report: dict) -> None:
     """Print a single unified table of all gaps across all streams."""
-    # Collect all rows and totals
     rows: list[dict] = []
     grand_total_gaps = 0
     grand_restored = 0
@@ -766,15 +775,10 @@ def _print_report(report: dict) -> None:
         for sym_name, streams in sorted(symbols.items()):
             for stream_name, dates in sorted(streams.items()):
                 for date_name, info in sorted(dates.items()):
-                    covered = info["covered"]
-                    total = info["total"]
                     hour_map = info["hours"]
                     gaps = info["gaps"]
                     expect_from = info.get("expect_from", 0)
                     expect_to = info.get("expect_to", 23)
-
-                    path = f"{exch_name}/{sym_name}/{stream_name}/{date_name}"
-                    hours_str = f"{covered}/{total}h"
 
                     # Build unified gap list
                     all_entries: list[dict] = []
@@ -794,19 +798,21 @@ def _print_report(report: dict) -> None:
                                 "gap_start_ts": start_ns,
                                 "gap_end_ts": end_ns,
                                 "_status": file_st,
+                                "_hour": str(h),
                             })
 
                     for g in gaps:
                         all_entries.append({
                             **g,
                             "_status": _gap_status(g, stream_name),
+                            "_hour": _ns_to_hour_str(g.get("gap_start_ts", 0)),
                         })
 
                     all_entries.sort(key=lambda e: (e.get("gap_start_ts", 0), e.get("gap_end_ts", 0)))
 
                     if not all_entries:
                         rows.append({
-                            "path": path, "hours": hours_str,
+                            "entity": stream_name, "date": date_name, "hour": "",
                             "reason": "", "start": "", "end": "",
                             "duration": "", "missed": "", "status": "OK",
                         })
@@ -835,7 +841,8 @@ def _print_report(report: dict) -> None:
                             grand_remaining += 1
 
                         rows.append({
-                            "path": path, "hours": hours_str,
+                            "entity": stream_name, "date": date_name,
+                            "hour": entry.get("_hour", ""),
                             "reason": entry.get("reason", "unknown"),
                             "start": _ns_to_time(entry.get("gap_start_ts", 0)),
                             "end": _ns_to_time(entry.get("gap_end_ts", 0)),
@@ -844,31 +851,35 @@ def _print_report(report: dict) -> None:
                             "status": status,
                         })
 
+    # Sort descending by entity, date, hour
+    rows.sort(key=lambda r: (r["entity"], r["date"], r["hour"]), reverse=True)
+
     # Print table
     click.echo("")
     hdr = (
-        f"  {'Path':<42} {'Hours':>5}  {'Reason':<16} "
-        f"{'Start':>8}  {'End':>8}  {'Duration':>10}  {'Missed':>7}  {'Status':<14}"
+        f"  {'ENTITY':<16} {'DATE':<12} {'HOUR':>4}  {'REASON':<16} "
+        f"{'START':>8}  {'END':>8}  {'DURATION':>10}  {'MISSED':>7}  {'STATUS':<14}"
     )
     click.echo(hdr)
     click.echo(
-        f"  {'-'*42} {'-'*5}  {'-'*16} "
+        f"  {'-'*16} {'-'*12} {'-'*4}  {'-'*16} "
         f"{'-'*8}  {'-'*8}  {'-'*10}  {'-'*7}  {'-'*14}"
     )
 
     for row in rows:
         click.echo(
-            f"  {row['path']:<42} {row['hours']:>5}  {row['reason']:<16} "
+            f"  {row['entity']:<16} {row['date']:<12} {row['hour']:>4}  "
+            f"{row['reason']:<16} "
             f"{row['start']:>8}  {row['end']:>8}  {row['duration']:>10}  "
             f"{row['missed']:>7}  {row['status']:<14}"
         )
 
     click.echo(
-        f"  {'-'*42} {'-'*5}  {'-'*16} "
+        f"  {'-'*16} {'-'*12} {'-'*4}  {'-'*16} "
         f"{'-'*8}  {'-'*8}  {'-'*10}  {'-'*7}  {'-'*14}"
     )
     click.echo(
-        f"  {'TOTAL':<42} {'':>5}  "
+        f"  {'TOTAL':<16} {'':12} {'':>4}  "
         f"{grand_total_gaps} gaps{'':<11} {'':>8}  {'':>8}  "
         f"{_format_duration(grand_total_dur):>10}  {'':>7}  "
         f"R:{grand_restored} U:{grand_unrecoverable} M:{grand_remaining}"

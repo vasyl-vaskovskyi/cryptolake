@@ -43,7 +43,7 @@ def test_analyze_full_day_no_gaps(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["analyze", "--base-dir", str(tmp_path), "--exchange", "binance", "--symbol", "btcusdt", "--date", "2026-03-27"])
     assert result.exit_code == 0
-    assert "24/24" in result.output
+    assert "OK" in result.output
 
 def test_analyze_missing_hours(tmp_path):
     for h in range(24):
@@ -54,7 +54,7 @@ def test_analyze_missing_hours(tmp_path):
     result = runner.invoke(cli, ["analyze", "--base-dir", str(tmp_path), "--exchange", "binance", "--symbol", "btcusdt", "--date", "2026-03-28"])
     assert result.exit_code == 0
     assert "MISSING" in result.output
-    assert "22/24" in result.output
+    assert "missing_hour" in result.output
 
 def test_analyze_backfill_files_count_as_covered(tmp_path):
     for h in range(24):
@@ -65,7 +65,7 @@ def test_analyze_backfill_files_count_as_covered(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["analyze", "--base-dir", str(tmp_path), "--exchange", "binance", "--symbol", "btcusdt", "--date", "2026-03-28"])
     assert result.exit_code == 0
-    assert "24/24" in result.output
+    assert "OK" in result.output
 
 def test_analyze_json_output(tmp_path):
     for h in range(24):
