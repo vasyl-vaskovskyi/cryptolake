@@ -123,7 +123,9 @@ async def _run_consolidation_cycle(base_dir: str) -> None:
                                     symbol=symbol, stream=stream, date=target_date)
                     elif result.get("success"):
                         n_missing = len(result.get("missing_hours", []))
+                        n_files = result.get("files_consolidated", 0)
                         consolidation_missing_hours.inc(n_missing)
+                        consolidation_files_consolidated.inc(n_files)
                         consolidation_days_processed.inc()
                         logger.info("consolidation_stream_done",
                                     symbol=symbol, stream=stream,

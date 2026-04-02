@@ -378,6 +378,7 @@ def consolidate_day(
         "skipped": False,
         "total_records": stats["total_records"],
         "missing_hours": missing_hours,
+        "files_consolidated": len(consolidated_files),
     }
 
 

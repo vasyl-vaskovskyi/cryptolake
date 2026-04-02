@@ -38,6 +38,9 @@ writer:
   flush_messages: 10000
   flush_interval_seconds: 30
 
+consolidation:
+  start_hour_utc: 2
+
 monitoring:
   prometheus_port: 8000
   webhook_url: ""
