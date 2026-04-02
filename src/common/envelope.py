@@ -18,6 +18,7 @@ VALID_GAP_REASONS = frozenset(
         "write_error",
         "deserialization_error",
         "checkpoint_lost",
+        "missing_hour",
     }
 )
 
