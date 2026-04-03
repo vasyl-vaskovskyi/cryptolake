@@ -30,6 +30,11 @@ DEFAULT_ARCHIVE_DIR = default_archive_dir()
 
 CHECKABLE_STREAMS = {"trades", "depth", "bookticker"}
 
+ALL_STREAMS = {
+    "trades", "depth", "depth_snapshot", "bookticker",
+    "funding_rate", "liquidations", "open_interest",
+}
+
 
 def _read_data_records_from_file(f: Path) -> list[tuple[bytes, int, int]]:
     """Read all data records from a single .jsonl.zst file.
@@ -197,6 +202,28 @@ CHECKERS = {
 }
 
 
+def _scan_gap_envelopes(date_dir: Path) -> list[dict]:
+    """Read gap envelopes from all .jsonl.zst files in a date directory."""
+    gaps = []
+    if not date_dir.exists():
+        return gaps
+    for f in sorted(date_dir.glob("*.jsonl.zst")):
+        try:
+            dctx = zstd.ZstdDecompressor()
+            with open(f, "rb") as fh:
+                reader = dctx.stream_reader(fh)
+                text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+                for line in text_reader:
+                    if '"gap"' not in line:
+                        continue
+                    env = orjson.loads(line)
+                    if env.get("type") == "gap":
+                        gaps.append(env)
+        except Exception:
+            pass
+    return gaps
+
+
 def _ns_to_time(ns: int) -> str:
     from datetime import datetime, timezone
     try:
@@ -248,10 +275,6 @@ def check_integrity(
                 stream_name = stream_dir.name
                 if stream and stream_name != stream:
                     continue
-                if stream_name not in CHECKABLE_STREAMS:
-                    continue
-
-                checker = CHECKERS[stream_name]
 
                 for date_dir in sorted(stream_dir.iterdir()):
                     if not date_dir.is_dir():
@@ -269,15 +292,28 @@ def check_integrity(
                     if not files:
                         continue
 
-                    count, breaks = checker(files)
+                    # ID continuity check (only for streams with sequential IDs)
+                    breaks: list[dict] = []
+                    count = 0
+                    if stream_name in CHECKABLE_STREAMS:
+                        checker = CHECKERS[stream_name]
+                        count, breaks = checker(files)
+                    else:
+                        # Count records for non-checkable streams
+                        for f in files:
+                            count += len(_read_data_records_from_file(f))
 
-                    if count == 0:
+                    # Gap envelopes (all streams)
+                    gap_envelopes = _scan_gap_envelopes(date_dir)
+
+                    if count == 0 and not gap_envelopes:
                         continue
 
                     key = (exch_dir.name, sym_dir.name, stream_name, date_name)
                     report[key] = {
                         "records": count,
                         "breaks": breaks,
+                        "gaps": gap_envelopes,
                     }
 
     return report
@@ -325,35 +361,48 @@ def find_backfillable_gaps(
 
 def _print_report(report: dict) -> None:
     total_records = 0
-    total_breaks = 0
+    total_id_breaks = 0
     total_missing = 0
+    total_gaps = 0
 
-    # Collect rows: (entity, date, hour, records, status, field, expected, actual, missing, time)
     rows: list[dict] = []
 
     for (exch, sym, stream_name, date_name), info in report.items():
         records = info["records"]
-        breaks = info["breaks"]
+        breaks = info.get("breaks", [])
+        gap_envelopes = info.get("gaps", [])
         total_records += records
-        entity = f"{stream_name}"
 
-        if not breaks:
-            continue
+        # ID breaks
+        if breaks:
+            total_id_breaks += len(breaks)
+            total_missing += sum(b["missing"] or 0 for b in breaks)
 
-        total_breaks += len(breaks)
-        total_missing += sum(b["missing"] or 0 for b in breaks)
+            for b in breaks:
+                hour = _ns_to_hour(b["at_received"]) if b["at_received"] else ""
+                rows.append({
+                    "entity": stream_name, "date": date_name, "hour": hour,
+                    "type": "ID_BREAK",
+                    "detail": f"{b['field']} exp={b['expected']} got={b['actual']}",
+                    "missing": str(b["missing"]) if b["missing"] is not None else "chain",
+                    "time": _ns_to_time(b["at_received"]) if b["at_received"] else "",
+                })
 
-        for b in breaks:
-            hour = _ns_to_hour(b["at_received"]) if b["at_received"] else ""
-            rows.append({
-                "entity": entity, "date": date_name, "hour": hour,
-                "records": str(records), "status": "BREAK",
-                "field": b["field"],
-                "expected": str(b["expected"]),
-                "actual": str(b["actual"]),
-                "missing": str(b["missing"]) if b["missing"] is not None else "chain",
-                "time": _ns_to_time(b["at_received"]) if b["at_received"] else "",
-            })
+        # Gap envelopes
+        if gap_envelopes:
+            total_gaps += len(gap_envelopes)
+            for g in gap_envelopes:
+                hour = _ns_to_hour(g.get("gap_start_ts", 0))
+                reason = g.get("reason", "unknown")
+                start = _ns_to_time(g.get("gap_start_ts", 0))
+                end = _ns_to_time(g.get("gap_end_ts", 0))
+                rows.append({
+                    "entity": stream_name, "date": date_name, "hour": hour,
+                    "type": "GAP",
+                    "detail": f"{reason} {start}-{end}",
+                    "missing": "",
+                    "time": start,
+                })
 
     # Sort descending by entity, date, hour
     rows.sort(key=lambda r: (r["entity"], r["date"], r["hour"]), reverse=True)
@@ -361,57 +410,31 @@ def _print_report(report: dict) -> None:
     # Print table
     click.echo("")
     hdr = (
-        f"  {'ENTITY':<14} {'DATE':<12} {'HOUR':>4}  {'RECORDS':>8}  {'STATUS':<6}  "
-        f"{'FIELD':<6} {'EXPECTED':>16}  {'ACTUAL':>16}  {'MISSING':>8}  {'TIME':>8}"
+        f"  {'ENTITY':<16} {'DATE':<12} {'HOUR':>4}  {'TYPE':<10} "
+        f"{'DETAIL':<42} {'MISSING':>8}  {'TIME':>8}"
     )
     click.echo(hdr)
     click.echo(
-        f"  {'-'*14} {'-'*12} {'-'*4}  {'-'*8}  {'-'*6}  "
-        f"{'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}"
+        f"  {'-'*16} {'-'*12} {'-'*4}  {'-'*10} "
+        f"{'-'*42} {'-'*8}  {'-'*8}"
     )
 
     for row in rows:
         click.echo(
-            f"  {row['entity']:<14} {row['date']:<12} {row['hour']:>4}  "
-            f"{row['records']:>8}  {row['status']:<6}  "
-            f"{row['field']:<6} {row['expected']:>16}  {row['actual']:>16}  "
+            f"  {row['entity']:<16} {row['date']:<12} {row['hour']:>4}  "
+            f"{row['type']:<10} {row['detail']:<42} "
             f"{row['missing']:>8}  {row['time']:>8}"
         )
 
     click.echo(
-        f"  {'-'*14} {'-'*12} {'-'*4}  {'-'*8}  {'-'*6}  "
-        f"{'-'*6} {'-'*16}  {'-'*16}  {'-'*8}  {'-'*8}"
+        f"  {'-'*16} {'-'*12} {'-'*4}  {'-'*10} "
+        f"{'-'*42} {'-'*8}  {'-'*8}"
     )
     click.echo(
-        f"  {'TOTAL':<14} {'':12} {'':>4}  {total_records:>8}  "
-        f"{'OK' if total_breaks == 0 else f'{total_breaks} brk':<6}  "
-        f"{'':6} {'':>16}  {'':>16}  {total_missing:>8}"
+        f"  {'TOTAL':<16} {'':12} {'':>4}  "
+        f"{total_records} records, {total_id_breaks} ID breaks, {total_gaps} gap envelopes, "
+        f"{total_missing} missing"
     )
-
-    # Cross-reference notes
-    by_sym_date: dict[tuple, dict[str, bool]] = defaultdict(dict)
-    for (exch, sym, stream_name, date_name), info in report.items():
-        key = (exch, sym, date_name)
-        by_sym_date[key][stream_name] = len(info["breaks"]) == 0
-
-    bookticker_notes: list[str] = []
-    for (exch, sym, date_name), streams_map in sorted(by_sym_date.items()):
-        if "bookticker" not in streams_map:
-            continue
-        if "depth" in streams_map:
-            if not streams_map["depth"]:
-                bookticker_notes.append(
-                    f"  {exch}/{sym}/bookticker/{date_name}: "
-                    f"depth chain BROKEN — bookticker may have gaps too")
-        else:
-            bookticker_notes.append(
-                f"  {exch}/{sym}/bookticker/{date_name}: "
-                f"no depth data — bookticker unverifiable")
-
-    if bookticker_notes:
-        click.echo(f"\n  Notes:")
-        for note in bookticker_notes:
-            click.echo(note)
 
 
 @click.command()

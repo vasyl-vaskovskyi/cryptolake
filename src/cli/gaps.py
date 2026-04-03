@@ -15,7 +15,7 @@ import zstandard as zstd
 
 from src.common.config import default_archive_dir
 from src.exchanges.binance import BinanceAdapter
-from src.writer.file_rotator import build_backfill_file_path, compute_sha256, sidecar_path
+from src.writer.file_rotator import build_backfill_file_path, compute_sha256, sidecar_path, write_sha256_sidecar
 
 DEFAULT_ARCHIVE_DIR = default_archive_dir()
 
@@ -1105,7 +1105,16 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, 
                 continue
 
             if not records:
-                click.echo(f"  No records returned for hour {hour}.")
+                # Write an empty backfill marker so analyze marks this as RECOVERED
+                backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
+                marker_path = build_backfill_file_path(
+                    str(base), exch_name, sym_name, stream_name, date_name, hour, backfill_seq,
+                )
+                marker_path.parent.mkdir(parents=True, exist_ok=True)
+                cctx = zstd.ZstdCompressor()
+                marker_path.write_bytes(cctx.compress(b""))
+                write_sha256_sidecar(marker_path, sidecar_path(marker_path))
+                click.echo(f"  No records returned for hour {hour}. Wrote empty marker -> {marker_path}")
                 continue
 
             backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
