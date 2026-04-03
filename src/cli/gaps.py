@@ -76,6 +76,11 @@ def _wrap_backfill_envelope(
     }
 
 
+class EndpointUnavailableError(Exception):
+    """Raised when a REST endpoint returns a non-retryable error (400/403/5xx)."""
+    pass
+
+
 async def _fetch_historical_page(
     session: aiohttp.ClientSession,
     url: str,
@@ -87,6 +92,11 @@ async def _fetch_historical_page(
                 retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
                 await asyncio.sleep(retry_after)
                 continue
+            if resp.status in (400, 403) or resp.status >= 500:
+                body = await resp.text()
+                raise EndpointUnavailableError(
+                    f"{resp.status}: {body[:200]}"
+                )
             resp.raise_for_status()
             return await resp.json(content_type=None)
 
@@ -181,6 +191,59 @@ async def _fetch_funding_rate_composite(adapter, symbol, start_ms, end_ms):
     return records
 
 
+def _find_trade_id_gaps(records: list[dict]) -> list[tuple[int, int]]:
+    """Find gaps in aggregate trade ID sequence. Returns list of (from_id, to_id) ranges."""
+    gaps: list[tuple[int, int]] = []
+    prev_a: int | None = None
+    for rec in records:
+        a = rec.get("a")
+        if a is None:
+            continue
+        if prev_a is not None and a != prev_a + 1:
+            gaps.append((prev_a + 1, a - 1))
+        prev_a = a
+    return gaps
+
+
+async def _fill_trade_id_gaps(
+    adapter: BinanceAdapter,
+    symbol: str,
+    records: list[dict],
+    max_passes: int = 3,
+) -> list[dict]:
+    """Fill ID gaps in trade records by re-fetching missing ID ranges.
+
+    Sorts records by trade ID, finds gaps, fetches missing ranges via fromId,
+    and merges. Repeats up to max_passes times in case re-fetches introduce new gaps.
+    """
+    if not records:
+        return records
+
+    merged = sorted(records, key=lambda r: r.get("a", 0))
+
+    for pass_num in range(max_passes):
+        gaps = _find_trade_id_gaps(merged)
+        if not gaps:
+            break
+
+        logger.info("backfill_filling_trade_gaps",
+                     pass_num=pass_num + 1, gaps=len(gaps),
+                     total_missing=sum(to_id - from_id + 1 for from_id, to_id in gaps))
+
+        fetched: list[dict] = []
+        for from_id, to_id in gaps:
+            patch = await _fetch_by_id(adapter, symbol, from_id, to_id)
+            fetched.extend(patch)
+
+        if not fetched:
+            break
+
+        merged.extend(fetched)
+        merged.sort(key=lambda r: r.get("a", 0))
+
+    return merged
+
+
 async def _fetch_historical_all(
     adapter: BinanceAdapter,
     symbol: str,
@@ -224,6 +287,10 @@ async def _fetch_historical_all(
             if last_ts is None or last_ts >= end_ms or len(page) < (500 if stream == "open_interest" else 1000):
                 break
             current_start = last_ts + 1
+
+    # For trades, fill any ID gaps left by pagination
+    if stream == "trades" and all_records:
+        all_records = await _fill_trade_id_gaps(adapter, symbol, all_records)
 
     return all_records
 
@@ -317,8 +384,12 @@ def _decompress_and_parse(file_path: Path) -> list[dict]:
     return result
 
 
-def _collect_missing_hours(report: dict) -> list[tuple[str, str, str, str, int]]:
-    """Extract (exchange, symbol, stream, date, hour) tuples for missing hours in backfillable streams."""
+def _collect_missing_hours(report: dict, full_day: bool = False) -> list[tuple[str, str, str, str, int]]:
+    """Extract (exchange, symbol, stream, date, hour) tuples for missing hours in backfillable streams.
+
+    By default, only collects hours within the collector's active window
+    (expect_from to expect_to). Pass full_day=True to backfill all 24 hours.
+    """
     missing = []
     for exch_name, symbols in report.items():
         for sym_name, streams in symbols.items():
@@ -327,7 +398,12 @@ def _collect_missing_hours(report: dict) -> list[tuple[str, str, str, str, int]]
                     continue
                 for date_name, info in dates.items():
                     hour_map = info["hours"]
-                    for h in range(24):
+                    if full_day:
+                        expect_from, expect_to = 0, 23
+                    else:
+                        expect_from = info.get("expect_from", 0)
+                        expect_to = info.get("expect_to", 23)
+                    for h in range(expect_from, expect_to + 1):
                         if h not in hour_map:
                             missing.append((exch_name, sym_name, stream_name, date_name, h))
     return missing
@@ -934,12 +1010,13 @@ def analyze(exchange, symbol, stream, date, date_from, date_to, output_json, bas
 @click.option("--date-to", default=None, help="End date inclusive (YYYY-MM-DD)")
 @click.option("--dry-run", is_flag=True, help="Print backfill plan without fetching data")
 @click.option("--deep", is_flag=True, help="Also backfill gaps within existing files")
+@click.option("--full-day", is_flag=True, help="Backfill all 24 hours, not just the collector's active window")
 @click.option(
     "--base-dir",
     default=DEFAULT_ARCHIVE_DIR,
     help="Archive base directory",
 )
-def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, base_dir):
+def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, full_day, base_dir):
     """Find gaps and backfill missing hours from Binance historical REST API."""
     base = Path(base_dir)
 
@@ -969,7 +1046,7 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, 
     for s in non_backfillable_found:
         click.echo(f"Stream '{s}' is not backfillable. Skipping.")
 
-    missing = _collect_missing_hours(report)
+    missing = _collect_missing_hours(report, full_day=full_day)
 
     # Initialize shared state
     adapter = BinanceAdapter(ws_base="wss://fstream.binance.com", rest_base=BINANCE_REST_BASE)
@@ -983,7 +1060,11 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, 
         for exch_name, sym_name, stream_name, date_name, h in missing:
             click.echo(f"  {exch_name}/{sym_name}/{stream_name}/{date_name}  hour={h}")
     else:
+        unavailable_streams: set[str] = set()
         for exch_name, sym_name, stream_name, date_name, hour in missing:
+            if stream_name in unavailable_streams:
+                continue
+
             start_ms, end_ms = _hour_to_ms_range(date_name, hour)
             click.echo(f"Fetching {exch_name}/{sym_name}/{stream_name}/{date_name} hour={hour}...")
 
@@ -991,6 +1072,11 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, 
                 records = asyncio.run(
                     _fetch_historical_all(adapter, sym_name, stream_name, start_ms, end_ms)
                 )
+            except EndpointUnavailableError as exc:
+                click.echo(f"  Endpoint unavailable: {exc}")
+                click.echo(f"  Skipping all remaining hours for stream '{stream_name}'.")
+                unavailable_streams.add(stream_name)
+                continue
             except Exception as exc:
                 click.echo(f"  ERROR fetching: {exc}")
                 continue

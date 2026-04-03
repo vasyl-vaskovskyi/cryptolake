@@ -92,12 +92,16 @@ async def _run_backfill_cycle(base_dir: str) -> None:
         session_id = f"backfill-{datetime.now(timezone.utc).isoformat()}"
 
         # ── Missing hours backfill ──
+        from src.cli.gaps import EndpointUnavailableError
         if not missing:
             logger.info("backfill_no_gaps_found")
         else:
             logger.info("backfill_starting", gaps=len(missing))
 
+            unavailable_streams: set[str] = set()
             for exch, sym, stream, date_name, hour in missing:
+                if stream in unavailable_streams:
+                    continue
                 start_ms, end_ms = _hour_to_ms_range(date_name, hour)
                 try:
                     records = await _fetch_historical_all(
@@ -120,6 +124,10 @@ async def _run_backfill_cycle(base_dir: str) -> None:
                         logger.info("backfill_hour_done",
                                     exchange=exch, symbol=sym, stream=stream,
                                     date=date_name, hour=hour, records=n)
+                except EndpointUnavailableError as e:
+                    logger.warning("backfill_endpoint_unavailable",
+                                   stream=stream, error=str(e))
+                    unavailable_streams.add(stream)
                 except Exception as e:
                     logger.error("backfill_hour_failed",
                                  exchange=exch, symbol=sym, stream=stream,
