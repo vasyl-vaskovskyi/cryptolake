@@ -86,6 +86,39 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  collector-backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8004:8000"
+    networks:
+      - cryptolake_internal
+      - backup_egress
+    volumes:
+      - ./config:/app/config:ro
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - COLLECTOR_ID=binance-collector-backup
+      - TOPIC_PREFIX=backup.
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
   writer:
     build:
       context: .
@@ -257,4 +290,6 @@ networks:
   collector_egress:
     driver: bridge
   alertmanager_egress:
+    driver: bridge
+  backup_egress:
     driver: bridge

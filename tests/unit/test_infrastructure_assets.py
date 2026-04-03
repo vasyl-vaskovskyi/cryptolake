@@ -66,6 +66,7 @@ class TestComposeStacks:
             "postgres",
             "redpanda",
             "collector",
+            "collector-backup",
             "writer",
             "backfill",
             "consolidation",
@@ -89,6 +90,7 @@ class TestComposeStacks:
         assert "host_access" in compose["networks"]
         assert "collector_egress" in compose["networks"]
         assert "alertmanager_egress" in compose["networks"]
+        assert "backup_egress" in compose["networks"]
 
         assert set(compose["volumes"]) == {
             "postgres_data",
@@ -133,7 +135,7 @@ class TestObservabilityAssets:
         alertmanager = _read_yaml("infra/alertmanager/alertmanager.yml")
 
         job_names = {job["job_name"] for job in prometheus["scrape_configs"]}
-        assert job_names == {"collector", "writer", "backfill", "consolidation", "redpanda"}
+        assert job_names == {"collector", "collector-backup", "writer", "backfill", "consolidation", "redpanda"}
         assert prometheus["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == ["alertmanager:9093"]
 
         rules = alert_rules["groups"][0]["rules"]
