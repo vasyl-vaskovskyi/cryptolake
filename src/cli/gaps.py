@@ -488,6 +488,27 @@ def _scan_hours(date_dir: Path) -> dict[int, str]:
     return result
 
 
+def _scan_gaps_from_file(file_path: Path) -> list[dict]:
+    """Read gap envelopes from a single .jsonl.zst file."""
+    gaps: list[dict] = []
+    if not file_path.exists():
+        return gaps
+    try:
+        dctx = zstd.ZstdDecompressor()
+        with open(file_path, "rb") as fh:
+            reader = dctx.stream_reader(fh)
+            text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+            for line in text_reader:
+                if '"gap"' not in line:
+                    continue
+                env = orjson.loads(line)
+                if env.get("type") == "gap":
+                    gaps.append(env)
+    except Exception:
+        pass
+    return gaps
+
+
 def _scan_gaps(date_dir: Path) -> list[dict]:
     """Read .jsonl.zst files in date_dir and return gap envelopes only.
 
@@ -771,34 +792,61 @@ def analyze_archive(
             for stream_dir in streams_to_scan:
                 stream_name = stream_dir.name
 
-                dates_to_scan: list[Path] = []
+                # Discover dates: both unconsolidated (date directories) and
+                # consolidated (daily .jsonl.zst files at stream level)
+                all_date_names: set[str] = set()
+                consolidated_dates: set[str] = set()
+
+                # Consolidated daily files: {stream}/YYYY-MM-DD.jsonl.zst
+                for f in stream_dir.iterdir():
+                    if f.is_file() and f.name.endswith(".jsonl.zst"):
+                        # Extract date from filename like "2026-04-02.jsonl.zst"
+                        name = f.name[:-len(".jsonl.zst")]
+                        if len(name) == 10 and name[4] == "-" and name[7] == "-":
+                            all_date_names.add(name)
+                            consolidated_dates.add(name)
+
+                # Unconsolidated date directories
+                for d in stream_dir.iterdir():
+                    if d.is_dir() and len(d.name) == 10 and d.name[4] == "-":
+                        all_date_names.add(d.name)
+
+                # Apply date filters
                 if date:
-                    date_dir = stream_dir / date
-                    if date_dir.exists():
-                        dates_to_scan = [date_dir]
-                    else:
-                        # Still include it so we can report missing
-                        dates_to_scan = [date_dir]
-                elif date_from or date_to:
-                    for d in sorted(stream_dir.iterdir()):
-                        if not d.is_dir():
-                            continue
-                        name = d.name
-                        if date_from and name < date_from:
-                            continue
-                        if date_to and name > date_to:
-                            continue
-                        dates_to_scan.append(d)
+                    all_date_names = {date} if date in all_date_names else set()
+                    # Also include if specifically requested but missing
+                    if not all_date_names:
+                        all_date_names = {date}
                 else:
-                    dates_to_scan = [d for d in sorted(stream_dir.iterdir()) if d.is_dir()]
+                    if date_from:
+                        all_date_names = {d for d in all_date_names if d >= date_from}
+                    if date_to:
+                        all_date_names = {d for d in all_date_names if d <= date_to}
 
                 # First pass: collect all date/hour data
                 all_dates_data: list[tuple[str, dict[int, str], list[dict]]] = []
-                for date_dir in dates_to_scan:
-                    date_name = date_dir.name
-                    hour_map = _scan_hours(date_dir)
-                    gap_envs = _scan_gaps(date_dir) if date_dir.exists() else []
-                    all_dates_data.append((date_name, hour_map, gap_envs))
+                for date_name in sorted(all_date_names):
+                    if date_name in consolidated_dates:
+                        # Consolidated: read manifest for gap info, mark all hours as present
+                        manifest_path = stream_dir / f"{date_name}.manifest.json"
+                        hour_map: dict[int, str] = {}
+                        gap_envs: list[dict] = []
+                        if manifest_path.exists():
+                            manifest = json.loads(manifest_path.read_text())
+                            for h_str, h_info in manifest.get("hours", {}).items():
+                                h = int(h_str)
+                                hour_map[h] = h_info.get("status", "present")
+                        # Read gap envelopes from the daily file
+                        daily_file = stream_dir / f"{date_name}.jsonl.zst"
+                        if daily_file.exists():
+                            gap_envs = _scan_gaps_from_file(daily_file)
+                        all_dates_data.append((date_name, hour_map, gap_envs))
+                    else:
+                        # Unconsolidated: scan hourly files as before
+                        date_dir = stream_dir / date_name
+                        hour_map = _scan_hours(date_dir)
+                        gap_envs = _scan_gaps(date_dir) if date_dir.exists() else []
+                        all_dates_data.append((date_name, hour_map, gap_envs))
 
                 # Determine the recording window for this stream
                 first_hour: int | None = None
@@ -874,36 +922,52 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
                     expect_from = info.get("expect_from", 0)
                     expect_to = info.get("expect_to", 23)
 
-                    # Resolve date directory for backfill file checks
+                    # Resolve paths for status checks
                     date_dir = None
+                    stream_dir_path = None
+                    is_consolidated = False
                     if base_dir is not None:
-                        date_dir = base_dir / exch_name / sym_name / stream_name / date_name
+                        stream_dir_path = base_dir / exch_name / sym_name / stream_name
+                        date_dir = stream_dir_path / date_name
+                        is_consolidated = (stream_dir_path / f"{date_name}.jsonl.zst").exists()
 
                     # Build unified gap list
                     all_entries: list[dict] = []
 
-                    for h in range(expect_from, expect_to + 1):
-                        if h not in hour_map:
-                            from datetime import datetime, timezone, timedelta
-                            dt_start = datetime.strptime(
-                                f"{date_name} {h:02d}:00:00", "%Y-%m-%d %H:%M:%S"
-                            ).replace(tzinfo=timezone.utc)
-                            dt_end = dt_start + timedelta(hours=1) - timedelta(milliseconds=1)
-                            start_ns = int(dt_start.timestamp() * 1_000_000_000)
-                            end_ns = int(dt_end.timestamp() * 1_000_000_000)
-                            file_st = _file_status_for_hour(h, hour_map, stream_name)
-                            all_entries.append({
-                                "reason": "missing_hour",
-                                "gap_start_ts": start_ns,
-                                "gap_end_ts": end_ns,
-                                "_status": file_st,
-                                "_hour": str(h),
-                            })
+                    # For unconsolidated dates, synthesize missing_hour entries.
+                    # For consolidated dates, the daily file already contains
+                    # synthesized gap envelopes — don't duplicate them.
+                    if not is_consolidated:
+                        for h in range(expect_from, expect_to + 1):
+                            if h not in hour_map:
+                                from datetime import datetime, timezone, timedelta
+                                dt_start = datetime.strptime(
+                                    f"{date_name} {h:02d}:00:00", "%Y-%m-%d %H:%M:%S"
+                                ).replace(tzinfo=timezone.utc)
+                                dt_end = dt_start + timedelta(hours=1) - timedelta(milliseconds=1)
+                                start_ns = int(dt_start.timestamp() * 1_000_000_000)
+                                end_ns = int(dt_end.timestamp() * 1_000_000_000)
+                                file_st = _file_status_for_hour(h, hour_map, stream_name)
+                                all_entries.append({
+                                    "reason": "missing_hour",
+                                    "gap_start_ts": start_ns,
+                                    "gap_end_ts": end_ns,
+                                    "_status": file_st,
+                                    "_hour": str(h),
+                                })
 
                     for g in gaps:
+                        # For consolidated dates, gap status is final
+                        if is_consolidated:
+                            status = "UNRECOVERABLE" if stream_name in NON_BACKFILLABLE_STREAMS else "RECOVERED"
+                            # missing_hour gaps that were synthesized during consolidation
+                            if g.get("reason") == "missing_hour":
+                                status = "UNRECOVERABLE" if stream_name in NON_BACKFILLABLE_STREAMS else "MISSING"
+                        else:
+                            status = _gap_status(g, stream_name, date_dir=date_dir)
                         all_entries.append({
                             **g,
-                            "_status": _gap_status(g, stream_name, date_dir=date_dir),
+                            "_status": status,
                             "_hour": _ns_to_hour_str(g.get("gap_start_ts", 0)),
                         })
 
@@ -946,7 +1010,7 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
                         })
 
     # Sort descending by entity, date, hour
-    rows.sort(key=lambda r: (r["entity"], r["date"], r["hour"]), reverse=True)
+    rows.sort(key=lambda r: (r["entity"], r["date"], int(r["hour"]) if r["hour"] else -1), reverse=True)
 
     # Print table
     click.echo("")

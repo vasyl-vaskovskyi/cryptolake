@@ -74,19 +74,23 @@ def _sort_key_for_stream(raw_bytes: bytes, exchange_ts: int, stream: str) -> int
 
 
 def _stream_data_records(files: list[Path], stream: str = "") -> Iterator[tuple[bytes, int]]:
-    """Stream (raw_text bytes, received_at) from hour files, merging per-hour.
+    """Stream (raw_text bytes, received_at) from files, merging per-hour.
 
-    Groups files by hour (base + late + backfill), merges and sorts within
-    each hour by the stream's natural key (trade ID for trades, update ID
-    for depth, exchange_ts for others). This ensures backfill records are
-    interleaved correctly with live data.
+    Handles both consolidated daily files (single file) and unconsolidated
+    hourly files (groups by hour, merges, sorts, deduplicates).
     """
-    from src.cli.consolidate import discover_hour_files
-
     if not files:
         return
 
-    # All files should be in the same date directory
+    # Single consolidated daily file — stream directly, already sorted
+    if len(files) == 1 and not files[0].name.startswith("hour-"):
+        for rec in _read_data_records_from_file(files[0]):
+            yield rec[0], rec[1]
+        return
+
+    # Unconsolidated: group by hour, merge, sort, deduplicate
+    from src.cli.consolidate import discover_hour_files
+
     date_dir = files[0].parent
     hour_groups = discover_hour_files(date_dir)
 
@@ -98,7 +102,7 @@ def _stream_data_records(files: list[Path], stream: str = "") -> Iterator[tuple[
         hour_files.extend(fg["late"])
         hour_files.extend(fg["backfill"])
 
-        # If only one file and no backfills, stream directly (memory efficient)
+        # Single file for this hour — stream directly
         if len(hour_files) == 1:
             for rec in _read_data_records_from_file(hour_files[0]):
                 yield rec[0], rec[1]
@@ -111,8 +115,6 @@ def _stream_data_records(files: list[Path], stream: str = "") -> Iterator[tuple[
 
         all_records.sort(key=lambda r: _sort_key_for_stream(r[0], r[2], stream))
 
-        # Deduplicate: if stream has a natural ID key, skip records with
-        # the same key as the previous (backfill may overlap with live data)
         prev_key: int | None = None
         for raw_bytes, received_at, exchange_ts in all_records:
             key = _sort_key_for_stream(raw_bytes, exchange_ts, stream)
@@ -202,6 +204,27 @@ CHECKERS = {
 }
 
 
+def _scan_gap_envelopes_from_file(file_path: Path) -> list[dict]:
+    """Read gap envelopes from a single .jsonl.zst file."""
+    gaps = []
+    if not file_path.exists():
+        return gaps
+    try:
+        dctx = zstd.ZstdDecompressor()
+        with open(file_path, "rb") as fh:
+            reader = dctx.stream_reader(fh)
+            text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+            for line in text_reader:
+                if '"gap"' not in line:
+                    continue
+                env = orjson.loads(line)
+                if env.get("type") == "gap":
+                    gaps.append(env)
+    except Exception:
+        pass
+    return gaps
+
+
 def _scan_gap_envelopes(date_dir: Path) -> list[dict]:
     """Read gap envelopes from all .jsonl.zst files in a date directory."""
     gaps = []
@@ -276,10 +299,21 @@ def check_integrity(
                 if stream and stream_name != stream:
                     continue
 
-                for date_dir in sorted(stream_dir.iterdir()):
-                    if not date_dir.is_dir():
-                        continue
-                    date_name = date_dir.name
+                # Discover dates: unconsolidated (directories) + consolidated (daily files)
+                all_date_names: set[str] = set()
+                consolidated_dates: set[str] = set()
+
+                for f in stream_dir.iterdir():
+                    if f.is_file() and f.name.endswith(".jsonl.zst"):
+                        name = f.name[:-len(".jsonl.zst")]
+                        if len(name) == 10 and name[4] == "-" and name[7] == "-":
+                            all_date_names.add(name)
+                            consolidated_dates.add(name)
+                for d in stream_dir.iterdir():
+                    if d.is_dir() and len(d.name) == 10 and d.name[4] == "-":
+                        all_date_names.add(d.name)
+
+                for date_name in sorted(all_date_names):
                     if date and date_name != date:
                         continue
                     if date_from and date_name < date_from:
@@ -287,24 +321,38 @@ def check_integrity(
                     if date_to and date_name > date_to:
                         continue
 
-                    files = sorted(date_dir.glob("hour-*.jsonl.zst"),
-                                   key=lambda f: int(f.name.split(".")[0].replace("hour-", "")))
-                    if not files:
-                        continue
-
-                    # ID continuity check (only for streams with sequential IDs)
                     breaks: list[dict] = []
                     count = 0
-                    if stream_name in CHECKABLE_STREAMS:
-                        checker = CHECKERS[stream_name]
-                        count, breaks = checker(files)
-                    else:
-                        # Count records for non-checkable streams
-                        for f in files:
-                            count += len(_read_data_records_from_file(f))
+                    gap_envelopes: list[dict] = []
 
-                    # Gap envelopes (all streams)
-                    gap_envelopes = _scan_gap_envelopes(date_dir)
+                    if date_name in consolidated_dates:
+                        # Consolidated: scan the single daily file
+                        daily_file = stream_dir / f"{date_name}.jsonl.zst"
+                        files = [daily_file]
+
+                        if stream_name in CHECKABLE_STREAMS:
+                            checker = CHECKERS[stream_name]
+                            count, breaks = checker(files)
+                        else:
+                            count = len(_read_data_records_from_file(daily_file))
+
+                        gap_envelopes = _scan_gap_envelopes_from_file(daily_file)
+                    else:
+                        # Unconsolidated: scan hourly files
+                        date_dir = stream_dir / date_name
+                        files = sorted(date_dir.glob("hour-*.jsonl.zst"),
+                                       key=lambda f: int(f.name.split(".")[0].replace("hour-", "")))
+                        if not files:
+                            continue
+
+                        if stream_name in CHECKABLE_STREAMS:
+                            checker = CHECKERS[stream_name]
+                            count, breaks = checker(files)
+                        else:
+                            for f in files:
+                                count += len(_read_data_records_from_file(f))
+
+                        gap_envelopes = _scan_gap_envelopes(date_dir)
 
                     if count == 0 and not gap_envelopes:
                         continue
@@ -462,7 +510,7 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
                 })
 
     # Sort descending by entity, date, hour
-    rows.sort(key=lambda r: (r["entity"], r["date"], r["hour"]), reverse=True)
+    rows.sort(key=lambda r: (r["entity"], r["date"], int(r["hour"]) if r["hour"] else -1), reverse=True)
 
     # Print table
     click.echo("")
