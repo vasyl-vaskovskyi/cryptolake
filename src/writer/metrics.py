@@ -92,3 +92,20 @@ hours_sealed_previous_day = Gauge(
     "Hours sealed for the previous UTC date",
     ["exchange", "symbol", "stream"],
 )
+
+backup_recovery_attempts = Counter(
+    "writer_backup_recovery_attempts_total",
+    "Total backup recovery attempts",
+)
+backup_recovery_success = Counter(
+    "writer_backup_recovery_success_total",
+    "Full recoveries from backup (no gap envelope needed)",
+)
+backup_recovery_partial = Counter(
+    "writer_backup_recovery_partial_total",
+    "Partial recoveries from backup (narrowed gap)",
+)
+backup_recovery_miss = Counter(
+    "writer_backup_recovery_miss_total",
+    "Backup had no data for the gap",
+)

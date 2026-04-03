@@ -16,6 +16,7 @@ from src.common.envelope import (
     create_gap_envelope,
     deserialize_envelope,
 )
+from src.writer.backup_recovery import recover_from_backup
 from src.common.system_identity import get_host_boot_id
 from src.writer import metrics as writer_metrics
 from src.writer.buffer_manager import BufferManager, FlushResult
@@ -61,6 +62,8 @@ class WriterConsumer:
         state_manager: StateManager,
         base_dir: str,
         host_evidence: HostLifecycleEvidence | None = None,
+        backup_brokers: list[str] | None = None,
+        backup_topic_prefix: str = "",
     ):
         self.brokers = brokers
         self.topics = topics
@@ -96,6 +99,54 @@ class WriterConsumer:
         # REST-polled stream gap threshold (3x configured poll interval in ns)
         self._rest_poll_interval_ns: int = _DEFAULT_REST_POLL_INTERVAL_NS
         self._hours_sealed_count: dict[tuple[str, str, str], int] = {}
+        self._backup_brokers: list[str] = backup_brokers or []
+        self._backup_topic_prefix: str = backup_topic_prefix
+
+    def _try_backup_recovery(self, gap_envelope: dict) -> tuple[list[dict], dict | None]:
+        """Attempt to fill a gap from backup Redpanda topics.
+
+        Returns (recovered_records, adjusted_gap_or_None):
+        - On "full": (records, None) — gap fully covered, no gap envelope needed
+        - On "partial": (records, narrowed_gap) — some records recovered, gap narrowed
+        - On "none": ([], original_gap_envelope) — nothing recovered
+        """
+        if not self._backup_brokers or not self._backup_topic_prefix:
+            return [], gap_envelope
+
+        stream = gap_envelope.get("stream", "")
+        symbol = gap_envelope.get("symbol", "")
+        exchange = gap_envelope.get("exchange", "")
+        gap_start = gap_envelope.get("gap_start_ts", 0)
+        gap_end = gap_envelope.get("gap_end_ts", 0)
+
+        if gap_start <= 0 or gap_end <= 0:
+            return [], gap_envelope
+
+        records, coverage = recover_from_backup(
+            brokers=self._backup_brokers,
+            backup_topic_prefix=self._backup_topic_prefix,
+            stream=stream, symbol=symbol, exchange=exchange,
+            gap_start_ns=gap_start, gap_end_ns=gap_end,
+        )
+
+        writer_metrics.backup_recovery_attempts.inc()
+
+        if coverage == "full":
+            writer_metrics.backup_recovery_success.inc()
+            return records, None
+        elif coverage == "partial":
+            writer_metrics.backup_recovery_partial.inc()
+            last_received = max(r.get("received_at", 0) for r in records)
+            narrowed = dict(gap_envelope)
+            narrowed["gap_start_ts"] = last_received + 1
+            narrowed["detail"] = (
+                f"{gap_envelope.get('detail', '')} "
+                f"[partial backup recovery: {len(records)} records]"
+            )
+            return records, narrowed
+        else:
+            writer_metrics.backup_recovery_miss.inc()
+            return [], gap_envelope
 
     async def start(self) -> None:
         from confluent_kafka import Consumer as KafkaConsumer
@@ -752,29 +803,31 @@ class WriterConsumer:
                 # One-time recovery gap check (uses durable checkpoints)
                 recovery_gap = self._check_recovery_gap(envelope)
                 if recovery_gap is not None:
-                    recovery_gap = add_broker_coordinates(
-                        recovery_gap,
-                        topic=msg_topic,
-                        partition=msg_partition,
-                        offset=-1,  # synthetic record, not from Kafka
-                    )
-                    gap_results = self.buffer_manager.add(recovery_gap)
-                    if gap_results:
-                        await self._write_and_save(gap_results)
+                    recovered, adjusted_gap = self._try_backup_recovery(recovery_gap)
+                    for rec in recovered:
+                        rec_results = self.buffer_manager.add(rec)
+                        if rec_results:
+                            await self._write_and_save(rec_results)
+                    if adjusted_gap is not None:
+                        adjusted_gap = add_broker_coordinates(adjusted_gap, topic=msg_topic, partition=msg_partition, offset=-1)
+                        gap_results = self.buffer_manager.add(adjusted_gap)
+                        if gap_results:
+                            await self._write_and_save(gap_results)
 
                 # Runtime session change detection (covers collector crash/SIGKILL
                 # after initial recovery is done)
                 gap_envelope = await self._check_session_change(envelope)
                 if gap_envelope is not None:
-                    gap_envelope = add_broker_coordinates(
-                        gap_envelope,
-                        topic=msg_topic,
-                        partition=msg_partition,
-                        offset=-1,  # synthetic record, not from Kafka
-                    )
-                    gap_results = self.buffer_manager.add(gap_envelope)
-                    if gap_results:
-                        await self._write_and_save(gap_results)
+                    recovered, adjusted_gap = self._try_backup_recovery(gap_envelope)
+                    for rec in recovered:
+                        rec_results = self.buffer_manager.add(rec)
+                        if rec_results:
+                            await self._write_and_save(rec_results)
+                    if adjusted_gap is not None:
+                        adjusted_gap = add_broker_coordinates(adjusted_gap, topic=msg_topic, partition=msg_partition, offset=-1)
+                        gap_results = self.buffer_manager.add(adjusted_gap)
+                        if gap_results:
+                            await self._write_and_save(gap_results)
 
             # Per-file hourly rotation (spec 8.2: file routing by message received_at)
             msg_dt = datetime.datetime.fromtimestamp(
