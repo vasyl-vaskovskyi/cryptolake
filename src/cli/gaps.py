@@ -639,11 +639,29 @@ def _records_missed(gap: dict) -> str:
     return "?"
 
 
-def _gap_status(gap: dict, stream_name: str) -> str:
-    """Determine the status of a gap record."""
+def _gap_status(gap: dict, stream_name: str, date_dir: Path | None = None) -> str:
+    """Determine the status of a gap record.
+
+    Checks whether backfill files exist for the gap's hour to distinguish
+    RECOVERED from MISSING.
+    """
     if stream_name in NON_BACKFILLABLE_STREAMS:
         return "UNRECOVERABLE"
-    # TODO: check for IN PROGRESS state when backfill tracking is added
+
+    # Check if backfill files exist for this gap's hour
+    if date_dir is not None and date_dir.exists():
+        from datetime import datetime, timezone
+        start_ns = gap.get("gap_start_ts", 0)
+        try:
+            dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
+            hour = dt.hour
+        except (ValueError, OSError):
+            return "MISSING"
+        # Look for backfill files for this hour
+        backfill_pattern = f"hour-{hour}.backfill-*.jsonl.zst"
+        if list(date_dir.glob(backfill_pattern)):
+            return "RECOVERED"
+
     return "MISSING"
 
 
@@ -838,7 +856,7 @@ def _ns_to_hour_str(ns: int) -> str:
         return "?"
 
 
-def _print_report(report: dict) -> None:
+def _print_report(report: dict, base_dir: Path | None = None) -> None:
     """Print a single unified table of all gaps across all streams."""
     rows: list[dict] = []
     grand_total_gaps = 0
@@ -855,6 +873,11 @@ def _print_report(report: dict) -> None:
                     gaps = info["gaps"]
                     expect_from = info.get("expect_from", 0)
                     expect_to = info.get("expect_to", 23)
+
+                    # Resolve date directory for backfill file checks
+                    date_dir = None
+                    if base_dir is not None:
+                        date_dir = base_dir / exch_name / sym_name / stream_name / date_name
 
                     # Build unified gap list
                     all_entries: list[dict] = []
@@ -880,7 +903,7 @@ def _print_report(report: dict) -> None:
                     for g in gaps:
                         all_entries.append({
                             **g,
-                            "_status": _gap_status(g, stream_name),
+                            "_status": _gap_status(g, stream_name, date_dir=date_dir),
                             "_hour": _ns_to_hour_str(g.get("gap_start_ts", 0)),
                         })
 
@@ -998,7 +1021,7 @@ def analyze(exchange, symbol, stream, date, date_from, date_to, output_json, bas
 
         click.echo(json.dumps(_serialisable(report)))
     else:
-        _print_report(report)
+        _print_report(report, base_dir=base)
 
 
 @cli.command()
