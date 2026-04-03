@@ -330,8 +330,8 @@ def test_write_manifest_structure(tmp_path):
             },
         },
         hour_details={
-            0: {"status": "present", "sources": ["hour-0.jsonl.zst"]},
-            1: {"status": "present", "sources": ["hour-1.jsonl.zst", "hour-1.late-1.jsonl.zst"]},
+            0: {"status": "present", "sources": {"hour-0.jsonl.zst": "sha0"}},
+            1: {"status": "present", "sources": {"hour-1.jsonl.zst": "sha1", "hour-1.late-1.jsonl.zst": "sha1l"}},
             14: {"status": "missing", "synthesized_gap": True},
         },
         source_files=["hour-0.jsonl.zst", "hour-1.jsonl.zst", "hour-1.late-1.jsonl.zst"],
@@ -358,7 +358,7 @@ def test_write_manifest_structure(tmp_path):
 
 # --- Task 8: Cleanup function ---
 
-def test_cleanup_removes_zst_keeps_sha256(tmp_path):
+def test_cleanup_removes_zst_and_sha256(tmp_path):
     date_dir = tmp_path / "2026-03-28"
     date_dir.mkdir()
 
@@ -377,8 +377,10 @@ def test_cleanup_removes_zst_keeps_sha256(tmp_path):
 
     assert not zst_file.exists()
     assert not late_zst.exists()
-    assert sha_file.exists()
-    assert late_sha.exists()
+    assert not sha_file.exists()
+    assert not late_sha.exists()
+    # Directory removed when empty
+    assert not date_dir.exists()
 
 
 def test_cleanup_does_not_remove_unrelated_files(tmp_path):
@@ -395,6 +397,8 @@ def test_cleanup_does_not_remove_unrelated_files(tmp_path):
 
     assert not zst_file.exists()
     assert unrelated.exists()
+    # Directory not removed because unrelated file remains
+    assert date_dir.exists()
 
 
 # --- Task 9: Main orchestrator ---
@@ -436,11 +440,9 @@ def test_consolidate_day_full_day(tmp_path):
     manifest = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.manifest.json"
     assert manifest.exists()
 
+    # Date directory should be removed (empty after cleanup)
     date_dir = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28"
-    zst_files = list(date_dir.glob("hour-*.jsonl.zst"))
-    assert len(zst_files) == 0
-    sha_files = list(date_dir.glob("*.sha256"))
-    assert len(sha_files) == 24
+    assert not date_dir.exists()
 
 
 def test_consolidate_day_with_missing_hours(tmp_path):

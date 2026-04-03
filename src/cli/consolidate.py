@@ -256,13 +256,26 @@ def write_manifest(
 
 
 def cleanup_hourly_files(date_dir: Path, consolidated_files: list[Path]) -> int:
-    """Remove consolidated .jsonl.zst files, keep .sha256 sidecars."""
+    """Remove consolidated .jsonl.zst files and their .sha256 sidecars.
+
+    After all files are removed, removes the date directory if empty.
+    """
     removed = 0
     for f in consolidated_files:
         if f.exists():
             f.unlink()
             removed += 1
             logger.info("cleanup_removed", file=f.name)
+        # Also remove the .sha256 sidecar
+        sc = sidecar_path(f)
+        if sc.exists():
+            sc.unlink()
+
+    # Remove date directory if empty
+    if date_dir.exists() and not any(date_dir.iterdir()):
+        date_dir.rmdir()
+        logger.info("cleanup_removed_dir", dir=date_dir.name)
+
     return removed
 
 
@@ -299,18 +312,27 @@ def consolidate_day(
     source_files = []
     hour_details: dict[int, dict] = {}
 
+    def _read_sidecar_sha(data_path: Path) -> str:
+        """Read SHA256 from a sidecar file, or return empty string."""
+        sc = sidecar_path(data_path)
+        if sc.exists():
+            return sc.read_text().strip().split()[0]
+        return ""
+
     for h in range(24):
         if h not in hour_files:
             missing_hours.append(h)
             hour_details[h] = {"status": "missing", "synthesized_gap": True}
         else:
             fg = hour_files[h]
-            sources = []
+            sources: dict[str, str] = {}
             if fg["base"]:
-                sources.append(fg["base"].name)
-            sources.extend(f.name for f in fg["late"])
-            sources.extend(f.name for f in fg["backfill"])
-            source_files.extend(sources)
+                sources[fg["base"].name] = _read_sidecar_sha(fg["base"])
+            for f in fg["late"]:
+                sources[f.name] = _read_sidecar_sha(f)
+            for f in fg["backfill"]:
+                sources[f.name] = _read_sidecar_sha(f)
+            source_files.extend(sources.keys())
 
             if fg["base"]:
                 status = "present"
