@@ -532,10 +532,27 @@ def run(base_dir, exchange, symbol, stream, target_date):
     if base_dir is None:
         base_dir = default_archive_dir()
 
+    # Skip everything if the symbol-level archive already exists
+    symbol_dir = Path(base_dir) / exchange / symbol.lower()
+    tar_path = symbol_dir / f"{target_date}.tar.zst"
+    if tar_path.exists():
+        click.echo(f"Already sealed: {tar_path.name} — skipping consolidation.")
+        return
+
     streams = [stream] if stream else ALL_STREAMS
+    any_consolidated = False
 
     for s in streams:
-        date_dir = Path(base_dir) / exchange / symbol.lower() / s / target_date
+        stream_dir = Path(base_dir) / exchange / symbol.lower() / s
+        date_dir = stream_dir / target_date
+        daily_file = stream_dir / f"{target_date}.jsonl.zst"
+
+        # Count as consolidated if the daily file already exists (previously done)
+        if daily_file.exists():
+            any_consolidated = True
+            click.echo(f"[{s}] Skipped (already consolidated or no data)")
+            continue
+
         if not date_dir.is_dir():
             continue
 
@@ -550,6 +567,7 @@ def run(base_dir, exchange, symbol, stream, target_date):
         if result.get("skipped"):
             click.echo(f"[{s}] Skipped (already consolidated or no data)")
         elif result.get("success"):
+            any_consolidated = True
             click.echo(
                 f"[{s}] Complete: {result['total_records']} records, "
                 f"{len(result.get('missing_hours', []))} missing hours"
@@ -558,6 +576,23 @@ def run(base_dir, exchange, symbol, stream, target_date):
             click.echo(f"[{s}] FAILED: {result.get('error', 'unknown error')}")
 
     click.echo("Consolidation finished.")
+
+    if any_consolidated:
+        seal_result = seal_daily_archive(
+            base_dir=base_dir,
+            exchange=exchange,
+            symbol=symbol,
+            date=target_date,
+        )
+        if seal_result.get("skipped"):
+            click.echo(f"Seal skipped (already sealed).")
+        elif seal_result.get("success"):
+            click.echo(
+                f"Sealed: {target_date}.tar.zst "
+                f"({len(seal_result.get('streams', []))} streams)"
+            )
+        else:
+            click.echo(f"Seal FAILED.")
 
 
 if __name__ == "__main__":

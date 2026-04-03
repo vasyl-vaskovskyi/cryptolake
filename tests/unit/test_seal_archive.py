@@ -174,3 +174,65 @@ def test_seal_skips_if_already_sealed(tmp_path):
     assert result["success"] is True
     # The fake file should be untouched
     assert tar_path.read_bytes() == b"fake-sealed-content"
+
+
+# ---------------------------------------------------------------------------
+# Test 5: CLI run command seals after consolidation
+# ---------------------------------------------------------------------------
+
+def test_consolidate_run_seals_archive(tmp_path):
+    """Create hourly files, run CLI, verify sealed archive exists and per-stream files removed."""
+    from datetime import datetime, timezone
+
+    date = "2026-04-02"
+    exchange = "binance"
+    symbol = "btcusdt"
+    stream = "trades"
+
+    # Create hourly files for the trades stream
+    day_start_ms = int(datetime(2026, 4, 2, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000)
+    stream_date_dir = tmp_path / exchange / symbol / stream / date
+    stream_date_dir.mkdir(parents=True, exist_ok=True)
+
+    cctx = zstandard.ZstdCompressor(level=3)
+    for h in range(24):
+        envs = [
+            {
+                "v": 1, "type": "data", "exchange": exchange, "symbol": symbol,
+                "stream": stream, "received_at": day_start_ms + h * 3_600_000 + i,
+                "exchange_ts": day_start_ms + h * 3_600_000 + i,
+                "collector_session_id": "test", "session_seq": i,
+                "raw_text": "{}", "raw_sha256": "abc",
+            }
+            for i in range(3)
+        ]
+        data = b"\n".join(orjson.dumps(e) for e in envs)
+        hour_path = stream_date_dir / f"hour-{h}.jsonl.zst"
+        hour_path.write_bytes(cctx.compress(data))
+        from src.writer.file_rotator import write_sha256_sidecar, sidecar_path
+        write_sha256_sidecar(hour_path, sidecar_path(hour_path))
+
+    runner = CliRunner()
+    from src.cli.consolidate import cli
+    result = runner.invoke(cli, [
+        "run",
+        "--base-dir", str(tmp_path),
+        "--exchange", exchange,
+        "--symbol", symbol,
+        "--stream", stream,
+        "--date", date,
+    ])
+
+    assert result.exit_code == 0, f"CLI failed:\n{result.output}"
+
+    # Sealed archive should exist
+    symbol_dir = tmp_path / exchange / symbol
+    tar_path = symbol_dir / f"{date}.tar.zst"
+    sha_path = symbol_dir / f"{date}.tar.zst.sha256"
+    assert tar_path.exists(), f"Expected sealed archive at {tar_path}"
+    assert sha_path.exists(), f"Expected sha256 sidecar at {sha_path}"
+
+    # Per-stream daily files should be removed
+    stream_dir = tmp_path / exchange / symbol / stream
+    assert not (stream_dir / f"{date}.jsonl.zst").exists(), "per-stream daily file should be removed"
+    assert not (stream_dir / f"{date}.manifest.json").exists(), "per-stream manifest should be removed"

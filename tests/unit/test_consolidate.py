@@ -497,8 +497,9 @@ def test_cli_consolidate_full_day(tmp_path):
     ])
     assert result.exit_code == 0
     assert "complete" in result.output.lower() or "finished" in result.output.lower()
-    daily = base_dir / "binance" / "btcusdt" / "trades" / "2026-03-28.jsonl.zst"
-    assert daily.exists()
+    # After sealing, per-stream files are archived into the symbol-level tar.zst
+    sealed = base_dir / "binance" / "btcusdt" / "2026-03-28.tar.zst"
+    assert sealed.exists()
 
 
 def test_cli_consolidate_specific_stream(tmp_path):
@@ -510,5 +511,6 @@ def test_cli_consolidate_specific_stream(tmp_path):
         "--stream", "depth", "--date", "2026-03-28",
     ])
     assert result.exit_code == 0
-    daily = base_dir / "binance" / "btcusdt" / "depth" / "2026-03-28.jsonl.zst"
-    assert daily.exists()
+    # After sealing, per-stream files are archived into the symbol-level tar.zst
+    sealed = base_dir / "binance" / "btcusdt" / "2026-03-28.tar.zst"
+    assert sealed.exists()
