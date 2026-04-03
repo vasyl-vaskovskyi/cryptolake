@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +28,8 @@ class Collector:
     def __init__(self, config_path: str):
         self.config = load_config(Path(config_path))
         self.exchange_cfg = self.config.exchanges.binance
-        self.session_id = f"{self.exchange_cfg.collector_id}_{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"
+        collector_id = os.environ.get("COLLECTOR_ID", self.exchange_cfg.collector_id)
+        self.session_id = f"{collector_id}_{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"
         self.adapter = BinanceAdapter(
             ws_base=self.exchange_cfg.ws_base,
             rest_base=self.exchange_cfg.rest_base,
@@ -40,6 +42,7 @@ class Collector:
             max_buffer=producer_cfg.max_buffer,
             buffer_caps=producer_cfg.buffer_caps,
             default_stream_cap=producer_cfg.default_stream_cap,
+            topic_prefix=os.environ.get("TOPIC_PREFIX", ""),
         )
         self.enabled_streams = self.exchange_cfg.get_enabled_streams()
         self.symbols = self.exchange_cfg.symbols

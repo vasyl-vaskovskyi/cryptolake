@@ -202,6 +202,7 @@ class TestProducerOverflow:
 
         producer = CryptoLakeProducer.__new__(CryptoLakeProducer)
         producer.exchange = "binance"
+        producer.topic_prefix = ""
         producer.collector_session_id = "s"
         producer._producer = mock_instance
         producer._on_overflow = None

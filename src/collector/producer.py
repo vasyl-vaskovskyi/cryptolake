@@ -5,6 +5,7 @@ import time
 from typing import Callable
 
 import structlog
+from confluent_kafka import Producer as KafkaProducer
 
 from src.collector import metrics as collector_metrics
 from src.common.envelope import create_gap_envelope, serialize_envelope
@@ -28,8 +29,10 @@ class CryptoLakeProducer:
         buffer_caps: dict[str, int] | None = None,
         default_stream_cap: int = 10_000,
         on_overflow: Callable[[str, str, str], None] | None = None,
+        topic_prefix: str = "",
     ):
         self.exchange = exchange
+        self.topic_prefix = topic_prefix
         self.collector_session_id = collector_session_id
         self.max_buffer = max_buffer
         self.buffer_caps = buffer_caps if buffer_caps is not None else {"depth": 80_000, "trades": 10_000}
@@ -40,8 +43,6 @@ class CryptoLakeProducer:
         # Overflow window tracking: {(symbol, stream): {"start_ts": ns, "dropped": count}}
         self._overflow_windows: dict[tuple[str, str], dict] = {}
         self._overflow_seq: int = 0
-
-        from confluent_kafka import Producer as KafkaProducer
 
         self._producer = KafkaProducer({
             "bootstrap.servers": ",".join(brokers),
@@ -65,7 +66,7 @@ class CryptoLakeProducer:
         """
         stream = envelope["stream"]
         symbol = envelope["symbol"]
-        topic = f"{self.exchange}.{stream}"
+        topic = f"{self.topic_prefix}{self.exchange}.{stream}"
         key = symbol.encode()
         try:
             value = serialize_envelope(envelope)
@@ -165,7 +166,7 @@ class CryptoLakeProducer:
         )
         self._overflow_seq += 1
         # Produce the gap record itself (best-effort — buffer just recovered so should succeed)
-        topic = f"{self.exchange}.{stream}"
+        topic = f"{self.topic_prefix}{self.exchange}.{stream}"
         try:
             self._producer.produce(
                 topic=topic,
