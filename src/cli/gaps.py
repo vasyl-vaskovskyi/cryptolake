@@ -226,7 +226,8 @@ async def _fill_trade_id_gaps(
         if not gaps:
             break
 
-        logger.info("backfill_filling_trade_gaps",
+        import structlog
+        structlog.get_logger().info("backfill_filling_trade_gaps",
                      pass_num=pass_num + 1, gaps=len(gaps),
                      total_missing=sum(to_id - from_id + 1 for from_id, to_id in gaps))
 
