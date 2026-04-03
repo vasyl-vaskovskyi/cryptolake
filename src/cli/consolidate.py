@@ -1,8 +1,10 @@
 """Daily consolidation: merge hourly archive files into single daily files."""
 from __future__ import annotations
 
+import io
 import json
 import re
+import tarfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
@@ -410,6 +412,93 @@ def consolidate_day(
         "missing_hours": missing_hours,
         "files_consolidated": len(consolidated_files),
     }
+
+
+def seal_daily_archive(*, base_dir: str, exchange: str, symbol: str, date: str) -> dict:
+    """Package all per-stream daily files for a date into a single tar.zst archive.
+
+    The archive is placed at {symbol_dir}/{date}.tar.zst.  For each stream found:
+      - .jsonl.zst  → decompressed to raw JSONL, stored as {stream}-{date}.jsonl
+      - .manifest.json → stored as {stream}-{date}.manifest.json
+      - .jsonl.zst.sha256 → stored as {stream}-{date}.sha256
+
+    A SHA-256 sidecar (.tar.zst.sha256) is written and all archived per-stream
+    files are removed after successful archiving.
+    """
+    symbol_dir = Path(base_dir) / exchange / symbol.lower()
+    tar_path = symbol_dir / f"{date}.tar.zst"
+    sha_path = tar_path.with_suffix(tar_path.suffix + ".sha256")
+
+    if tar_path.exists():
+        logger.info("seal_skipped", exchange=exchange, symbol=symbol, date=date,
+                    reason="archive already exists")
+        return {"success": True, "skipped": True, "streams": []}
+
+    # Discover streams that have a daily .jsonl.zst for this date
+    streams_found = []
+    if symbol_dir.is_dir():
+        for entry in sorted(symbol_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            candidate = entry / f"{date}.jsonl.zst"
+            if candidate.exists():
+                streams_found.append(entry.name)
+
+    if not streams_found:
+        logger.warning("seal_no_streams", exchange=exchange, symbol=symbol, date=date)
+        return {"success": True, "skipped": True, "streams": []}
+
+    # Build the tar contents in memory so we can zstd-compress the whole tar
+    tar_buf = io.BytesIO()
+    archived_files: list[Path] = []
+
+    with tarfile.open(fileobj=tar_buf, mode="w") as tf:
+        for stream in streams_found:
+            stream_dir = symbol_dir / stream
+
+            # --- .jsonl.zst → decompress and add as plain JSONL ---
+            zst_file = stream_dir / f"{date}.jsonl.zst"
+            dctx = zstd.ZstdDecompressor()
+            with open(zst_file, "rb") as fh:
+                raw_jsonl = dctx.stream_reader(fh).read()
+            member_name = f"{stream}-{date}.jsonl"
+            info = tarfile.TarInfo(name=member_name)
+            info.size = len(raw_jsonl)
+            tf.addfile(info, io.BytesIO(raw_jsonl))
+            archived_files.append(zst_file)
+
+            # --- .manifest.json ---
+            manifest_file = stream_dir / f"{date}.manifest.json"
+            if manifest_file.exists():
+                tf.add(manifest_file, arcname=f"{stream}-{date}.manifest.json")
+                archived_files.append(manifest_file)
+
+            # --- .jsonl.zst.sha256 ---
+            sha256_file = stream_dir / f"{date}.jsonl.zst.sha256"
+            if sha256_file.exists():
+                tf.add(sha256_file, arcname=f"{stream}-{date}.sha256")
+                archived_files.append(sha256_file)
+
+    # Compress the tar with zstd
+    raw_tar = tar_buf.getvalue()
+    cctx = zstd.ZstdCompressor(level=3)
+    compressed = cctx.compress(raw_tar)
+
+    symbol_dir.mkdir(parents=True, exist_ok=True)
+    tar_path.write_bytes(compressed)
+
+    # Write sha256 sidecar
+    digest = compute_sha256(tar_path)
+    sha_path.write_text(f"{digest}  {tar_path.name}\n")
+
+    # Remove per-stream daily files
+    for f in archived_files:
+        if f.exists():
+            f.unlink()
+
+    logger.info("seal_complete", exchange=exchange, symbol=symbol, date=date,
+                streams=streams_found, archive=tar_path.name)
+    return {"success": True, "skipped": False, "streams": streams_found}
 
 
 import click
