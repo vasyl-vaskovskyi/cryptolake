@@ -785,6 +785,48 @@ def _format_hours_line(hours: dict[int, str], expect_from: int = 0, expect_to: i
     return "  ".join(parts)
 
 
+def _read_sealed_archive(archive_path: Path, date: str) -> list[tuple[str, dict, list[dict]]]:
+    """Read manifests and gap envelopes from a sealed tar.zst archive.
+    Returns list of (stream_name, hour_map, gap_envelopes) tuples.
+    """
+    manifests: dict[str, dict] = {}
+    gap_envelopes: dict[str, list[dict]] = {}
+
+    dctx = zstd.ZstdDecompressor()
+    try:
+        with open(archive_path, "rb") as f:
+            with dctx.stream_reader(f) as reader:
+                with tarfile.open(fileobj=reader, mode="r|") as tar:
+                    for member in tar:
+                        if member.name.endswith(f"-{date}.manifest.json"):
+                            stream_name = member.name.split(f"-{date}.manifest.json")[0]
+                            data = tar.extractfile(member).read()
+                            manifests[stream_name] = json.loads(data)
+                        elif member.name.endswith(f"-{date}.jsonl"):
+                            stream_name = member.name.split(f"-{date}.jsonl")[0]
+                            fobj = tar.extractfile(member)
+                            gaps = []
+                            for line in fobj:
+                                if b'"gap"' in line:
+                                    env = orjson.loads(line)
+                                    if env.get("type") == "gap":
+                                        gaps.append(env)
+                            gap_envelopes[stream_name] = gaps
+    except Exception as exc:
+        import structlog
+        structlog.get_logger().warning("sealed_archive_read_failed", path=str(archive_path), error=str(exc))
+        return []
+
+    results = []
+    for stream_name, manifest in manifests.items():
+        hour_map: dict[int, str] = {}
+        for h_str, h_info in manifest.get("hours", {}).items():
+            hour_map[int(h_str)] = h_info.get("status", "present")
+        gaps = gap_envelopes.get(stream_name, [])
+        results.append((stream_name, hour_map, gaps))
+    return results
+
+
 def analyze_archive(
     base_dir: Path,
     exchange: str | None = None,
@@ -827,6 +869,36 @@ def analyze_archive(
 
         for sym_dir in symbols_to_scan:
             sym_name = sym_dir.name
+
+            # Check for sealed archives at the symbol level
+            for f in sym_dir.iterdir():
+                if f.is_file() and f.name.endswith(".tar.zst") and not f.name.endswith(".sha256"):
+                    sealed_date = f.name[:-len(".tar.zst")]
+                    if len(sealed_date) == 10 and sealed_date[4] == "-" and sealed_date[7] == "-":
+                        # Apply date filters
+                        if date and sealed_date != date:
+                            continue
+                        if date_from and sealed_date < date_from:
+                            continue
+                        if date_to and sealed_date > date_to:
+                            continue
+                        # Read from sealed archive
+                        sealed_data = _read_sealed_archive(f, sealed_date)
+                        for s_stream, s_hours, s_gaps in sealed_data:
+                            if stream and s_stream != stream:
+                                continue
+                            covered = len(s_hours)
+                            report.setdefault(exch_name, {})
+                            report[exch_name].setdefault(sym_name, {})
+                            report[exch_name][sym_name].setdefault(s_stream, {})
+                            report[exch_name][sym_name][s_stream][sealed_date] = {
+                                "hours": s_hours,
+                                "gaps": s_gaps,
+                                "covered": covered,
+                                "total": 24,
+                                "expect_from": min(s_hours.keys()) if s_hours else 0,
+                                "expect_to": max(s_hours.keys()) if s_hours else 23,
+                            }
 
             streams_to_scan: list[Path] = []
             if stream:
