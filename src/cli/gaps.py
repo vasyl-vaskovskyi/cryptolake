@@ -1180,6 +1180,22 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, 
     date, date_from, date_to = _resolve_date_args(date, date_from, date_to)
     base = Path(base_dir)
 
+    if date is not None:
+        if base.exists():
+            for exch_dir in sorted(base.iterdir()):
+                if not exch_dir.is_dir():
+                    continue
+                if exchange and exch_dir.name != exchange:
+                    continue
+                for sym_dir in sorted(exch_dir.iterdir()):
+                    if not sym_dir.is_dir():
+                        continue
+                    if symbol and sym_dir.name != symbol:
+                        continue
+                    if (sym_dir / f"{date}.tar.zst").exists():
+                        click.echo(f"{date} is sealed. Skipping.")
+                        return
+
     # If a specific stream is given and it's not backfillable, report and exit early
     if stream and stream not in BACKFILLABLE_STREAMS:
         click.echo(f"Stream '{stream}' is not backfillable (unrecoverable via REST API). Skipping.")

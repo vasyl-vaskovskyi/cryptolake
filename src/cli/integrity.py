@@ -583,6 +583,22 @@ def check(exchange, symbol, stream, date, date_from, date_to, as_json, base_dir)
     that the collector's gap detection may have missed.
     """
     date, date_from, date_to = _resolve_date_args(date, date_from, date_to)
+    if date is not None:
+        base = Path(base_dir)
+        if base.exists():
+            for exch_dir in sorted(base.iterdir()):
+                if not exch_dir.is_dir():
+                    continue
+                if exchange and exch_dir.name != exchange:
+                    continue
+                for sym_dir in sorted(exch_dir.iterdir()):
+                    if not sym_dir.is_dir():
+                        continue
+                    if symbol and sym_dir.name != symbol:
+                        continue
+                    if (sym_dir / f"{date}.tar.zst").exists():
+                        click.echo(f"{date} is sealed. Skipping.")
+                        return
     report = check_integrity(
         Path(base_dir),
         exchange=exchange,
