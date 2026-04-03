@@ -406,11 +406,10 @@ def _setup_full_day(tmp_path, hours=range(24), stream="trades"):
     """Create a full day of hourly files for testing."""
     base_dir = tmp_path
     date_dir = base_dir / "binance" / "btcusdt" / stream / "2026-03-28"
-    # 2026-03-28 00:00:00 UTC in nanoseconds
-    _day_start_ns = int(datetime(2026, 3, 28, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    # 2026-03-28 00:00:00 UTC in milliseconds (matching real Binance exchange_ts)
+    _day_start_ms = int(datetime(2026, 3, 28, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1_000)
     for h in hours:
-        # Use epoch-based nanosecond timestamps to be consistent with gap envelope timestamps
-        envs = [_make_data_env(exchange_ts=_day_start_ns + h * 3_600_000_000_000 + i) for i in range(3)]
+        envs = [_make_data_env(exchange_ts=_day_start_ms + h * 3_600_000 + i) for i in range(3)]
         _write_zst_file(date_dir / f"hour-{h}.jsonl.zst", envs)
         from src.writer.file_rotator import write_sha256_sidecar, sidecar_path as sc_path
         data_path = date_dir / f"hour-{h}.jsonl.zst"

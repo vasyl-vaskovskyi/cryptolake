@@ -74,8 +74,10 @@ def _decompress_and_parse(file_path: Path) -> list[dict]:
 
 
 def _sort_key(record: dict) -> int:
+    """Extract sort key from a record, normalized to milliseconds."""
     if record.get("type") == "gap":
-        return record["gap_start_ts"]
+        # gap_start_ts is in nanoseconds, convert to milliseconds
+        return record["gap_start_ts"] // 1_000_000
     return record["exchange_ts"]
 
 
@@ -182,7 +184,7 @@ def verify_daily_file(
                 record = orjson.loads(line)
                 count += 1
                 if record.get("type") == "gap":
-                    ts = record["gap_start_ts"]
+                    ts = record["gap_start_ts"] // 1_000_000  # ns -> ms
                 else:
                     ts = record["exchange_ts"]
                 if ts < prev_ts:
@@ -196,7 +198,7 @@ def verify_daily_file(
             record = orjson.loads(buf.strip())
             count += 1
             if record.get("type") == "gap":
-                ts = record["gap_start_ts"]
+                ts = record["gap_start_ts"] // 1_000_000  # ns -> ms
             else:
                 ts = record["exchange_ts"]
             if ts < prev_ts:
