@@ -73,15 +73,26 @@ def _decompress_and_parse(file_path: Path) -> list[dict]:
     return result
 
 
-def _sort_key(record: dict) -> int:
-    """Extract sort key from a record, normalized to milliseconds."""
+def _sort_key(record: dict, stream: str = "") -> int:
+    """Extract sort key from a record.
+
+    For trades: sort by aggregate trade ID ("a") for correct ID sequence.
+    For depth: sort by update ID ("u") for correct pu-chain.
+    For gaps: use gap_start_ts converted to milliseconds.
+    For everything else: use exchange_ts.
+    """
     if record.get("type") == "gap":
-        # gap_start_ts is in nanoseconds, convert to milliseconds
         return record["gap_start_ts"] // 1_000_000
+    if stream == "trades":
+        raw = orjson.loads(record.get("raw_text", "{}"))
+        return raw.get("a", record["exchange_ts"])
+    if stream == "depth":
+        raw = orjson.loads(record.get("raw_text", "{}"))
+        return raw.get("u", record["exchange_ts"])
     return record["exchange_ts"]
 
 
-def merge_hour(hour: int, file_group: dict) -> list[dict]:
+def merge_hour(hour: int, file_group: dict, stream: str = "") -> list[dict]:
     all_records: list[dict] = []
     if file_group["base"] is not None:
         all_records.extend(_decompress_and_parse(file_group["base"]))
@@ -89,7 +100,7 @@ def merge_hour(hour: int, file_group: dict) -> list[dict]:
         all_records.extend(_decompress_and_parse(path))
     for path in file_group["backfill"]:
         all_records.extend(_decompress_and_parse(path))
-    all_records.sort(key=_sort_key)
+    all_records.sort(key=lambda r: _sort_key(r, stream))
     return all_records
 
 
@@ -158,6 +169,7 @@ def verify_daily_file(
     daily_path: Path,
     expected_count: int,
     sha256_path: Path,
+    stream: str = "",
 ) -> tuple[bool, str | None]:
     """Verify a daily file: record count, ordering, and SHA256."""
     actual_sha = compute_sha256(daily_path)
@@ -167,7 +179,7 @@ def verify_daily_file(
 
     dctx = zstd.ZstdDecompressor()
     count = 0
-    prev_ts = -1
+    prev_key = -1
 
     with open(daily_path, "rb") as fh:
         reader = dctx.stream_reader(fh)
@@ -183,28 +195,22 @@ def verify_daily_file(
                     continue
                 record = orjson.loads(line)
                 count += 1
-                if record.get("type") == "gap":
-                    ts = record["gap_start_ts"] // 1_000_000  # ns -> ms
-                else:
-                    ts = record["exchange_ts"]
-                if ts < prev_ts:
+                key = _sort_key(record, stream)
+                if key < prev_key:
                     return False, (
                         f"Order violation at record {count}: "
-                        f"ts {ts} < previous {prev_ts}"
+                        f"key {key} < previous {prev_key}"
                     )
-                prev_ts = ts
+                prev_key = key
 
         if buf.strip():
             record = orjson.loads(buf.strip())
             count += 1
-            if record.get("type") == "gap":
-                ts = record["gap_start_ts"] // 1_000_000  # ns -> ms
-            else:
-                ts = record["exchange_ts"]
-            if ts < prev_ts:
+            key = _sort_key(record, stream)
+            if key < prev_key:
                 return False, (
                     f"Order violation at record {count}: "
-                    f"ts {ts} < previous {prev_ts}"
+                    f"key {key} < previous {prev_key}"
                 )
 
     if count != expected_count:
@@ -349,7 +355,7 @@ def consolidate_day(
     def hour_iterator():
         for h in range(24):
             if h in hour_files:
-                records = merge_hour(h, hour_files[h])
+                records = merge_hour(h, hour_files[h], stream=stream)
                 yield h, records
             else:
                 gap = synthesize_missing_hour_gap(
@@ -376,7 +382,7 @@ def consolidate_day(
         missing_hours=missing_hours,
     )
 
-    ok, error = verify_daily_file(daily_path, stats["total_records"], sha_path)
+    ok, error = verify_daily_file(daily_path, stats["total_records"], sha_path, stream=stream)
     if not ok:
         logger.error("consolidation_verification_failed", exchange=exchange,
                      symbol=symbol, stream=stream, date=date, error=error)
