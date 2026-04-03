@@ -359,11 +359,51 @@ def find_backfillable_gaps(
     return gaps
 
 
-def _print_report(report: dict) -> None:
+def _gap_envelope_status(gap: dict, stream_name: str, date_dir: Path | None) -> str:
+    """Determine recovery status of a gap envelope."""
+    from src.cli.gaps import NON_BACKFILLABLE_STREAMS
+    if stream_name in NON_BACKFILLABLE_STREAMS:
+        return "UNRECOVERABLE"
+    if date_dir is not None and date_dir.exists():
+        from datetime import datetime, timezone
+        start_ns = gap.get("gap_start_ts", 0)
+        try:
+            dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
+            hour = dt.hour
+        except (ValueError, OSError):
+            return "MISSING"
+        if list(date_dir.glob(f"hour-{hour}.backfill-*.jsonl.zst")):
+            return "RECOVERED"
+    return "MISSING"
+
+
+def _id_break_status(break_info: dict, stream_name: str, date_dir: Path | None) -> str:
+    """Determine recovery status of an ID break."""
+    from src.cli.gaps import NON_BACKFILLABLE_STREAMS
+    if stream_name in NON_BACKFILLABLE_STREAMS:
+        return "UNRECOVERABLE"
+    # If integrity (with merge) found no gap, breaks list is empty.
+    # If we're here, the break persists after merging backfill — it's unrecovered.
+    # But for depth (chain breaks), there's nothing to recover.
+    if break_info.get("missing") is None:
+        return "UNRECOVERABLE"
+    if date_dir is not None and date_dir.exists():
+        hour_str = _ns_to_hour(break_info["at_received"]) if break_info["at_received"] else "0"
+        try:
+            hour = int(hour_str)
+        except ValueError:
+            return "MISSING"
+        if list(date_dir.glob(f"hour-{hour}.backfill-*.jsonl.zst")):
+            return "RECOVERED"
+    return "MISSING"
+
+
+def _print_report(report: dict, base_dir: Path | None = None) -> None:
     total_records = 0
     total_id_breaks = 0
     total_missing = 0
     total_gaps = 0
+    status_counts: dict[str, int] = {"RECOVERED": 0, "UNRECOVERABLE": 0, "MISSING": 0}
 
     rows: list[dict] = []
 
@@ -373,6 +413,10 @@ def _print_report(report: dict) -> None:
         gap_envelopes = info.get("gaps", [])
         total_records += records
 
+        date_dir = None
+        if base_dir is not None:
+            date_dir = base_dir / exch / sym / stream_name / date_name
+
         # ID breaks
         if breaks:
             total_id_breaks += len(breaks)
@@ -380,12 +424,15 @@ def _print_report(report: dict) -> None:
 
             for b in breaks:
                 hour = _ns_to_hour(b["at_received"]) if b["at_received"] else ""
+                status = _id_break_status(b, stream_name, date_dir)
+                status_counts[status] += 1
                 rows.append({
                     "entity": stream_name, "date": date_name, "hour": hour,
                     "type": "ID_BREAK",
                     "detail": f"{b['field']} exp={b['expected']} got={b['actual']}",
                     "missing": str(b["missing"]) if b["missing"] is not None else "chain",
                     "time": _ns_to_time(b["at_received"]) if b["at_received"] else "",
+                    "status": status,
                 })
 
         # Gap envelopes
@@ -396,12 +443,15 @@ def _print_report(report: dict) -> None:
                 reason = g.get("reason", "unknown")
                 start = _ns_to_time(g.get("gap_start_ts", 0))
                 end = _ns_to_time(g.get("gap_end_ts", 0))
+                status = _gap_envelope_status(g, stream_name, date_dir)
+                status_counts[status] += 1
                 rows.append({
                     "entity": stream_name, "date": date_name, "hour": hour,
                     "type": "GAP",
                     "detail": f"{reason} {start}-{end}",
                     "missing": "",
                     "time": start,
+                    "status": status,
                 })
 
     # Sort descending by entity, date, hour
@@ -411,29 +461,29 @@ def _print_report(report: dict) -> None:
     click.echo("")
     hdr = (
         f"  {'ENTITY':<16} {'DATE':<12} {'HOUR':>4}  {'TYPE':<10} "
-        f"{'DETAIL':<42} {'MISSING':>8}  {'TIME':>8}"
+        f"{'DETAIL':<42} {'MISSING':>8}  {'TIME':>8}  {'STATUS':<14}"
     )
     click.echo(hdr)
     click.echo(
         f"  {'-'*16} {'-'*12} {'-'*4}  {'-'*10} "
-        f"{'-'*42} {'-'*8}  {'-'*8}"
+        f"{'-'*42} {'-'*8}  {'-'*8}  {'-'*14}"
     )
 
     for row in rows:
         click.echo(
             f"  {row['entity']:<16} {row['date']:<12} {row['hour']:>4}  "
             f"{row['type']:<10} {row['detail']:<42} "
-            f"{row['missing']:>8}  {row['time']:>8}"
+            f"{row['missing']:>8}  {row['time']:>8}  {row['status']:<14}"
         )
 
     click.echo(
         f"  {'-'*16} {'-'*12} {'-'*4}  {'-'*10} "
-        f"{'-'*42} {'-'*8}  {'-'*8}"
+        f"{'-'*42} {'-'*8}  {'-'*8}  {'-'*14}"
     )
     click.echo(
         f"  {'TOTAL':<16} {'':12} {'':>4}  "
-        f"{total_records} records, {total_id_breaks} ID breaks, {total_gaps} gap envelopes, "
-        f"{total_missing} missing"
+        f"{total_records} records, {total_id_breaks} ID breaks, {total_gaps} gaps  "
+        f"R:{status_counts['RECOVERED']} U:{status_counts['UNRECOVERABLE']} M:{status_counts['MISSING']}"
     )
 
 
@@ -468,7 +518,7 @@ def check(exchange, symbol, stream, date, date_from, date_to, as_json, base_dir)
             serializable["/".join(k)] = v
         click.echo(json.dumps(serializable, indent=2, default=str))
     else:
-        _print_report(report)
+        _print_report(report, base_dir=Path(base_dir))
 
 
 if __name__ == "__main__":
