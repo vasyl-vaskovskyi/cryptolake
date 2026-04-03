@@ -417,32 +417,18 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
         if base_dir is not None:
             date_dir = base_dir / exch / sym / stream_name / date_name
 
-        # ID breaks
-        if breaks:
-            total_id_breaks += len(breaks)
-            total_missing += sum(b["missing"] or 0 for b in breaks)
-
-            for b in breaks:
-                hour = _ns_to_hour(b["at_received"]) if b["at_received"] else ""
-                status = _id_break_status(b, stream_name, date_dir)
-                status_counts[status] += 1
-                rows.append({
-                    "entity": stream_name, "date": date_name, "hour": hour,
-                    "type": "ID_BREAK",
-                    "detail": f"{b['field']} exp={b['expected']} got={b['actual']}",
-                    "missing": str(b["missing"]) if b["missing"] is not None else "chain",
-                    "time": _ns_to_time(b["at_received"]) if b["at_received"] else "",
-                    "status": status,
-                })
-
-        # Gap envelopes
+        # Gap envelopes first — build time ranges to suppress duplicate ID breaks
+        gap_ranges: list[tuple[int, int]] = []
         if gap_envelopes:
             total_gaps += len(gap_envelopes)
             for g in gap_envelopes:
-                hour = _ns_to_hour(g.get("gap_start_ts", 0))
+                gap_start = g.get("gap_start_ts", 0)
+                gap_end = g.get("gap_end_ts", 0)
+                gap_ranges.append((gap_start, gap_end))
+                hour = _ns_to_hour(gap_start)
                 reason = g.get("reason", "unknown")
-                start = _ns_to_time(g.get("gap_start_ts", 0))
-                end = _ns_to_time(g.get("gap_end_ts", 0))
+                start = _ns_to_time(gap_start)
+                end = _ns_to_time(gap_end)
                 status = _gap_envelope_status(g, stream_name, date_dir)
                 status_counts[status] += 1
                 rows.append({
@@ -451,6 +437,27 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
                     "detail": f"{reason} {start}-{end}",
                     "missing": "",
                     "time": start,
+                    "status": status,
+                })
+
+        # ID breaks — skip if a gap envelope already covers the same time
+        if breaks:
+            for b in breaks:
+                at_ns = b.get("at_received", 0)
+                covered = any(gs <= at_ns <= ge + 5_000_000_000 for gs, ge in gap_ranges)
+                if covered:
+                    continue
+                total_id_breaks += len(breaks)
+                total_missing += b["missing"] or 0
+                hour = _ns_to_hour(at_ns) if at_ns else ""
+                status = _id_break_status(b, stream_name, date_dir)
+                status_counts[status] += 1
+                rows.append({
+                    "entity": stream_name, "date": date_name, "hour": hour,
+                    "type": "ID_BREAK",
+                    "detail": f"{b['field']} exp={b['expected']} got={b['actual']}",
+                    "missing": str(b["missing"]) if b["missing"] is not None else "chain",
+                    "time": _ns_to_time(at_ns) if at_ns else "",
                     "status": status,
                 })
 
