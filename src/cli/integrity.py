@@ -542,6 +542,30 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
     )
 
 
+def _resolve_date_args(
+    date: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Apply default date (today UTC) and enforce 3-day range limit."""
+    from datetime import datetime, timezone
+
+    if date is None and date_from is None and date_to is None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return today, None, None
+
+    if date_from is not None and date_to is not None:
+        try:
+            d_from = datetime.strptime(date_from, "%Y-%m-%d")
+            d_to = datetime.strptime(date_to, "%Y-%m-%d")
+            if (d_to - d_from).days > 3:
+                raise click.UsageError("Date range cannot exceed 3 days. Use a narrower range.")
+        except ValueError:
+            pass
+
+    return date, date_from, date_to
+
+
 @click.command()
 @click.option("--exchange", default=None, help="Filter by exchange")
 @click.option("--symbol", default=None, help="Filter by symbol")
@@ -558,6 +582,7 @@ def check(exchange, symbol, stream, date, date_from, date_to, as_json, base_dir)
     chains, bookticker update IDs) have no gaps. This catches data loss
     that the collector's gap detection may have missed.
     """
+    date, date_from, date_to = _resolve_date_args(date, date_from, date_to)
     report = check_integrity(
         Path(base_dir),
         exchange=exchange,

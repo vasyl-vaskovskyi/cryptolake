@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import tarfile
 import time
 import uuid
 from pathlib import Path
@@ -1090,6 +1091,30 @@ def _print_report(report: dict, base_dir: Path | None = None) -> None:
     )
 
 
+def _resolve_date_args(
+    date: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Apply default date (today UTC) and enforce 3-day range limit."""
+    from datetime import datetime, timezone
+
+    if date is None and date_from is None and date_to is None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return today, None, None
+
+    if date_from is not None and date_to is not None:
+        try:
+            d_from = datetime.strptime(date_from, "%Y-%m-%d")
+            d_to = datetime.strptime(date_to, "%Y-%m-%d")
+            if (d_to - d_from).days > 3:
+                raise click.UsageError("Date range cannot exceed 3 days. Use a narrower range.")
+        except ValueError:
+            pass
+
+    return date, date_from, date_to
+
+
 @click.group()
 def cli():
     """CryptoLake gap analysis CLI."""
@@ -1110,6 +1135,7 @@ def cli():
 )
 def analyze(exchange, symbol, stream, date, date_from, date_to, output_json, base_dir):
     """Analyze archive coverage and report gaps."""
+    date, date_from, date_to = _resolve_date_args(date, date_from, date_to)
     base = Path(base_dir)
     report = analyze_archive(
         base,
@@ -1151,6 +1177,7 @@ def analyze(exchange, symbol, stream, date, date_from, date_to, output_json, bas
 )
 def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, full_day, base_dir):
     """Find gaps and backfill missing hours from Binance historical REST API."""
+    date, date_from, date_to = _resolve_date_args(date, date_from, date_to)
     base = Path(base_dir)
 
     # If a specific stream is given and it's not backfillable, report and exit early

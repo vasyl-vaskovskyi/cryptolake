@@ -76,6 +76,7 @@ def test_deep_dry_run_shows_id_gaps(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["backfill", "--base-dir", str(tmp_path),
                                  "--exchange", "binance", "--symbol", "btcusdt",
+                                 "--date", "2026-03-30",
                                  "--deep", "--dry-run"])
     assert result.exit_code == 0
     assert "id_gap" in result.output or "102" in result.output or "109" in result.output
