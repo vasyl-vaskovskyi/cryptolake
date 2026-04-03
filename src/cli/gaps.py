@@ -245,6 +245,57 @@ async def _fill_trade_id_gaps(
     return merged
 
 
+async def _fetch_trades_by_time_then_id(
+    adapter: BinanceAdapter,
+    symbol: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[dict]:
+    """Fetch trades using timestamp for first page, then fromId for the rest.
+
+    This avoids the ID gaps that timestamp-based pagination produces.
+    """
+    all_records: list[dict] = []
+
+    async with aiohttp.ClientSession() as session:
+        # First page: fetch by timestamp to discover starting trade ID
+        url = adapter.build_historical_trades_url(
+            symbol, start_time=start_ms, end_time=end_ms, limit=1000
+        )
+        first_page = await _fetch_historical_page(session, url)
+        if not first_page:
+            return []
+
+        all_records.extend(first_page)
+
+        # Switch to fromId pagination for gap-free results
+        last_a = first_page[-1].get("a", 0)
+        if len(first_page) < 1000 or first_page[-1].get("T", 0) >= end_ms:
+            return all_records
+
+        current_id = last_a + 1
+        while True:
+            url = adapter.build_historical_trades_url(
+                symbol, from_id=current_id, limit=1000
+            )
+            page = await _fetch_historical_page(session, url)
+            if not page:
+                break
+
+            # Filter to only records within our time window
+            for rec in page:
+                if rec.get("T", 0) > end_ms:
+                    return all_records
+                all_records.append(rec)
+
+            last_a = page[-1].get("a", 0)
+            if len(page) < 1000:
+                break
+            current_id = last_a + 1
+
+    return all_records
+
+
 async def _fetch_historical_all(
     adapter: BinanceAdapter,
     symbol: str,
@@ -256,17 +307,16 @@ async def _fetch_historical_all(
     if stream == "funding_rate":
         return await _fetch_funding_rate_composite(adapter, symbol, start_ms, end_ms)
 
+    if stream == "trades":
+        return await _fetch_trades_by_time_then_id(adapter, symbol, start_ms, end_ms)
+
     ts_key = STREAM_TS_KEYS[stream]
     all_records: list[dict] = []
 
     async with aiohttp.ClientSession() as session:
         current_start = start_ms
         while current_start <= end_ms:
-            if stream == "trades":
-                url = adapter.build_historical_trades_url(
-                    symbol, start_time=current_start, end_time=end_ms, limit=1000
-                )
-            elif stream == "liquidations":
+            if stream == "liquidations":
                 url = adapter.build_historical_liquidations_url(
                     symbol, start_time=current_start, end_time=end_ms, limit=1000
                 )
@@ -283,15 +333,10 @@ async def _fetch_historical_all(
 
             all_records.extend(page)
 
-            # Advance pagination cursor using the last record's timestamp
             last_ts = page[-1].get(ts_key, 0)
             if last_ts is None or last_ts >= end_ms or len(page) < (500 if stream == "open_interest" else 1000):
                 break
             current_start = last_ts + 1
-
-    # For trades, fill any ID gaps left by pagination
-    if stream == "trades" and all_records:
-        all_records = await _fill_trade_id_gaps(adapter, symbol, all_records)
 
     return all_records
 
