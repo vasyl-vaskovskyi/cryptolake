@@ -31,26 +31,90 @@ DEFAULT_ARCHIVE_DIR = default_archive_dir()
 CHECKABLE_STREAMS = {"trades", "depth", "bookticker"}
 
 
-def _stream_data_records(files: list[Path]) -> Iterator[tuple[bytes, int]]:
-    """Stream (raw_text bytes, received_at) from sorted .jsonl.zst files.
+def _read_data_records_from_file(f: Path) -> list[tuple[bytes, int, int]]:
+    """Read all data records from a single .jsonl.zst file.
 
-    Yields only data records. Uses streaming decompression — O(1) memory
-    regardless of file size.
+    Returns list of (raw_text bytes, received_at, exchange_ts) tuples.
     """
-    for f in files:
-        try:
-            dctx = zstd.ZstdDecompressor()
-            with open(f, "rb") as fh:
-                reader = dctx.stream_reader(fh)
-                text_reader = io.TextIOWrapper(reader, encoding="utf-8")
-                for line in text_reader:
-                    if '"data"' not in line:
-                        continue
-                    env = orjson.loads(line)
-                    if env.get("type") == "data":
-                        yield env["raw_text"].encode(), env.get("received_at", 0)
-        except Exception:
-            pass
+    records = []
+    try:
+        dctx = zstd.ZstdDecompressor()
+        with open(f, "rb") as fh:
+            reader = dctx.stream_reader(fh)
+            text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+            for line in text_reader:
+                if '"data"' not in line:
+                    continue
+                env = orjson.loads(line)
+                if env.get("type") == "data":
+                    records.append((
+                        env["raw_text"].encode(),
+                        env.get("received_at", 0),
+                        env.get("exchange_ts", 0),
+                    ))
+    except Exception:
+        pass
+    return records
+
+
+def _sort_key_for_stream(raw_bytes: bytes, exchange_ts: int, stream: str) -> int:
+    """Extract the correct sort key for a record based on stream type."""
+    if stream == "trades":
+        raw = orjson.loads(raw_bytes)
+        return raw.get("a", 0)
+    if stream == "depth":
+        raw = orjson.loads(raw_bytes)
+        return raw.get("u", 0)
+    return exchange_ts
+
+
+def _stream_data_records(files: list[Path], stream: str = "") -> Iterator[tuple[bytes, int]]:
+    """Stream (raw_text bytes, received_at) from hour files, merging per-hour.
+
+    Groups files by hour (base + late + backfill), merges and sorts within
+    each hour by the stream's natural key (trade ID for trades, update ID
+    for depth, exchange_ts for others). This ensures backfill records are
+    interleaved correctly with live data.
+    """
+    from src.cli.consolidate import discover_hour_files
+
+    if not files:
+        return
+
+    # All files should be in the same date directory
+    date_dir = files[0].parent
+    hour_groups = discover_hour_files(date_dir)
+
+    for hour in sorted(hour_groups.keys()):
+        fg = hour_groups[hour]
+        hour_files = []
+        if fg["base"]:
+            hour_files.append(fg["base"])
+        hour_files.extend(fg["late"])
+        hour_files.extend(fg["backfill"])
+
+        # If only one file and no backfills, stream directly (memory efficient)
+        if len(hour_files) == 1:
+            for rec in _read_data_records_from_file(hour_files[0]):
+                yield rec[0], rec[1]
+            continue
+
+        # Multiple files: read, merge, sort, deduplicate by natural key
+        all_records: list[tuple[bytes, int, int]] = []
+        for f in hour_files:
+            all_records.extend(_read_data_records_from_file(f))
+
+        all_records.sort(key=lambda r: _sort_key_for_stream(r[0], r[2], stream))
+
+        # Deduplicate: if stream has a natural ID key, skip records with
+        # the same key as the previous (backfill may overlap with live data)
+        prev_key: int | None = None
+        for raw_bytes, received_at, exchange_ts in all_records:
+            key = _sort_key_for_stream(raw_bytes, exchange_ts, stream)
+            if stream in ("trades", "depth") and key == prev_key:
+                continue
+            prev_key = key
+            yield raw_bytes, received_at
 
 
 def _check_trades(files: list[Path]) -> tuple[int, list[dict]]:
@@ -58,7 +122,7 @@ def _check_trades(files: list[Path]) -> tuple[int, list[dict]]:
     breaks: list[dict] = []
     prev_a: int | None = None
     count = 0
-    for raw_bytes, received_at in _stream_data_records(files):
+    for raw_bytes, received_at in _stream_data_records(files, stream="trades"):
         count += 1
         raw = orjson.loads(raw_bytes)
         a = raw.get("a")
@@ -81,7 +145,7 @@ def _check_depth(files: list[Path]) -> tuple[int, list[dict]]:
     breaks: list[dict] = []
     prev_u: int | None = None
     count = 0
-    for raw_bytes, received_at in _stream_data_records(files):
+    for raw_bytes, received_at in _stream_data_records(files, stream="depth"):
         count += 1
         raw = orjson.loads(raw_bytes)
         u = raw.get("u", 0)
@@ -108,7 +172,7 @@ def _check_bookticker(files: list[Path]) -> tuple[int, list[dict]]:
     breaks: list[dict] = []
     prev_u: int | None = None
     count = 0
-    for raw_bytes, received_at in _stream_data_records(files):
+    for raw_bytes, received_at in _stream_data_records(files, stream="bookticker"):
         count += 1
         raw = orjson.loads(raw_bytes)
         u = raw.get("u")
