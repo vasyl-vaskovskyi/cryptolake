@@ -1,9 +1,13 @@
 # CryptoLake Health Dashboard — System-wide metrics (no exchange/coin filters)
 # Run: sampler -c infra/sampler/sampler-health.yml
+#
+# Grid: 80 cols x 24 rows
+# Row 1 (0-13):  [System Resources 0-26] [Commit Failures 27-53] [Data Integrity + Backup 54-80]
+# Row 2 (14-24): [Net KB/s 0-26]         [Write KB/s 27-53]      [Backup Recoveries 54-80]
 
 barcharts:
   - title: System Resources
-    position: [[0, 0], [26, 14]]
+    position: [[0, 0], [27, 14]]
     rate-ms: 5000
     scale: 0
     items:
@@ -25,7 +29,7 @@ barcharts:
 
 sparklines:
   - title: Net KB/s
-    position: [[0, 14], [40, 10]]
+    position: [[0, 14], [27, 10]]
     rate-ms: 5000
     sample: |
         B=$(netstat -ib | awk '/en0.*<Link/{print $7+$10; exit}'); if [ -f /tmp/.sampler_net_prev ]; then PREV=$(cat /tmp/.sampler_net_prev); echo "$B" > /tmp/.sampler_net_prev; printf "%.0f" $(( (B - PREV) / 5 / 1024 )); else echo "$B" > /tmp/.sampler_net_prev; echo 0; fi
@@ -44,19 +48,19 @@ sparklines:
 
 textboxes:
   - title: Commit Failures /12h
-    position: [[26, 0], [27, 14]]
+    position: [[27, 0], [27, 14]]
     rate-ms: 30000
     sample: |
         P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; KAFKA=$(q "sum(increase(writer_kafka_commit_failures_total[12h]))"); DBFAIL=$(q "sum(increase(writer_pg_commit_failures_total[12h]))"); BFILL=$(q "backfill_runs_total"); printf "\n %-18s %5s\n\n %s\n\n %-18s %5s\n\n %s\n\n %-18s %5s" "Kafka Commit Fail" "$KAFKA" "─────────────────────────" "DB Commit Fail" "$DBFAIL" "─────────────────────────" "Backfill Runs" "$BFILL"
 
   - title: Data Integrity
-    position: [[53, 0], [27, 7]]
+    position: [[54, 0], [26, 7]]
     rate-ms: 30000
     sample: |
-        P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; SGAPS=$(q "sum(increase(writer_session_gaps_detected_total[12h]))"); GRECS=$(q "sum(increase(writer_gap_records_written_total[12h]))"); SEALED=$(q "min(writer_hours_sealed_previous_day)"); printf "\n %-20s %3s\n\n %-20s %3s\n\n %-20s %3s" "Session Gaps /12h" "$SGAPS" "Gap Records /12h" "$GRECS" "Hours Sealed Yest." "$SEALED"
+        P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; SGAPS=$(q "sum(increase(writer_session_gaps_detected_total[12h]))"); GRECS=$(q "sum(increase(writer_gap_records_written_total[12h]))"); SEALED=$(q "min(writer_hours_sealed_previous_day)"); printf "\n %-18s %3s\n %-18s %3s\n %-18s %3s" "Session Gaps /12h" "$SGAPS" "Gap Records /12h" "$GRECS" "Hours Sealed Yest." "$SEALED"
 
   - title: Backup Recovery /12h
-    position: [[53, 7], [27, 7]]
+    position: [[54, 7], [26, 7]]
     rate-ms: 30000
     sample: |
-        P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; ATT=$(q "sum(increase(writer_backup_recovery_attempts_total[12h]))"); OK=$(q "sum(increase(writer_backup_recovery_success_total[12h]))"); PART=$(q "sum(increase(writer_backup_recovery_partial_total[12h]))"); MISS=$(q "sum(increase(writer_backup_recovery_miss_total[12h]))"); printf "\n %-20s %3s\n\n %-20s %3s\n\n %-20s %3s\n\n %-20s %3s" "Attempts" "$ATT" "Full Recovery" "$OK" "Partial Recovery" "$PART" "Missed" "$MISS"
+        P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; ATT=$(q "sum(increase(writer_backup_recovery_attempts_total[12h]))"); OK=$(q "sum(increase(writer_backup_recovery_success_total[12h]))"); PART=$(q "sum(increase(writer_backup_recovery_partial_total[12h]))"); MISS=$(q "sum(increase(writer_backup_recovery_miss_total[12h]))"); printf "\n %-18s %3s\n %-18s %3s\n %-18s %3s\n %-18s %3s" "Attempts" "$ATT" "Full Recovery" "$OK" "Partial" "$PART" "Missed" "$MISS"
