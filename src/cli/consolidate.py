@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import sys
 import tarfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -568,44 +569,59 @@ def seal_daily_archive(*, base_dir: str, exchange: str, symbol: str, date: str) 
         logger.warning("seal_no_streams", exchange=exchange, symbol=symbol, date=date)
         return {"success": True, "skipped": True, "streams": []}
 
-    # Build the tar contents in memory so we can zstd-compress the whole tar
-    tar_buf = io.BytesIO()
+    # Build the tar.zst archive using streaming to avoid loading large files into memory.
+    # For JSONL files: decompress .jsonl.zst and compute size first (needed for tar header),
+    # then stream into the tar. For small files (manifests, sha256): add directly.
     archived_files: list[Path] = []
+    symbol_dir.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(fileobj=tar_buf, mode="w") as tf:
-        for stream in streams_found:
-            stream_dir = symbol_dir / stream
+    cctx = zstd.ZstdCompressor(level=3)
+    fh = open(tar_path, "wb")
+    zst_writer = cctx.stream_writer(fh, closefd=False)
+    tf = tarfile.open(fileobj=zst_writer, mode="w|")
 
-            # --- .jsonl.zst → decompress and add as plain JSONL ---
-            zst_file = stream_dir / f"{date}.jsonl.zst"
+    try:
+        for stream_name in streams_found:
+            s_dir = symbol_dir / stream_name
+
+            # --- .jsonl.zst → decompress to temp file, then add to tar ---
+            zst_file = s_dir / f"{date}.jsonl.zst"
+            # Get decompressed size by reading through
             dctx = zstd.ZstdDecompressor()
-            with open(zst_file, "rb") as fh:
-                raw_jsonl = dctx.stream_reader(fh).read()
-            member_name = f"{stream}-{date}.jsonl"
+            decompressed_size = 0
+            with open(zst_file, "rb") as src:
+                reader = dctx.stream_reader(src)
+                while True:
+                    chunk = reader.read(65536)
+                    if not chunk:
+                        break
+                    decompressed_size += len(chunk)
+
+            # Add tar header then stream decompressed data
+            member_name = f"{stream_name}-{date}.jsonl"
             info = tarfile.TarInfo(name=member_name)
-            info.size = len(raw_jsonl)
-            tf.addfile(info, io.BytesIO(raw_jsonl))
+            info.size = decompressed_size
+            # Use a pipe: create a wrapper that streams decompressed data
+            dctx2 = zstd.ZstdDecompressor()
+            with open(zst_file, "rb") as src:
+                tf.addfile(info, dctx2.stream_reader(src))
             archived_files.append(zst_file)
 
-            # --- .manifest.json ---
-            manifest_file = stream_dir / f"{date}.manifest.json"
+            # --- .manifest.json (small) ---
+            manifest_file = s_dir / f"{date}.manifest.json"
             if manifest_file.exists():
-                tf.add(manifest_file, arcname=f"{stream}-{date}.manifest.json")
+                tf.add(manifest_file, arcname=f"{stream_name}-{date}.manifest.json")
                 archived_files.append(manifest_file)
 
-            # --- .jsonl.zst.sha256 ---
-            sha256_file = stream_dir / f"{date}.jsonl.zst.sha256"
+            # --- .jsonl.zst.sha256 (small) ---
+            sha256_file = s_dir / f"{date}.jsonl.zst.sha256"
             if sha256_file.exists():
-                tf.add(sha256_file, arcname=f"{stream}-{date}.sha256")
+                tf.add(sha256_file, arcname=f"{stream_name}-{date}.sha256")
                 archived_files.append(sha256_file)
-
-    # Compress the tar with zstd
-    raw_tar = tar_buf.getvalue()
-    cctx = zstd.ZstdCompressor(level=3)
-    compressed = cctx.compress(raw_tar)
-
-    symbol_dir.mkdir(parents=True, exist_ok=True)
-    tar_path.write_bytes(compressed)
+    finally:
+        tf.close()
+        zst_writer.close()
+        fh.close()
 
     # Write sha256 sidecar
     digest = compute_sha256(tar_path)
@@ -636,6 +652,36 @@ def cli():
     pass
 
 
+def _consolidate_stream_subprocess(base_dir: str, exchange: str, symbol: str, stream: str, date: str) -> dict:
+    """Run consolidate_day in a subprocess to isolate memory.
+
+    Large streams (bookticker: 17M records) can consume multi-GB of memory.
+    Running each stream in its own subprocess ensures memory is fully released
+    between streams.
+    """
+    import subprocess, json as _json
+    result = subprocess.run(
+        [
+            sys.executable, "-c",
+            f"import json; from src.cli.consolidate import consolidate_day; "
+            f"r = consolidate_day(base_dir={base_dir!r}, exchange={exchange!r}, "
+            f"symbol={symbol!r}, stream={stream!r}, date={date!r}); "
+            f"print(json.dumps(r))"
+        ],
+        capture_output=True, text=True, timeout=600,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip().split("\n")[-1] if result.stderr else "unknown"
+        return {"success": False, "error": f"Subprocess failed: {stderr}"}
+    # Parse the last line of stdout as JSON (skip structlog lines)
+    for line in reversed(result.stdout.strip().split("\n")):
+        try:
+            return _json.loads(line)
+        except _json.JSONDecodeError:
+            continue
+    return {"success": False, "error": "No JSON output from subprocess"}
+
+
 @cli.command()
 @click.option("--base-dir", default=None, help="Archive base directory")
 @click.option("--exchange", default="binance", help="Exchange name")
@@ -643,7 +689,10 @@ def cli():
 @click.option("--stream", default=None, help="Specific stream to consolidate (default: all)")
 @click.option("--date", "target_date", required=True, help="Date to consolidate (YYYY-MM-DD)")
 def run(base_dir, exchange, symbol, stream, target_date):
-    """Consolidate hourly files into a daily file."""
+    """Consolidate hourly files into daily files, then seal into archive.
+
+    Each stream is consolidated in a separate subprocess to isolate memory.
+    """
     from src.common.config import default_archive_dir
     from src.common.logging import setup_logging
 
@@ -667,33 +716,27 @@ def run(base_dir, exchange, symbol, stream, target_date):
         date_dir = stream_dir / target_date
         daily_file = stream_dir / f"{target_date}.jsonl.zst"
 
-        # Count as consolidated if the daily file already exists (previously done)
         if daily_file.exists():
             any_consolidated = True
-            click.echo(f"[{s}] Skipped (already consolidated or no data)")
+            click.echo(f"[{s}] Skipped (already consolidated)")
             continue
 
         if not date_dir.is_dir():
             continue
 
-        result = consolidate_day(
-            base_dir=base_dir,
-            exchange=exchange,
-            symbol=symbol,
-            stream=s,
-            date=target_date,
-        )
+        click.echo(f"[{s}] Consolidating...", nl=False)
+        result = _consolidate_stream_subprocess(base_dir, exchange, symbol, s, target_date)
 
         if result.get("skipped"):
-            click.echo(f"[{s}] Skipped (already consolidated or no data)")
+            click.echo(" skipped")
         elif result.get("success"):
             any_consolidated = True
             click.echo(
-                f"[{s}] Complete: {result['total_records']} records, "
+                f" {result['total_records']} records, "
                 f"{len(result.get('missing_hours', []))} missing hours"
             )
         else:
-            click.echo(f"[{s}] FAILED: {result.get('error', 'unknown error')}")
+            click.echo(f" FAILED: {result.get('error', 'unknown')}")
 
     click.echo("Consolidation finished.")
 
