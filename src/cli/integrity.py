@@ -354,7 +354,18 @@ def check_integrity(
 
                         gap_envelopes = _scan_gap_envelopes(date_dir)
 
+                    # Skip dates with no data UNLESS explicitly requested
                     if count == 0 and not gap_envelopes:
+                        if date:
+                            # Explicitly requested date has no data — report it
+                            key = (exch_dir.name, sym_dir.name, stream_name, date_name)
+                            report[key] = {
+                                "records": 0,
+                                "breaks": [],
+                                "gaps": [{"type": "gap", "reason": "no_data",
+                                          "gap_start_ts": 0, "gap_end_ts": 0,
+                                          "detail": "No data files found for this date"}],
+                            }
                         continue
 
                     key = (exch_dir.name, sym_dir.name, stream_name, date_name)

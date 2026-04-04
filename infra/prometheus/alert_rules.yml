@@ -126,3 +126,39 @@ groups:
         annotations:
           summary: "Incomplete day: {{ $labels.exchange }}/{{ $labels.symbol }}/{{ $labels.stream }}"
           description: "Only {{ $value }} of 24 hours archived for the previous UTC day."
+
+      - alert: WriterDown
+        expr: up{job="writer"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Writer service is down
+          description: "Writer has been unreachable for 1 minute. Data collection is stopped — all streams are losing data."
+
+      - alert: CollectorDown
+        expr: up{job="collector"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Primary collector is down
+          description: "Primary collector has been unreachable for 1 minute. Live data collection has stopped."
+
+      - alert: CollectorBackupDown
+        expr: up{job="collector-backup"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backup collector is down
+          description: "Backup collector has been unreachable for 5 minutes. Redundancy is lost — gaps will not be recoverable."
+
+      - alert: NoDataWritten
+        expr: increase(writer_messages_consumed_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Writer is not consuming any messages
+          description: "No messages consumed by writer in the last 10 minutes. The writer process may be crash-looping or Redpanda may be down."

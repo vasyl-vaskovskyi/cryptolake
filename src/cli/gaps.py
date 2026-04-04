@@ -1095,6 +1095,7 @@ def analyze_archive(
                         last_hour = max_h
 
                 # Second pass: build report with correct expected hours
+                dates_reported: set[str] = set()
                 for date_name, hour_map, gaps in all_dates_data:
                     covered = len(hour_map)
 
@@ -1118,6 +1119,23 @@ def analyze_archive(
                         "total": expected,
                         "expect_from": expect_from,
                         "expect_to": expect_to,
+                    }
+                    dates_reported.add(date_name)
+
+                # If a specific date was requested but has NO data at all,
+                # report it as completely missing (24 hours of no data)
+                _is_sealed = (sym_dir / f"{date}.tar.zst").exists() if date else False
+                if date and date not in dates_reported and not _is_sealed:
+                    report.setdefault(exch_name, {})
+                    report[exch_name].setdefault(sym_name, {})
+                    report[exch_name][sym_name].setdefault(stream_name, {})
+                    report[exch_name][sym_name][stream_name][date] = {
+                        "hours": {},
+                        "gaps": [],
+                        "covered": 0,
+                        "total": 24,
+                        "expect_from": 0,
+                        "expect_to": 23,
                     }
 
     return report

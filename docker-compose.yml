@@ -74,7 +74,7 @@ services:
       - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
       - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/ready', timeout=5).status == 200 else 1)"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -107,7 +107,7 @@ services:
       - COLLECTOR_ID=binance-collector-backup
       - TOPIC_PREFIX=backup.
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/ready', timeout=5).status == 200 else 1)"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -142,7 +142,7 @@ services:
       - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/health', timeout=5).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/ready', timeout=5).status == 200 else 1)"]
       interval: 15s
       timeout: 5s
       retries: 5
