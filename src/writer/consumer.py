@@ -934,11 +934,18 @@ class WriterConsumer:
             await self._commit_state(states, results, start)
 
     async def _rotate_hour(self) -> None:
-        """Seal all active files (used during shutdown). For normal operation,
+        """Seal completed hour files (used during shutdown). For normal operation,
         use _rotate_file() which seals per-stream files individually.
-        Order: flush -> write to disk -> seal all -> commit offsets (spec 8.4)."""
+        Order: flush -> write to disk -> seal completed hours -> commit offsets.
+
+        Files for the CURRENT UTC hour are NOT sealed — the writer may restart
+        and continue appending (with backup recovery filling any gap). Only
+        completed hours (previous hours/days) are sealed."""
         logger.info("rotation_seal_all")
         start = time.monotonic()
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        current_date = now_utc.strftime("%Y-%m-%d")
+        current_hour = now_utc.hour
 
         # 1. Flush all buffers and write to disk (no offset commit yet)
         results = self.buffer_manager.flush_all()
@@ -948,9 +955,22 @@ class WriterConsumer:
             for gap in gap_envelopes:
                 self.buffer_manager.add(gap)
 
-        # 2. Seal all active files BEFORE committing offsets
+        # 2. Seal COMPLETED hour files — skip the current hour
         base = Path(self.base_dir)
         for zst_file in base.rglob("*.jsonl.zst"):
+            # Don't seal the current hour's file — writer may continue after restart
+            parent_name = zst_file.parent.name  # e.g., "2026-04-04" (date dir)
+            fname = zst_file.name  # e.g., "hour-22.jsonl.zst"
+            if parent_name == current_date and fname.startswith("hour-"):
+                try:
+                    file_hour = int(fname.split(".")[0].replace("hour-", ""))
+                    if file_hour == current_hour:
+                        logger.info("skipping_current_hour_seal",
+                                    file=str(zst_file), hour=current_hour)
+                        continue
+                except (ValueError, IndexError):
+                    pass
+
             sc = sidecar_path(zst_file)
             if not sc.exists() and zst_file.stat().st_size > 0:
                 try:
