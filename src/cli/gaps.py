@@ -131,6 +131,108 @@ def _build_mark_price_update(symbol, mark_kline, index_kline, premium_kline, fun
     }
 
 
+def _interpolate_funding_rate_gap(
+    before_record: dict,
+    after_record: dict,
+    gap_start_ms: int,
+    gap_end_ms: int,
+    symbol: str,
+) -> list[dict]:
+    """Generate interpolated markPriceUpdate records for each missing second in a gap.
+
+    Reads numeric fields from boundary records and linearly interpolates
+    for each second within the gap window.
+    """
+    # Extract numeric fields from boundary records
+    def _float(record: dict, key: str) -> float:
+        return float(record.get(key, 0))
+
+    start_p = _float(before_record, "p")
+    end_p = _float(after_record, "p")
+    start_i = _float(before_record, "i")
+    end_i = _float(after_record, "i")
+    start_P = _float(before_record, "P")
+    end_P = _float(after_record, "P")
+    # Funding rate and next funding time don't change within seconds
+    rate = before_record.get("r", "0")
+    next_funding = before_record.get("T", _compute_next_funding_time(gap_start_ms))
+
+    # Generate one record per second
+    records: list[dict] = []
+    # Align to second boundaries
+    first_sec = ((gap_start_ms // 1000) + 1) * 1000
+    last_sec = (gap_end_ms // 1000) * 1000
+    total_span = max(1, last_sec - first_sec)
+
+    t = first_sec
+    while t <= last_sec:
+        frac = (t - first_sec) / total_span if total_span > 0 else 0
+        p = start_p + (end_p - start_p) * frac
+        i = start_i + (end_i - start_i) * frac
+        P = start_P + (end_P - start_P) * frac
+
+        records.append({
+            "e": "markPriceUpdate",
+            "E": t,
+            "s": symbol.upper(),
+            "p": f"{p:.8f}",
+            "ap": f"{p:.8f}",
+            "P": f"{P:.8f}",
+            "i": f"{i:.8f}",
+            "r": rate,
+            "T": next_funding,
+        })
+        t += 1000  # next second
+
+    return records
+
+
+def _read_boundary_records(
+    date_dir: Path,
+    gap_start_ns: int,
+    gap_end_ns: int,
+) -> tuple[dict | None, dict | None]:
+    """Read the last record before and first record after a gap from hourly files.
+
+    Scans all .jsonl.zst files in the date directory for funding_rate data records,
+    finds the closest records to the gap boundaries.
+    """
+    before: dict | None = None
+    after: dict | None = None
+    before_ts = 0
+    after_ts = float("inf")
+
+    gap_start_ms = gap_start_ns // 1_000_000
+    gap_end_ms = gap_end_ns // 1_000_000
+
+    if not date_dir.exists():
+        return None, None
+
+    for f in sorted(date_dir.glob("*.jsonl.zst")):
+        try:
+            dctx = zstd.ZstdDecompressor()
+            with open(f, "rb") as fh:
+                data = dctx.stream_reader(fh).read()
+            for line in data.strip().split(b"\n"):
+                if not line or b'"gap"' in line:
+                    continue
+                env = orjson.loads(line)
+                if env.get("type") != "data":
+                    continue
+                raw = orjson.loads(env.get("raw_text", "{}"))
+                e_ts = raw.get("E", 0)
+                if e_ts < gap_start_ms and e_ts > before_ts:
+                    before_ts = e_ts
+                    before = raw
+                elif e_ts > gap_end_ms and e_ts < after_ts:
+                    after_ts = e_ts
+                    after = raw
+        except Exception:
+            continue
+
+    return before, after
+
+
 async def _fetch_funding_rate_composite(adapter, symbol, start_ms, end_ms):
     # Klines are 1-minute intervals. If the window is shorter than 60s,
     # expand it to ensure we capture the enclosing kline.
@@ -1450,6 +1552,31 @@ def backfill(exchange, symbol, stream, date, date_from, date_to, dry_run, deep, 
                     f"Deep fetching time_gap {exch_name}/{sym_name}/{stream_name}/{date_name}"
                     f"  start_ms={g['start_ms']} end_ms={g['end_ms']}..."
                 )
+
+                # For funding_rate short gaps: interpolate from boundary records
+                if stream_name == "funding_rate":
+                    gap_start_ns = g["start_ms"] * 1_000_000
+                    gap_end_ns = g["end_ms"] * 1_000_000
+                    date_dir = base / exch_name / sym_name / stream_name / date_name
+                    before_rec, after_rec = _read_boundary_records(date_dir, gap_start_ns, gap_end_ns)
+                    if before_rec and after_rec:
+                        records = _interpolate_funding_rate_gap(
+                            before_rec, after_rec, g["start_ms"], g["end_ms"], sym_name,
+                        )
+                        if records:
+                            click.echo(f"  Interpolated {len(records)} records from boundary values")
+                            backfill_seq = _next_backfill_seq(base, exch_name, sym_name, stream_name, date_name, hour)
+                            out_path, n = _write_backfill_files(
+                                records, base_dir=str(base), exchange=exch_name,
+                                symbol=sym_name, stream=stream_name, date=date_name,
+                                session_id=session_id, seq_offset=total_written,
+                                backfill_seq=backfill_seq,
+                            )
+                            total_written += n
+                            if out_path:
+                                click.echo(f"  Wrote {n} records -> {out_path}")
+                            continue
+
                 try:
                     records = asyncio.run(
                         _fetch_historical_all(adapter, sym_name, stream_name, g["start_ms"], g["end_ms"])
