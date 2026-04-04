@@ -538,6 +538,195 @@ def consolidate_day(
     }
 
 
+def _stream_hours_as_bytes(
+    hour_files: dict[int, dict],
+    stream: str,
+    exchange: str,
+    symbol: str,
+    date: str,
+    session_id: str,
+) -> Iterator[tuple[int, bytes, int, int]]:
+    """Yield (hour, jsonl_bytes, data_count, gap_count) for each hour 0-23.
+
+    For single-file hours: decompresses raw bytes (no parsing).
+    For multi-file hours: merges, sorts, serializes.
+    For missing hours: synthesizes a gap envelope.
+    """
+    for h in range(24):
+        if h in hour_files:
+            fg = hour_files[h]
+            has_extra = bool(fg["late"]) or bool(fg["backfill"])
+
+            if fg["base"] is not None and not has_extra:
+                # Single file: stream raw bytes
+                dctx = zstd.ZstdDecompressor()
+                with open(fg["base"], "rb") as src:
+                    raw = dctx.stream_reader(src).read()
+                # Count records
+                n_gaps = raw.count(b'"gap"')
+                n_total = raw.count(b"\n")
+                if raw and not raw.endswith(b"\n"):
+                    n_total += 1
+                    raw += b"\n"
+                yield h, raw, n_total - n_gaps, n_gaps
+                del raw
+            else:
+                # Multi-file: merge in memory
+                records = merge_hour(h, fg, stream=stream)
+                lines = b"".join(orjson.dumps(r) + b"\n" for r in records)
+                n_gaps = sum(1 for r in records if r.get("type") == "gap")
+                n_data = len(records) - n_gaps
+                yield h, lines, n_data, n_gaps
+                del records, lines
+        else:
+            # Missing hour: synthesize gap
+            gap = synthesize_missing_hour_gap(
+                exchange=exchange, symbol=symbol, stream=stream,
+                date=date, hour=h, session_id=session_id,
+            )
+            yield h, orjson.dumps(gap) + b"\n", 0, 1
+
+
+def consolidate_stream_to_tar(
+    tf: tarfile.TarFile,
+    *,
+    base_dir: str,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    date: str,
+) -> dict:
+    """Consolidate one stream and write directly into an open tar file.
+
+    Two passes per stream:
+    - Pass 1: process all hours, compute total byte size and stats
+    - Pass 2: process again, write bytes into the tar entry
+
+    Each pass processes one hour at a time — memory stays bounded.
+    Returns result dict with success/stats or error.
+    """
+    base = Path(base_dir)
+    stream_dir = base / exchange / symbol.lower() / stream
+    date_dir = stream_dir / date
+
+    if not date_dir.is_dir():
+        return {"skipped": True, "success": True}
+
+    hour_files = discover_hour_files(date_dir)
+    session_id = f"consolidation-{datetime.now(timezone.utc).isoformat()}"
+
+    # Collect hour details and source files for manifest
+    missing_hours = []
+    source_files = []
+    hour_details: dict[int, dict] = {}
+
+    def _read_sidecar_sha(data_path: Path) -> str:
+        sc = sidecar_path(data_path)
+        if sc.exists():
+            return sc.read_text().strip().split()[0]
+        return ""
+
+    for h in range(24):
+        if h not in hour_files:
+            missing_hours.append(h)
+            hour_details[h] = {"status": "missing", "synthesized_gap": True}
+        else:
+            fg = hour_files[h]
+            sources: dict[str, str] = {}
+            if fg["base"]:
+                sources[fg["base"].name] = _read_sidecar_sha(fg["base"])
+            for f in fg["late"]:
+                sources[f.name] = _read_sidecar_sha(f)
+            for f in fg["backfill"]:
+                sources[f.name] = _read_sidecar_sha(f)
+            source_files.extend(sources.keys())
+            if fg["base"]:
+                status = "present"
+            elif fg["backfill"]:
+                status = "backfilled"
+            else:
+                status = "late"
+            hour_details[h] = {"status": status, "sources": sources}
+
+    logger.info("consolidation_starting", exchange=exchange, symbol=symbol,
+                stream=stream, date=date, present_hours=24 - len(missing_hours),
+                missing_hours=len(missing_hours))
+
+    # Pass 1: compute total size and stats
+    total_size = 0
+    stats = {"total_records": 0, "data_records": 0, "gap_records": 0, "hours": {}}
+
+    for h, data, n_data, n_gaps in _stream_hours_as_bytes(
+        hour_files, stream, exchange, symbol, date, session_id
+    ):
+        total_size += len(data)
+        stats["hours"][h] = {"data_records": n_data, "gap_records": n_gaps}
+        stats["total_records"] += n_data + n_gaps
+        stats["data_records"] += n_data
+        stats["gap_records"] += n_gaps
+
+    # Pass 2: write JSONL data into tar entry
+    entry_name = f"{stream}-{date}.jsonl"
+    info = tarfile.TarInfo(name=entry_name)
+    info.size = total_size
+    buf = io.BytesIO()
+    for h, data, _, _ in _stream_hours_as_bytes(
+        hour_files, stream, exchange, symbol, date, session_id
+    ):
+        buf.write(data)
+    buf.seek(0)
+    tf.addfile(info, buf)
+    del buf
+
+    # Write manifest into tar
+    manifest = {
+        "version": 1,
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "date": date,
+        "consolidated_at": datetime.now(timezone.utc).isoformat(),
+        "daily_file": entry_name,
+        "total_records": stats["total_records"],
+        "data_records": stats["data_records"],
+        "gap_records": stats["gap_records"],
+        "hours": {},
+        "missing_hours": missing_hours,
+        "source_files": list(source_files),
+    }
+    all_hours = set(stats.get("hours", {}).keys()) | set(hour_details.keys())
+    for h in sorted(all_hours):
+        entry = dict(hour_details.get(h, {}))
+        if h in stats.get("hours", {}):
+            entry.update(stats["hours"][h])
+        manifest["hours"][str(h)] = entry
+
+    manifest_bytes = json.dumps(manifest, indent=2).encode() + b"\n"
+    m_info = tarfile.TarInfo(name=f"{stream}-{date}.manifest.json")
+    m_info.size = len(manifest_bytes)
+    tf.addfile(m_info, io.BytesIO(manifest_bytes))
+
+    # Cleanup hourly files
+    consolidated_files = []
+    for h, fg in hour_files.items():
+        if fg["base"]:
+            consolidated_files.append(fg["base"])
+        consolidated_files.extend(fg["late"])
+        consolidated_files.extend(fg["backfill"])
+    cleanup_hourly_files(date_dir, consolidated_files)
+
+    logger.info("consolidation_complete", exchange=exchange, symbol=symbol,
+                stream=stream, date=date, total_records=stats["total_records"],
+                missing_hours=len(missing_hours))
+
+    return {
+        "success": True,
+        "skipped": False,
+        "total_records": stats["total_records"],
+        "missing_hours": missing_hours,
+    }
+
+
 def seal_daily_archive(*, base_dir: str, exchange: str, symbol: str, date: str) -> dict:
     """Package all per-stream daily files for a date into a single tar.zst archive.
 
@@ -692,9 +881,10 @@ def _consolidate_stream_subprocess(base_dir: str, exchange: str, symbol: str, st
 @click.option("--stream", default=None, help="Specific stream to consolidate (default: all)")
 @click.option("--date", "target_date", required=True, help="Date to consolidate (YYYY-MM-DD)")
 def run(base_dir, exchange, symbol, stream, target_date):
-    """Consolidate hourly files into daily files, then seal into archive.
+    """Consolidate hourly files directly into a sealed tar.zst archive.
 
-    Each stream is consolidated in a separate subprocess to isolate memory.
+    No intermediate per-stream daily files — each stream is merged from
+    hourly files and written directly into the tar.zst, one hour at a time.
     """
     from src.common.config import default_archive_dir
     from src.common.logging import setup_logging
@@ -704,14 +894,15 @@ def run(base_dir, exchange, symbol, stream, target_date):
     if base_dir is None:
         base_dir = default_archive_dir()
 
-    # Skip everything if the symbol-level archive already exists
     symbol_dir = Path(base_dir) / exchange / symbol.lower()
     tar_path = symbol_dir / f"{target_date}.tar.zst"
+    sha_path = tar_path.with_suffix(tar_path.suffix + ".sha256")
+
     if tar_path.exists():
-        click.echo(f"Already sealed: {tar_path.name} — skipping consolidation.")
+        click.echo(f"Already sealed: {tar_path.name} — skipping.")
         return
 
-    # Run backfill before consolidation to recover missing data
+    # Run backfill before consolidation
     click.echo(f"Backfilling {target_date}...")
     import subprocess as _sp
     backfill_cmd = [
@@ -724,65 +915,72 @@ def run(base_dir, exchange, symbol, stream, target_date):
     ]
     bp = _sp.run(backfill_cmd, capture_output=True, text=True, timeout=600)
     if bp.returncode == 0:
-        # Print non-empty lines that aren't JSON logs
         for line in bp.stdout.strip().split("\n"):
             if line and not line.startswith("{"):
                 click.echo(f"  {line}")
     else:
         click.echo(f"  Backfill warning: {bp.stderr.strip().split(chr(10))[-1] if bp.stderr else 'failed'}")
 
+    # Determine which streams to process
     streams = [stream] if stream else ALL_STREAMS
-    any_consolidated = False
+    streams_to_process = []
+    for s in streams:
+        date_dir = Path(base_dir) / exchange / symbol.lower() / s / target_date
+        if date_dir.is_dir():
+            streams_to_process.append(s)
+
+    if not streams_to_process:
+        click.echo("No streams to consolidate.")
+        return
+
+    # Open tar.zst and consolidate each stream directly into it
+    symbol_dir.mkdir(parents=True, exist_ok=True)
+    cctx = zstd.ZstdCompressor(level=3)
+    fh = open(tar_path, "wb")
+    zst_writer = cctx.stream_writer(fh, closefd=False)
+    tf = tarfile.open(fileobj=zst_writer, mode="w|")
+
+    sealed_streams = []
     any_failed = False
 
-    for s in streams:
-        stream_dir = Path(base_dir) / exchange / symbol.lower() / s
-        date_dir = stream_dir / target_date
-        daily_file = stream_dir / f"{target_date}.jsonl.zst"
+    try:
+        for s in streams_to_process:
+            click.echo(f"[{s}] Consolidating...", nl=False)
+            try:
+                result = consolidate_stream_to_tar(
+                    tf,
+                    base_dir=base_dir,
+                    exchange=exchange,
+                    symbol=symbol,
+                    stream=s,
+                    date=target_date,
+                )
+                if result.get("success") and not result.get("skipped"):
+                    sealed_streams.append(s)
+                    click.echo(
+                        f" {result['total_records']} records, "
+                        f"{len(result.get('missing_hours', []))} missing hours"
+                    )
+                elif result.get("skipped"):
+                    click.echo(" skipped")
+                else:
+                    any_failed = True
+                    click.echo(f" FAILED: {result.get('error', 'unknown')}")
+            except Exception as exc:
+                any_failed = True
+                click.echo(f" FAILED: {exc}")
+    finally:
+        tf.close()
+        zst_writer.close()
+        fh.close()
 
-        if daily_file.exists():
-            any_consolidated = True
-            click.echo(f"[{s}] Skipped (already consolidated)")
-            continue
-
-        if not date_dir.is_dir():
-            continue
-
-        click.echo(f"[{s}] Consolidating...", nl=False)
-        result = _consolidate_stream_subprocess(base_dir, exchange, symbol, s, target_date)
-
-        if result.get("skipped"):
-            click.echo(" skipped")
-        elif result.get("success"):
-            any_consolidated = True
-            click.echo(
-                f" {result['total_records']} records, "
-                f"{len(result.get('missing_hours', []))} missing hours"
-            )
-        else:
-            any_failed = True
-            click.echo(f" FAILED: {result.get('error', 'unknown')}")
-
-    click.echo("Consolidation finished.")
-
-    if any_failed:
-        click.echo("Sealing skipped — not all streams consolidated successfully.")
-    elif any_consolidated:
-        seal_result = seal_daily_archive(
-            base_dir=base_dir,
-            exchange=exchange,
-            symbol=symbol,
-            date=target_date,
-        )
-        if seal_result.get("skipped"):
-            click.echo(f"Seal skipped (already sealed).")
-        elif seal_result.get("success"):
-            click.echo(
-                f"Sealed: {target_date}.tar.zst "
-                f"({len(seal_result.get('streams', []))} streams)"
-            )
-        else:
-            click.echo(f"Seal FAILED.")
+    if any_failed or not sealed_streams:
+        click.echo("Consolidation had failures — archive may be incomplete.")
+    else:
+        # Write SHA256 sidecar
+        digest = compute_sha256(tar_path)
+        sha_path.write_text(f"{digest}  {tar_path.name}\n")
+        click.echo(f"Sealed: {target_date}.tar.zst ({len(sealed_streams)} streams: {', '.join(sealed_streams)})")
 
 
 if __name__ == "__main__":
