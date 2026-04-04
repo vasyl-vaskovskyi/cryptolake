@@ -53,9 +53,10 @@ def _determine_coverage(
 
     last_received = max(r.get("received_at", 0) for r in records)
 
-    # If the last backup record is within 5 seconds of the gap end,
-    # consider it full coverage
-    gap_end_margin = gap_end_ns - 5_000_000_000
+    # If the last backup record is within 2 seconds of the gap end,
+    # consider it full coverage (small margin for clock skew between
+    # primary and backup collectors)
+    gap_end_margin = gap_end_ns - 2_000_000_000
     if last_received >= gap_end_margin:
         return "full", None
 
@@ -132,9 +133,9 @@ def recover_from_backup(
                 continue
 
             received_ns = envelope.get("received_at", 0)
-            if received_ns > gap_end_ns + 5_000_000_000:
+            if received_ns > gap_end_ns:
                 break
-            if gap_start_ns <= received_ns <= gap_end_ns + 5_000_000_000:
+            if gap_start_ns <= received_ns <= gap_end_ns:
                 records.append(envelope)
 
         records = _dedup_records(records, stream)
