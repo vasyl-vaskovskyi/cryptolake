@@ -86,9 +86,29 @@ def _data_sort_key(record: dict, stream: str) -> int:
     return record["exchange_ts"]
 
 
+def _stream_hour_lines(file_path: Path) -> Iterator[bytes]:
+    """Stream raw JSONL lines from a .jsonl.zst file without loading all into memory."""
+    import io
+    dctx = zstd.ZstdDecompressor()
+    with open(file_path, "rb") as fh:
+        reader = dctx.stream_reader(fh)
+        text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+        for line in text_reader:
+            stripped = line.strip()
+            if stripped:
+                yield stripped.encode("utf-8")
+
+
 def merge_hour(hour: int, file_group: dict, stream: str = "") -> list[dict]:
     """Merge all files for one hour, sort data records by natural key,
     then insert gap envelopes at the correct position by received_at."""
+    # If single file with no late/backfill, stream directly (memory efficient)
+    has_extra = bool(file_group["late"]) or bool(file_group["backfill"])
+    if file_group["base"] is not None and not has_extra:
+        records = _decompress_and_parse(file_group["base"])
+        # Single file: already in order from the writer, just return as-is
+        return records
+
     data_records: list[dict] = []
     gap_records: list[dict] = []
 
@@ -115,7 +135,6 @@ def merge_hour(hour: int, file_group: dict, stream: str = "") -> list[dict]:
     gap_idx = 0
     for rec in data_records:
         received = rec.get("received_at", 0)
-        # Insert any gap envelopes whose gap_start_ts <= this record's received_at
         while gap_idx < len(gap_records):
             gap_ts = gap_records[gap_idx].get("gap_start_ts", 0)
             if gap_ts <= received:
@@ -124,7 +143,6 @@ def merge_hour(hour: int, file_group: dict, stream: str = "") -> list[dict]:
             else:
                 break
         result.append(rec)
-    # Append any remaining gap envelopes at the end
     while gap_idx < len(gap_records):
         result.append(gap_records[gap_idx])
         gap_idx += 1
@@ -161,8 +179,14 @@ def synthesize_missing_hour_gap(
 
 def write_daily_file(
     output_path: Path,
-    hour_records: Iterator[tuple[int, list[dict]]],
+    hour_records: Iterator,
 ) -> dict:
+    """Write records to a zstd-compressed JSONL daily file.
+
+    hour_records yields tuples of (hour, records_or_none, raw_file_or_none):
+    - (hour, list[dict], None) — write dicts as JSONL
+    - (hour, None, Path) — stream raw lines from file (memory efficient)
+    """
     cctx = zstd.ZstdCompressor(level=3)
     stats = {
         "total_records": 0,
@@ -171,11 +195,55 @@ def write_daily_file(
         "hours": {},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as fh:
-        with cctx.stream_writer(fh) as writer:
-            for hour, records in hour_records:
-                hour_data = 0
-                hour_gaps = 0
+    fh = open(output_path, "wb")
+    writer = cctx.stream_writer(fh, closefd=False)
+    try:
+        for item in hour_records:
+            # Support both 2-tuple (legacy) and 3-tuple formats
+            if len(item) == 2:
+                hour, records = item
+                raw_file = None
+            else:
+                hour, records, raw_file = item
+
+            hour_data = 0
+            hour_gaps = 0
+
+            if raw_file is not None:
+                # Stream raw chunks: decompress → recompress without parsing
+                dctx = zstd.ZstdDecompressor()
+                last_byte = b""
+                buf_tail = b""
+                with open(raw_file, "rb") as src:
+                    reader = dctx.stream_reader(src)
+                    while True:
+                        chunk = reader.read(65536)
+                        if not chunk:
+                            break
+                        writer.write(chunk)
+                        last_byte = chunk[-1:]
+                        # Count complete lines (each \n terminates a record)
+                        # Also track partial line at end of chunk
+                        combined = buf_tail + chunk
+                        parts = combined.split(b"\n")
+                        buf_tail = parts[-1]  # incomplete line (or empty if ends with \n)
+                        for part in parts[:-1]:
+                            if not part:
+                                continue
+                            if b'"gap"' in part:
+                                hour_gaps += 1
+                            else:
+                                hour_data += 1
+                # Last partial line (file doesn't end with \n)
+                if buf_tail.strip():
+                    if b'"gap"' in buf_tail:
+                        hour_gaps += 1
+                    else:
+                        hour_data += 1
+                # Ensure trailing newline between hours
+                if last_byte and last_byte != b"\n":
+                    writer.write(b"\n")
+            else:
                 for record in records:
                     line = orjson.dumps(record) + b"\n"
                     writer.write(line)
@@ -183,13 +251,17 @@ def write_daily_file(
                         hour_gaps += 1
                     else:
                         hour_data += 1
-                stats["hours"][hour] = {
-                    "data_records": hour_data,
-                    "gap_records": hour_gaps,
-                }
-                stats["total_records"] += hour_data + hour_gaps
-                stats["data_records"] += hour_data
-                stats["gap_records"] += hour_gaps
+
+            stats["hours"][hour] = {
+                "data_records": hour_data,
+                "gap_records": hour_gaps,
+            }
+            stats["total_records"] += hour_data + hour_gaps
+            stats["data_records"] += hour_data
+            stats["gap_records"] += hour_gaps
+    finally:
+        writer.close()  # flushes zstd frame
+        fh.close()      # closes the file handle
     return stats
 
 
@@ -392,16 +464,29 @@ def consolidate_day(
     def hour_iterator():
         for h in range(24):
             if h in hour_files:
-                records = merge_hour(h, hour_files[h], stream=stream)
-                yield h, records
+                fg = hour_files[h]
+                has_extra = bool(fg["late"]) or bool(fg["backfill"])
+                if fg["base"] is not None and not has_extra:
+                    # Single file: stream raw lines (memory efficient)
+                    yield h, None, fg["base"]
+                else:
+                    # Multiple files: merge in memory
+                    records = merge_hour(h, fg, stream=stream)
+                    yield h, records, None
             else:
                 gap = synthesize_missing_hour_gap(
                     exchange=exchange, symbol=symbol, stream=stream,
                     date=date, hour=h, session_id=session_id,
                 )
-                yield h, [gap]
+                yield h, [gap], None
 
     stats = write_daily_file(daily_path, hour_iterator())
+
+    if not daily_path.exists():
+        logger.error("consolidation_daily_file_missing", path=str(daily_path),
+                     detail="write_daily_file completed but file not found on disk")
+        return {"success": False, "error": f"Daily file not created: {daily_path}"}
+
     write_sha256_sidecar(daily_path, sha_path)
     daily_sha = compute_sha256(daily_path)
 

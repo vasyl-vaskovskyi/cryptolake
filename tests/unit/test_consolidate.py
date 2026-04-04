@@ -103,7 +103,8 @@ def test_discover_hour_files_backfill_only(tmp_path):
 def test_merge_hour_base_only(tmp_path):
     date_dir = tmp_path / "2026-03-28"
     date_dir.mkdir()
-    envs = [_make_data_env(exchange_ts=300), _make_data_env(exchange_ts=100), _make_data_env(exchange_ts=200)]
+    # Single base file: returned as-is (writer always writes in order)
+    envs = [_make_data_env(exchange_ts=100), _make_data_env(exchange_ts=200), _make_data_env(exchange_ts=300)]
     _write_zst_file(date_dir / "hour-5.jsonl.zst", envs)
     file_group = {"base": date_dir / "hour-5.jsonl.zst", "late": [], "backfill": []}
     records = merge_hour(5, file_group)
