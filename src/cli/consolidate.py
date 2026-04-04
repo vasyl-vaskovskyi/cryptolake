@@ -75,16 +75,8 @@ def _decompress_and_parse(file_path: Path) -> list[dict]:
     return result
 
 
-def _sort_key(record: dict, stream: str = "") -> int:
-    """Extract sort key from a record.
-
-    For trades: sort by aggregate trade ID ("a") for correct ID sequence.
-    For depth: sort by update ID ("u") for correct pu-chain.
-    For gaps: use gap_start_ts converted to milliseconds.
-    For everything else: use exchange_ts.
-    """
-    if record.get("type") == "gap":
-        return record["gap_start_ts"] // 1_000_000
+def _data_sort_key(record: dict, stream: str) -> int:
+    """Extract sort key for a DATA record based on stream type."""
     if stream == "trades":
         raw = orjson.loads(record.get("raw_text", "{}"))
         return raw.get("a", record["exchange_ts"])
@@ -95,15 +87,49 @@ def _sort_key(record: dict, stream: str = "") -> int:
 
 
 def merge_hour(hour: int, file_group: dict, stream: str = "") -> list[dict]:
-    all_records: list[dict] = []
-    if file_group["base"] is not None:
-        all_records.extend(_decompress_and_parse(file_group["base"]))
-    for path in file_group["late"]:
-        all_records.extend(_decompress_and_parse(path))
-    for path in file_group["backfill"]:
-        all_records.extend(_decompress_and_parse(path))
-    all_records.sort(key=lambda r: _sort_key(r, stream))
-    return all_records
+    """Merge all files for one hour, sort data records by natural key,
+    then insert gap envelopes at the correct position by received_at."""
+    data_records: list[dict] = []
+    gap_records: list[dict] = []
+
+    for source in [file_group["base"]] + file_group["late"] + file_group["backfill"]:
+        if source is None:
+            continue
+        for rec in _decompress_and_parse(source):
+            if rec.get("type") == "gap":
+                gap_records.append(rec)
+            else:
+                data_records.append(rec)
+
+    # Sort data records by natural key
+    data_records.sort(key=lambda r: _data_sort_key(r, stream))
+
+    if not gap_records:
+        return data_records
+
+    # Insert gap envelopes at the correct position using gap_start_ts
+    # matched against received_at of surrounding data records
+    gap_records.sort(key=lambda g: g.get("gap_start_ts", 0))
+
+    result: list[dict] = []
+    gap_idx = 0
+    for rec in data_records:
+        received = rec.get("received_at", 0)
+        # Insert any gap envelopes whose gap_start_ts <= this record's received_at
+        while gap_idx < len(gap_records):
+            gap_ts = gap_records[gap_idx].get("gap_start_ts", 0)
+            if gap_ts <= received:
+                result.append(gap_records[gap_idx])
+                gap_idx += 1
+            else:
+                break
+        result.append(rec)
+    # Append any remaining gap envelopes at the end
+    while gap_idx < len(gap_records):
+        result.append(gap_records[gap_idx])
+        gap_idx += 1
+
+    return result
 
 
 def synthesize_missing_hour_gap(
@@ -173,7 +199,12 @@ def verify_daily_file(
     sha256_path: Path,
     stream: str = "",
 ) -> tuple[bool, str | None]:
-    """Verify a daily file: record count, ordering, and SHA256."""
+    """Verify a daily file: record count, ordering, and SHA256.
+
+    Checks that data records are in non-decreasing order by natural key.
+    Gap envelopes are skipped in ordering checks (they are positioned
+    by received_at during merge, not by natural key).
+    """
     actual_sha = compute_sha256(daily_path)
     expected_sha = sha256_path.read_text().strip().split()[0]
     if actual_sha != expected_sha:
@@ -182,6 +213,17 @@ def verify_daily_file(
     dctx = zstd.ZstdDecompressor()
     count = 0
     prev_key = -1
+
+    def _check_record(record: dict, count: int, prev_key: int) -> tuple[int, str | None]:
+        if record.get("type") == "gap":
+            return prev_key, None  # skip gap envelopes in ordering check
+        key = _data_sort_key(record, stream)
+        if key < prev_key:
+            return prev_key, (
+                f"Order violation at record {count}: "
+                f"key {key} < previous {prev_key}"
+            )
+        return key, None
 
     with open(daily_path, "rb") as fh:
         reader = dctx.stream_reader(fh)
@@ -197,23 +239,16 @@ def verify_daily_file(
                     continue
                 record = orjson.loads(line)
                 count += 1
-                key = _sort_key(record, stream)
-                if key < prev_key:
-                    return False, (
-                        f"Order violation at record {count}: "
-                        f"key {key} < previous {prev_key}"
-                    )
-                prev_key = key
+                prev_key, error = _check_record(record, count, prev_key)
+                if error:
+                    return False, error
 
         if buf.strip():
             record = orjson.loads(buf.strip())
             count += 1
-            key = _sort_key(record, stream)
-            if key < prev_key:
-                return False, (
-                    f"Order violation at record {count}: "
-                    f"key {key} < previous {prev_key}"
-                )
+            prev_key, error = _check_record(record, count, prev_key)
+            if error:
+                return False, error
 
     if count != expected_count:
         return False, f"Record count mismatch: expected {expected_count}, got {count}"
