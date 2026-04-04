@@ -805,6 +805,7 @@ class WriterConsumer:
                 if recovery_gap is not None:
                     recovered, adjusted_gap = self._try_backup_recovery(recovery_gap)
                     for rec in recovered:
+                        rec = add_broker_coordinates(rec, topic=msg_topic, partition=msg_partition, offset=-1)
                         rec_results = self.buffer_manager.add(rec)
                         if rec_results:
                             await self._write_and_save(rec_results)
@@ -820,6 +821,7 @@ class WriterConsumer:
                 if gap_envelope is not None:
                     recovered, adjusted_gap = self._try_backup_recovery(gap_envelope)
                     for rec in recovered:
+                        rec = add_broker_coordinates(rec, topic=msg_topic, partition=msg_partition, offset=-1)
                         rec_results = self.buffer_manager.add(rec)
                         if rec_results:
                             await self._write_and_save(rec_results)
