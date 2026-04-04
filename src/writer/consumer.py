@@ -102,6 +102,12 @@ class WriterConsumer:
         self._backup_brokers: list[str] = backup_brokers or []
         self._backup_topic_prefix: str = backup_topic_prefix
 
+    # Streams where backup recovery creates more problems than it solves.
+    # Bookticker and depth have chained/ordered IDs (u, pu) — inserting
+    # recovered records after the new session's records breaks the sequence
+    # and causes thousands of integrity violations.
+    _SKIP_BACKUP_RECOVERY = frozenset({"bookticker", "depth"})
+
     def _try_backup_recovery(self, gap_envelope: dict) -> tuple[list[dict], dict | None]:
         """Attempt to fill a gap from backup Redpanda topics.
 
@@ -114,6 +120,10 @@ class WriterConsumer:
             return [], gap_envelope
 
         stream = gap_envelope.get("stream", "")
+
+        # Skip streams where recovery breaks ID ordering
+        if stream in self._SKIP_BACKUP_RECOVERY:
+            return [], gap_envelope
         symbol = gap_envelope.get("symbol", "")
         exchange = gap_envelope.get("exchange", "")
         gap_start = gap_envelope.get("gap_start_ts", 0)
