@@ -708,6 +708,26 @@ def run(base_dir, exchange, symbol, stream, target_date):
         click.echo(f"Already sealed: {tar_path.name} — skipping consolidation.")
         return
 
+    # Run backfill before consolidation to recover missing data
+    click.echo(f"Backfilling {target_date}...")
+    import subprocess as _sp
+    backfill_cmd = [
+        sys.executable, "-m", "src.cli.gaps", "backfill",
+        "--base-dir", base_dir,
+        "--exchange", exchange,
+        "--symbol", symbol.lower(),
+        "--date", target_date,
+        "--deep",
+    ]
+    bp = _sp.run(backfill_cmd, capture_output=True, text=True, timeout=600)
+    if bp.returncode == 0:
+        # Print non-empty lines that aren't JSON logs
+        for line in bp.stdout.strip().split("\n"):
+            if line and not line.startswith("{"):
+                click.echo(f"  {line}")
+    else:
+        click.echo(f"  Backfill warning: {bp.stderr.strip().split(chr(10))[-1] if bp.stderr else 'failed'}")
+
     streams = [stream] if stream else ALL_STREAMS
     any_consolidated = False
 
