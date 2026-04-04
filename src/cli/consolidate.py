@@ -262,7 +262,10 @@ def write_daily_file(
             stats["gap_records"] += hour_gaps
     finally:
         writer.close()  # flushes zstd frame
-        fh.close()      # closes the file handle
+        fh.flush()
+        import os as _os
+        _os.fsync(fh.fileno())
+        fh.close()
     return stats
 
 
@@ -730,6 +733,7 @@ def run(base_dir, exchange, symbol, stream, target_date):
 
     streams = [stream] if stream else ALL_STREAMS
     any_consolidated = False
+    any_failed = False
 
     for s in streams:
         stream_dir = Path(base_dir) / exchange / symbol.lower() / s
@@ -756,11 +760,14 @@ def run(base_dir, exchange, symbol, stream, target_date):
                 f"{len(result.get('missing_hours', []))} missing hours"
             )
         else:
+            any_failed = True
             click.echo(f" FAILED: {result.get('error', 'unknown')}")
 
     click.echo("Consolidation finished.")
 
-    if any_consolidated:
+    if any_failed:
+        click.echo("Sealing skipped — not all streams consolidated successfully.")
+    elif any_consolidated:
         seal_result = seal_daily_archive(
             base_dir=base_dir,
             exchange=exchange,
