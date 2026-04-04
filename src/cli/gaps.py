@@ -132,6 +132,14 @@ def _build_mark_price_update(symbol, mark_kline, index_kline, premium_kline, fun
 
 
 async def _fetch_funding_rate_composite(adapter, symbol, start_ms, end_ms):
+    # Klines are 1-minute intervals. If the window is shorter than 60s,
+    # expand it to ensure we capture the enclosing kline.
+    MIN_WINDOW_MS = 60_000
+    if end_ms - start_ms < MIN_WINDOW_MS:
+        # Align start to the beginning of the minute
+        start_ms = (start_ms // MIN_WINDOW_MS) * MIN_WINDOW_MS
+        end_ms = start_ms + MIN_WINDOW_MS
+
     async with aiohttp.ClientSession() as session:
         mark_klines = []
         index_klines = []
