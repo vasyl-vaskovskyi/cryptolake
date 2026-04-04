@@ -20,8 +20,8 @@ from src.writer.file_rotator import build_backfill_file_path, compute_sha256, si
 
 DEFAULT_ARCHIVE_DIR = default_archive_dir()
 
-BACKFILLABLE_STREAMS = frozenset({"trades", "funding_rate", "liquidations", "open_interest"})
-NON_BACKFILLABLE_STREAMS = frozenset({"depth", "depth_snapshot", "bookticker"})
+BACKFILLABLE_STREAMS = frozenset({"trades", "funding_rate", "open_interest"})
+NON_BACKFILLABLE_STREAMS = frozenset({"depth", "depth_snapshot", "bookticker", "liquidations"})
 
 STREAM_TS_KEYS = {
     "trades": "T",
