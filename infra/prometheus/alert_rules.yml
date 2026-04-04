@@ -162,3 +162,12 @@ groups:
         annotations:
           summary: Writer is not consuming any messages
           description: "No messages consumed by writer in the last 10 minutes. The writer process may be crash-looping or Redpanda may be down."
+
+      - alert: HoursBehind
+        expr: (hour(vector(time())) - max(writer_hours_sealed_today)) > 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data collection is {{ $value }} hours behind"
+          description: "The most recent sealed hour is more than 2 hours behind the current UTC hour. Data may be missing."

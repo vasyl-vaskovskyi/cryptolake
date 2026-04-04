@@ -1095,6 +1095,9 @@ def analyze_archive(
                         last_hour = max_h
 
                 # Second pass: build report with correct expected hours
+                from datetime import datetime as _dt, timezone as _tz
+                today_utc = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+                current_hour = _dt.now(_tz.utc).hour
                 dates_reported: set[str] = set()
                 for date_name, hour_map, gaps in all_dates_data:
                     covered = len(hour_map)
@@ -1104,7 +1107,10 @@ def analyze_archive(
                     expect_to = 23
                     if first_date is not None and date_name == first_date:
                         expect_from = first_hour
-                    if last_date is not None and date_name == last_date:
+                    if date_name == today_utc:
+                        # For today: expect up to the current UTC hour
+                        expect_to = current_hour
+                    elif last_date is not None and date_name == last_date:
                         expect_to = last_hour
 
                     expected = expect_to - expect_from + 1
