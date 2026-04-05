@@ -67,7 +67,7 @@ def _sort_key_for_stream(raw_bytes: bytes, exchange_ts: int, stream: str) -> int
     if stream == "trades":
         raw = orjson.loads(raw_bytes)
         return raw.get("a", 0)
-    if stream == "depth":
+    if stream in ("depth", "bookticker"):
         raw = orjson.loads(raw_bytes)
         return raw.get("u", 0)
     return exchange_ts
@@ -118,7 +118,7 @@ def _stream_data_records(files: list[Path], stream: str = "") -> Iterator[tuple[
         prev_key: int | None = None
         for raw_bytes, received_at, exchange_ts in all_records:
             key = _sort_key_for_stream(raw_bytes, exchange_ts, stream)
-            if stream in ("trades", "depth") and key == prev_key:
+            if stream in ("trades", "depth", "bookticker") and key == prev_key:
                 continue
             prev_key = key
             yield raw_bytes, received_at
