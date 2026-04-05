@@ -102,13 +102,20 @@ class WriterConsumer:
         self._backup_brokers: list[str] = backup_brokers or []
         self._backup_topic_prefix: str = backup_topic_prefix
 
-    def _try_backup_recovery(self, gap_envelope: dict) -> tuple[list[dict], dict | None]:
+    def _try_backup_recovery(
+        self,
+        gap_envelope: dict,
+        new_session_envelope: dict | None = None,
+    ) -> tuple[list[dict], dict | None]:
         """Attempt to fill a gap from backup Redpanda topics.
 
         Returns (recovered_records, adjusted_gap_or_None):
         - On "full": (records, None) — gap fully covered, no gap envelope needed
         - On "partial": (records, narrowed_gap) — some records recovered, gap narrowed
         - On "none": ([], original_gap_envelope) — nothing recovered
+
+        new_session_envelope: the first record from the new session, used to
+        filter out backup records that duplicate the new session's data.
         """
         if not self._backup_brokers or not self._backup_topic_prefix:
             return [], gap_envelope
@@ -128,6 +135,16 @@ class WriterConsumer:
             stream=stream, symbol=symbol, exchange=exchange,
             gap_start_ns=gap_start, gap_end_ns=gap_end,
         )
+
+        # Filter out backup records that duplicate the new session's boundary
+        if records and new_session_envelope is not None:
+            from src.writer.backup_recovery import _natural_key
+            new_key = _natural_key(new_session_envelope, stream)
+            if new_key is not None:
+                records = [
+                    r for r in records
+                    if _natural_key(r, stream) is None or _natural_key(r, stream) < new_key
+                ]
 
         writer_metrics.backup_recovery_attempts.inc()
 
@@ -803,7 +820,7 @@ class WriterConsumer:
                 # One-time recovery gap check (uses durable checkpoints)
                 recovery_gap = self._check_recovery_gap(envelope)
                 if recovery_gap is not None:
-                    recovered, adjusted_gap = self._try_backup_recovery(recovery_gap)
+                    recovered, adjusted_gap = self._try_backup_recovery(recovery_gap, new_session_envelope=envelope)
                     for rec in recovered:
                         rec = add_broker_coordinates(rec, topic=msg_topic, partition=msg_partition, offset=-1)
                         rec_results = self.buffer_manager.add(rec)
@@ -819,7 +836,7 @@ class WriterConsumer:
                 # after initial recovery is done)
                 gap_envelope = await self._check_session_change(envelope)
                 if gap_envelope is not None:
-                    recovered, adjusted_gap = self._try_backup_recovery(gap_envelope)
+                    recovered, adjusted_gap = self._try_backup_recovery(gap_envelope, new_session_envelope=envelope)
                     for rec in recovered:
                         rec = add_broker_coordinates(rec, topic=msg_topic, partition=msg_partition, offset=-1)
                         rec_results = self.buffer_manager.add(rec)
