@@ -133,9 +133,11 @@ def recover_from_backup(
                 continue
 
             received_ns = envelope.get("received_at", 0)
-            if received_ns > gap_end_ns:
+            if received_ns >= gap_end_ns:
                 break
-            if gap_start_ns <= received_ns <= gap_end_ns:
+            # Strictly inside the gap — exclude boundary records that
+            # overlap with primary data before/after the gap
+            if received_ns > gap_start_ns and received_ns < gap_end_ns:
                 records.append(envelope)
 
         records = _dedup_records(records, stream)
