@@ -411,7 +411,11 @@ class WriterConsumer:
             writer_metrics.session_gaps_detected_total.labels(
                 exchange=exchange, symbol=symbol, stream=stream,
             ).inc()
-            self._recovery_gap_emitted.add(stream_key)
+            # Only suppress subsequent session-change detection if the
+            # session actually changed. If the session is unchanged (writer
+            # restart only), a future collector restart must still be detected.
+            if last_archive_session != current_session_id:
+                self._recovery_gap_emitted.add(stream_key)
 
             records_missed = current_seq - last_archive_seq - 1 if last_archive_seq is not None else None
             detail = "No durable checkpoint; recovered gap bounds from archive"
@@ -552,7 +556,10 @@ class WriterConsumer:
 
         # Mark this stream so that the runtime _check_session_change path
         # suppresses its first session transition (already covered here).
-        self._recovery_gap_emitted.add(stream_key)
+        # Only suppress if the session actually changed — if unchanged (writer
+        # restart only), future collector restarts must still be detected.
+        if previous_session_id != current_session_id:
+            self._recovery_gap_emitted.add(stream_key)
 
         records_missed = current_seq - last_archive_seq - 1 if last_archive_seq is not None else None
         detail = (
