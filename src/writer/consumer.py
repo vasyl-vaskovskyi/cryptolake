@@ -16,7 +16,6 @@ from src.common.envelope import (
     create_gap_envelope,
     deserialize_envelope,
 )
-from src.writer.backup_recovery import recover_from_backup
 from src.common.system_identity import get_host_boot_id
 from src.writer import metrics as writer_metrics
 from src.writer.buffer_manager import BufferManager, FlushResult
@@ -32,6 +31,7 @@ from src.writer.state_manager import (
     StreamCheckpoint,
     StateManager,
 )
+from src.writer.failover import FailoverManager, extract_natural_key
 
 logger = structlog.get_logger()
 
@@ -62,8 +62,6 @@ class WriterConsumer:
         state_manager: StateManager,
         base_dir: str,
         host_evidence: HostLifecycleEvidence | None = None,
-        backup_brokers: list[str] | None = None,
-        backup_topic_prefix: str = "",
     ):
         self.brokers = brokers
         self.topics = topics
@@ -99,71 +97,13 @@ class WriterConsumer:
         # REST-polled stream gap threshold (3x configured poll interval in ns)
         self._rest_poll_interval_ns: int = _DEFAULT_REST_POLL_INTERVAL_NS
         self._hours_sealed_count: dict[tuple[str, str, str], int] = {}
-        self._backup_brokers: list[str] = backup_brokers or []
-        self._backup_topic_prefix: str = backup_topic_prefix
 
-    def _try_backup_recovery(
-        self,
-        gap_envelope: dict,
-        new_session_envelope: dict | None = None,
-    ) -> tuple[list[dict], dict | None]:
-        """Attempt to fill a gap from backup Redpanda topics.
-
-        Returns (recovered_records, adjusted_gap_or_None):
-        - On "full": (records, None) — gap fully covered, no gap envelope needed
-        - On "partial": (records, narrowed_gap) — some records recovered, gap narrowed
-        - On "none": ([], original_gap_envelope) — nothing recovered
-
-        new_session_envelope: the first record from the new session, used to
-        filter out backup records that duplicate the new session's data.
-        """
-        if not self._backup_brokers or not self._backup_topic_prefix:
-            return [], gap_envelope
-
-        stream = gap_envelope.get("stream", "")
-        symbol = gap_envelope.get("symbol", "")
-        exchange = gap_envelope.get("exchange", "")
-        gap_start = gap_envelope.get("gap_start_ts", 0)
-        gap_end = gap_envelope.get("gap_end_ts", 0)
-
-        if gap_start <= 0 or gap_end <= 0:
-            return [], gap_envelope
-
-        records, coverage = recover_from_backup(
-            brokers=self._backup_brokers,
-            backup_topic_prefix=self._backup_topic_prefix,
-            stream=stream, symbol=symbol, exchange=exchange,
-            gap_start_ns=gap_start, gap_end_ns=gap_end,
+        # Real-time failover manager
+        self._failover = FailoverManager(
+            brokers=brokers,
+            primary_topics=topics,
+            backup_prefix=os.environ.get("BACKUP_TOPIC_PREFIX", "backup."),
         )
-
-        # Filter out backup records that duplicate the new session's boundary
-        if records and new_session_envelope is not None:
-            from src.writer.backup_recovery import _natural_key
-            new_key = _natural_key(new_session_envelope, stream)
-            if new_key is not None:
-                records = [
-                    r for r in records
-                    if _natural_key(r, stream) is None or _natural_key(r, stream) < new_key
-                ]
-
-        writer_metrics.backup_recovery_attempts.inc()
-
-        if coverage == "full":
-            writer_metrics.backup_recovery_success.inc()
-            return records, None
-        elif coverage == "partial":
-            writer_metrics.backup_recovery_partial.inc()
-            last_received = max(r.get("received_at", 0) for r in records)
-            narrowed = dict(gap_envelope)
-            narrowed["gap_start_ts"] = last_received + 1
-            narrowed["detail"] = (
-                f"{gap_envelope.get('detail', '')} "
-                f"[partial backup recovery: {len(records)} records]"
-            )
-            return records, narrowed
-        else:
-            writer_metrics.backup_recovery_miss.inc()
-            return [], gap_envelope
 
     async def start(self) -> None:
         from confluent_kafka import Consumer as KafkaConsumer
@@ -721,181 +661,222 @@ class WriterConsumer:
             # This late file is also sealed; mark it and try the next one
             self._sealed_files.add(late_path)
 
+    def _deserialize_and_stamp(self, msg) -> dict | None:
+        """Deserialize a Kafka message and add broker coordinates. Returns None on error."""
+        raw_value = msg.value()
+        msg_topic = msg.topic()
+        msg_partition = msg.partition()
+        msg_offset = msg.offset()
+        assert raw_value is not None and msg_topic is not None
+        assert msg_partition is not None and msg_offset is not None
+        try:
+            envelope = deserialize_envelope(raw_value)
+        except Exception:
+            logger.error("corrupt_message_skipped", topic=msg_topic, partition=msg_partition,
+                         offset=msg_offset, raw_size=len(raw_value))
+            writer_metrics.messages_skipped_total.labels(
+                exchange="unknown", symbol="unknown", stream="unknown").inc()
+            now_ns = time.time_ns()
+            parts = msg_topic.split(".", 1) if msg_topic else ["unknown", "unknown"]
+            gap = create_gap_envelope(
+                exchange=parts[0] if len(parts) > 0 else "unknown",
+                symbol="unknown",
+                stream=parts[1] if len(parts) > 1 else "unknown",
+                collector_session_id="", session_seq=-1,
+                gap_start_ts=now_ns, gap_end_ts=now_ns,
+                reason="deserialization_error",
+                detail=f"Corrupt message at offset {msg_offset} (size={len(raw_value)})",
+            )
+            gap = add_broker_coordinates(gap, topic=msg_topic, partition=msg_partition, offset=-1)
+            gap_results = self.buffer_manager.add(gap)
+            if gap_results:
+                asyncio.get_running_loop().create_task(self._write_and_save(gap_results))
+            return None
+        return add_broker_coordinates(envelope, topic=msg_topic, partition=msg_partition, offset=msg_offset)
+
+    def _deserialize_backup_msg(self, msg) -> dict | None:
+        """Deserialize a backup Kafka message. Strip backup prefix from topic for coordinates."""
+        raw_value = msg.value()
+        msg_topic = msg.topic()
+        msg_partition = msg.partition()
+        msg_offset = msg.offset()
+        if raw_value is None or msg_topic is None:
+            return None
+        try:
+            envelope = deserialize_envelope(raw_value)
+        except Exception:
+            return None
+        primary_topic = msg_topic
+        if msg_topic.startswith(self._failover._backup_prefix):
+            primary_topic = msg_topic[len(self._failover._backup_prefix):]
+        return add_broker_coordinates(envelope, topic=primary_topic, partition=msg_partition, offset=msg_offset)
+
+    def _should_skip_recovery_dedup(self, envelope: dict, msg) -> bool:
+        """Check if a message should be skipped during recovery dedup."""
+        target = self.buffer_manager.route(envelope)
+        base_path = build_file_path(
+            self.buffer_manager.base_dir, target.exchange, target.symbol,
+            target.stream, target.date, target.hour)
+        file_path = self._resolve_file_path(base_path)
+        state_key = (msg.topic(), msg.partition(), str(file_path))
+        if state_key in self._recovery_high_water:
+            if msg.offset() <= self._recovery_high_water[state_key]:
+                writer_metrics.messages_skipped_total.labels(
+                    exchange=envelope.get("exchange", ""),
+                    symbol=envelope.get("symbol", ""),
+                    stream=envelope.get("stream", "")).inc()
+                return True
+            else:
+                del self._recovery_high_water[state_key]
+        return False
+
+    def _count_consumed(self, envelope: dict) -> None:
+        writer_metrics.messages_consumed_total.labels(
+            exchange=envelope.get("exchange", ""),
+            symbol=envelope.get("symbol", ""),
+            stream=envelope.get("stream", "")).inc()
+
+    async def _handle_gap_detection(self, envelope: dict, msg) -> None:
+        """Run recovery gap check and runtime session change detection."""
+        msg_topic = msg.topic()
+        msg_partition = msg.partition()
+
+        recovery_gap = self._check_recovery_gap(envelope)
+        if recovery_gap is not None:
+            recovery_gap = add_broker_coordinates(
+                recovery_gap, topic=msg_topic, partition=msg_partition, offset=-1)
+            gap_results = self.buffer_manager.add(recovery_gap)
+            if gap_results:
+                await self._write_and_save(gap_results)
+
+        gap_envelope = await self._check_session_change(envelope)
+        if gap_envelope is not None:
+            gap_envelope = add_broker_coordinates(
+                gap_envelope, topic=msg_topic, partition=msg_partition, offset=-1)
+            gap_results = self.buffer_manager.add(gap_envelope)
+            if gap_results:
+                await self._write_and_save(gap_results)
+
+    async def _handle_rotation_and_buffer(
+        self, envelope: dict, active_hours: dict[tuple[str, str, str], tuple[int, str]],
+    ) -> None:
+        """Handle hourly rotation check and add envelope to buffer."""
+        msg_dt = datetime.datetime.fromtimestamp(
+            envelope["received_at"] / 1_000_000_000, tz=datetime.timezone.utc)
+        current_hour = msg_dt.hour
+        current_date = msg_dt.strftime("%Y-%m-%d")
+        file_key = (envelope.get("exchange", ""), envelope.get("symbol", ""), envelope.get("stream", ""))
+        prev = active_hours.get(file_key)
+        if prev is not None:
+            prev_hour, prev_date = prev
+            if current_hour != prev_hour or current_date != prev_date:
+                if current_date != prev_date:
+                    ex, sym, st = file_key
+                    today_val = self._hours_sealed_count.get(file_key, 0)
+                    writer_metrics.hours_sealed_previous_day.labels(exchange=ex, symbol=sym, stream=st).set(today_val)
+                    writer_metrics.hours_sealed_today.labels(exchange=ex, symbol=sym, stream=st).set(0)
+                    self._hours_sealed_count[file_key] = 0
+                await self._rotate_file(file_key, prev_date, prev_hour)
+        active_hours[file_key] = (current_hour, current_date)
+
+        flush_results = self.buffer_manager.add(envelope)
+        if flush_results:
+            await self._write_and_save(flush_results)
+
     async def consume_loop(self) -> None:
         """Main consume loop. Polls in executor, buffers, flushes, and commits."""
         loop = asyncio.get_running_loop()
         last_flush_time = time.monotonic()
-        # Track active (hour, date) per file key (exchange, symbol, stream).
-        # Stores the previous message's hour and date so that at day boundaries
-        # (23->00) we seal the correct previous-day file, not the new day's.
         active_hours: dict[tuple[str, str, str], tuple[int, str]] = {}
 
         assert self._consumer is not None, "call start() first"
         while self._running:
-            # Non-blocking poll via executor (spec 8.2: avoid blocking uvloop)
-            msg = await loop.run_in_executor(None, self._consumer.poll, 1.0)
+            if not self._failover.is_active:
+                # --- Normal path: consume from primary ---
+                msg = await loop.run_in_executor(None, self._consumer.poll, 1.0)
 
-            if msg is None:
-                if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
-                    await self._flush_and_commit()
-                    last_flush_time = time.monotonic()
-                continue
-
-            if msg.error():
-                logger.error("consumer_error", error=str(msg.error()))
-                continue
-
-            # Deserialize and stamp broker coordinates
-            # After msg.error() check, these are guaranteed non-None
-            raw_value = msg.value()
-            msg_topic = msg.topic()
-            msg_partition = msg.partition()
-            msg_offset = msg.offset()
-            assert raw_value is not None and msg_topic is not None
-            assert msg_partition is not None and msg_offset is not None
-            try:
-                envelope = deserialize_envelope(raw_value)
-            except Exception:
-                logger.error(
-                    "corrupt_message_skipped",
-                    topic=msg_topic,
-                    partition=msg_partition,
-                    offset=msg_offset,
-                    raw_size=len(raw_value),
-                )
-                writer_metrics.messages_skipped_total.labels(
-                    exchange="unknown", symbol="unknown", stream="unknown",
-                ).inc()
-                # Emit gap so archive documents the skipped message
-                now_ns = time.time_ns()
-                parts = msg_topic.split(".", 1) if msg_topic else ["unknown", "unknown"]
-                gap_exchange = parts[0] if len(parts) > 0 else "unknown"
-                gap_stream = parts[1] if len(parts) > 1 else "unknown"
-                gap = create_gap_envelope(
-                    exchange=gap_exchange,
-                    symbol="unknown",
-                    stream=gap_stream,
-                    collector_session_id="",
-                    session_seq=-1,
-                    gap_start_ts=now_ns,
-                    gap_end_ts=now_ns,
-                    reason="deserialization_error",
-                    detail=f"Corrupt message at offset {msg_offset} (size={len(raw_value)})",
-                )
-                gap = add_broker_coordinates(
-                    gap, topic=msg_topic, partition=msg_partition, offset=-1,
-                )
-                gap_results = self.buffer_manager.add(gap)
-                if gap_results:
-                    await self._write_and_save(gap_results)
-                continue
-            envelope = add_broker_coordinates(
-                envelope,
-                topic=msg_topic,
-                partition=msg_partition,
-                offset=msg_offset,
-            )
-
-            # De-duplication during recovery: skip messages already in the archive (spec 8.2)
-            target = self.buffer_manager.route(envelope)
-            base_path = build_file_path(
-                self.buffer_manager.base_dir, target.exchange, target.symbol,
-                target.stream, target.date, target.hour,
-            )
-            file_path = self._resolve_file_path(base_path)
-            state_key = (msg_topic, msg_partition, str(file_path))
-            if state_key in self._recovery_high_water:
-                if msg_offset <= self._recovery_high_water[state_key]:
-                    writer_metrics.messages_skipped_total.labels(
-                        exchange=envelope.get("exchange", ""),
-                        symbol=envelope.get("symbol", ""),
-                        stream=envelope.get("stream", ""),
-                    ).inc()
+                if msg is None:
+                    if self._failover.should_activate():
+                        self._failover.activate()
+                    if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
+                        await self._flush_and_commit()
+                        last_flush_time = time.monotonic()
                     continue
-                else:
-                    # Once we pass the recorded high water for this file, we can stop checking
-                    del self._recovery_high_water[state_key]
 
-            writer_metrics.messages_consumed_total.labels(
-                exchange=envelope.get("exchange", ""),
-                symbol=envelope.get("symbol", ""),
-                stream=envelope.get("stream", ""),
-            ).inc()
+                if msg.error():
+                    logger.error("consumer_error", error=str(msg.error()))
+                    continue
 
-            # Detect gaps for data envelopes
-            if envelope.get("type") == "data":
-                # One-time recovery gap check (uses durable checkpoints)
-                recovery_gap = self._check_recovery_gap(envelope)
-                if recovery_gap is not None:
-                    recovered, adjusted_gap = self._try_backup_recovery(recovery_gap, new_session_envelope=envelope)
-                    for rec in recovered:
-                        rec = add_broker_coordinates(rec, topic=msg_topic, partition=msg_partition, offset=-1)
-                        rec_results = self.buffer_manager.add(rec)
-                        if rec_results:
-                            await self._write_and_save(rec_results)
-                    if adjusted_gap is not None:
-                        adjusted_gap = add_broker_coordinates(adjusted_gap, topic=msg_topic, partition=msg_partition, offset=-1)
-                        gap_results = self.buffer_manager.add(adjusted_gap)
-                        if gap_results:
-                            await self._write_and_save(gap_results)
+                envelope = self._deserialize_and_stamp(msg)
+                if envelope is None:
+                    continue
 
-                # Runtime session change detection (covers collector crash/SIGKILL
-                # after initial recovery is done)
-                gap_envelope = await self._check_session_change(envelope)
-                if gap_envelope is not None:
-                    recovered, adjusted_gap = self._try_backup_recovery(gap_envelope, new_session_envelope=envelope)
-                    for rec in recovered:
-                        rec = add_broker_coordinates(rec, topic=msg_topic, partition=msg_partition, offset=-1)
-                        rec_results = self.buffer_manager.add(rec)
-                        if rec_results:
-                            await self._write_and_save(rec_results)
-                    if adjusted_gap is not None:
-                        adjusted_gap = add_broker_coordinates(adjusted_gap, topic=msg_topic, partition=msg_partition, offset=-1)
-                        gap_results = self.buffer_manager.add(adjusted_gap)
-                        if gap_results:
-                            await self._write_and_save(gap_results)
+                if self._should_skip_recovery_dedup(envelope, msg):
+                    continue
 
-            # Per-file hourly rotation (spec 8.2: file routing by message received_at)
-            msg_dt = datetime.datetime.fromtimestamp(
-                envelope["received_at"] / 1_000_000_000,
-                tz=datetime.timezone.utc,
-            )
-            current_hour = msg_dt.hour
-            current_date = msg_dt.strftime("%Y-%m-%d")
-            file_key = (envelope.get("exchange", ""),
-                        envelope.get("symbol", ""),
-                        envelope.get("stream", ""))
-            prev = active_hours.get(file_key)
-            if prev is not None:
-                prev_hour, prev_date = prev
-                if current_hour != prev_hour or current_date != prev_date:
-                    if current_date != prev_date:
-                        ex, sym, st = file_key
-                        key = (ex, sym, st)
-                        today_val = self._hours_sealed_count.get(key, 0)
-                        writer_metrics.hours_sealed_previous_day.labels(
-                            exchange=ex, symbol=sym, stream=st,
-                        ).set(today_val)
-                        writer_metrics.hours_sealed_today.labels(
-                            exchange=ex, symbol=sym, stream=st,
-                        ).set(0)
-                        self._hours_sealed_count[key] = 0
-                    # Seal previous file using the PREVIOUS date/hour,
-                    # not the current message's date (critical at 23->00 day boundary)
-                    await self._rotate_file(file_key, prev_date, prev_hour)
-            active_hours[file_key] = (current_hour, current_date)
+                self._count_consumed(envelope)
+                self._failover.track_record(envelope)
+                self._failover.reset_silence_timer()
 
-            # Add to buffer -- may trigger per-key flush (high-volume streams only)
-            flush_results = self.buffer_manager.add(envelope)
-            if flush_results:
-                await self._write_and_save(flush_results)
-                # Note: do NOT reset last_flush_time here — count-based flushes
-                # only flush the single key that hit the threshold. The timer
-                # must still fire to flush low-volume streams.
+                if envelope.get("type") == "data":
+                    await self._handle_gap_detection(envelope, msg)
 
-            # Timer-based flush: flush ALL buffers periodically to ensure
-            # low-volume streams (depth_snapshot, open_interest) reach disk
-            # even when high-volume streams keep poll() busy.
+                await self._handle_rotation_and_buffer(envelope, active_hours)
+            else:
+                # --- Failover path: consume from backup, probe primary ---
+                backup_consumer = self._failover.backup_consumer
+                if backup_consumer is not None:
+                    backup_msg = await loop.run_in_executor(None, backup_consumer.poll, 0.5)
+                    if backup_msg is not None and not backup_msg.error():
+                        envelope = self._deserialize_backup_msg(backup_msg)
+                        if envelope is not None and not self._failover.should_filter(envelope):
+                            # Check for gap on first backup record per stream
+                            if envelope.get("type") == "data":
+                                stream_key = (envelope.get("exchange", ""),
+                                              envelope.get("symbol", ""),
+                                              envelope.get("stream", ""))
+                                nk = extract_natural_key(envelope)
+                                if stream_key not in self._failover._gap_checked and nk is not None:
+                                    self._failover._gap_checked.add(stream_key)
+                                    gap = self._failover.check_failover_gap(
+                                        stream_key=stream_key,
+                                        first_backup_key=nk,
+                                        first_backup_received_at=envelope.get("received_at", 0),
+                                    )
+                                    if gap is not None:
+                                        gap = add_broker_coordinates(
+                                            gap, topic=backup_msg.topic(),
+                                            partition=backup_msg.partition(), offset=-1)
+                                        gap_results = self.buffer_manager.add(gap)
+                                        if gap_results:
+                                            await self._write_and_save(gap_results)
+
+                            self._count_consumed(envelope)
+                            self._failover.track_record(envelope)
+                            writer_metrics.failover_records_total.inc()
+                            # NOTE: skip _check_session_change for backup records --
+                            # backup collector has its own session ID which would
+                            # incorrectly trigger session change detection.
+                            await self._handle_rotation_and_buffer(envelope, active_hours)
+
+                # Probe primary -- short timeout
+                primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
+                if primary_msg is not None and not primary_msg.error():
+                    envelope = self._deserialize_and_stamp(primary_msg)
+                    if envelope is not None:
+                        self._failover.begin_switchback()
+                        if not self._failover.check_switchback_filter(envelope):
+                            if not self._should_skip_recovery_dedup(envelope, primary_msg):
+                                self._count_consumed(envelope)
+                                self._failover.track_record(envelope)
+                                self._failover.reset_silence_timer()
+                                if envelope.get("type") == "data":
+                                    await self._handle_gap_detection(envelope, primary_msg)
+                                await self._handle_rotation_and_buffer(envelope, active_hours)
+                        self._failover.deactivate()
+
+            # Timer-based flush: runs EVERY iteration to ensure low-volume streams
+            # reach disk even when high-volume streams keep poll() busy.
             if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
                 await self._flush_and_commit()
                 last_flush_time = time.monotonic()
@@ -1254,5 +1235,6 @@ class WriterConsumer:
         self._running = False
         # _rotate_hour handles flush -> write -> seal -> commit in correct order
         await self._rotate_hour()
+        self._failover.cleanup()
         if self._consumer:
             self._consumer.close()

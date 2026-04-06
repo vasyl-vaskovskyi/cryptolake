@@ -93,19 +93,29 @@ hours_sealed_previous_day = Gauge(
     ["exchange", "symbol", "stream"],
 )
 
-backup_recovery_attempts = Counter(
-    "writer_backup_recovery_attempts_total",
-    "Total backup recovery attempts",
+# --- Failover metrics (replaced backup_recovery_* metrics) ---
+failover_active = Gauge(
+    "writer_failover_active",
+    "1 if reading from backup topics, 0 if primary",
 )
-backup_recovery_success = Counter(
-    "writer_backup_recovery_success_total",
-    "Full recoveries from backup (no gap envelope needed)",
+
+failover_total = Counter(
+    "writer_failover_total",
+    "Total failover activations",
 )
-backup_recovery_partial = Counter(
-    "writer_backup_recovery_partial_total",
-    "Partial recoveries from backup (narrowed gap)",
+
+failover_duration_seconds = Histogram(
+    "writer_failover_duration_seconds",
+    "Duration of each failover episode",
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600],
 )
-backup_recovery_miss = Counter(
-    "writer_backup_recovery_miss_total",
-    "Backup had no data for the gap",
+
+failover_records_total = Counter(
+    "writer_failover_records_total",
+    "Records consumed from backup topics during failover",
+)
+
+switchback_total = Counter(
+    "writer_switchback_total",
+    "Successful switchbacks from backup to primary",
 )

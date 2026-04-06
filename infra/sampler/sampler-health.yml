@@ -2,8 +2,8 @@
 # Run: sampler -c infra/sampler/sampler-health.yml
 #
 # Grid: 80 cols x 24 rows
-# Row 1 (0-13):  [System Resources 0-26] [Commit Failures 27-53] [Data Integrity + Backup 54-80]
-# Row 2 (14-24): [Net KB/s 0-26]         [Write KB/s 27-53]      [Backup Recoveries 54-80]
+# Row 1 (0-13):  [System Resources 0-26] [Commit Failures 27-53] [Data Integrity + Failover 54-80]
+# Row 2 (14-24): [Net KB/s 0-26]         [Write KB/s 27-53]      [Failover Records 54-80]
 
 barcharts:
   - title: System Resources
@@ -40,11 +40,11 @@ sparklines:
     sample: |
         curl -sg 'http://localhost:9090/api/v1/query?query=sum(rate(writer_bytes_written_total[5m]))/1024' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.1f'
 
-  - title: Backup Recoveries /h
+  - title: Failover Records /h
     position: [[54, 14], [26, 10]]
     rate-ms: 10000
     sample: |
-        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(writer_backup_recovery_success_total[1h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
+        curl -sg 'http://localhost:9090/api/v1/query?query=sum(increase(writer_failover_records_total[1h]))' | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'
 
 textboxes:
   - title: Commit Failures /12h
@@ -59,8 +59,8 @@ textboxes:
     sample: |
         P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; SGAPS=$(q "sum(increase(writer_session_gaps_detected_total[12h]))"); GRECS=$(q "sum(increase(writer_gap_records_written_total[12h]))"); SEALED=$(q "min(writer_hours_sealed_previous_day)"); printf "\n %-18s %3s\n %-18s %3s\n %-18s %3s" "Session Gaps /12h" "$SGAPS" "Gap Records /12h" "$GRECS" "Hours Sealed Yest." "$SEALED"
 
-  - title: Backup Recovery /12h
+  - title: Failover Status
     position: [[54, 7], [26, 7]]
-    rate-ms: 30000
+    rate-ms: 10000
     sample: |
-        P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; ATT=$(q "sum(increase(writer_backup_recovery_attempts_total[12h]))"); OK=$(q "sum(increase(writer_backup_recovery_success_total[12h]))"); PART=$(q "sum(increase(writer_backup_recovery_partial_total[12h]))"); MISS=$(q "sum(increase(writer_backup_recovery_miss_total[12h]))"); printf "\n %-18s %3s\n %-18s %3s\n %-18s %3s\n %-18s %3s" "Attempts" "$ATT" "Full Recovery" "$OK" "Partial" "$PART" "Missed" "$MISS"
+        P="http://localhost:9090/api/v1/query?query="; q() { curl -sg "${P}$1" | jq '.data.result[0].value[1] // "0"' -r | xargs printf '%.0f'; }; ACT=$(q "writer_failover_active"); TOT=$(q "sum(increase(writer_failover_total[12h]))"); RECS=$(q "sum(increase(writer_failover_records_total[12h]))"); SB=$(q "sum(increase(writer_switchback_total[12h]))"); printf "\n %-18s %3s\n %-18s %3s\n %-18s %3s\n %-18s %3s" "Active Now" "$ACT" "Failovers /12h" "$TOT" "Backup Recs /12h" "$RECS" "Switchbacks /12h" "$SB"

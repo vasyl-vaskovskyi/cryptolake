@@ -67,8 +67,6 @@ class Writer:
             state_manager=self.state_manager,
             base_dir=self.config.writer.base_dir,
             host_evidence=host_evidence,
-            backup_brokers=self.config.redpanda.brokers,
-            backup_topic_prefix=os.environ.get("BACKUP_TOPIC_PREFIX", "backup."),
         )
 
         # Writer runtime metadata
