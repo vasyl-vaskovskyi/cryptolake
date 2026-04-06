@@ -13,6 +13,7 @@ from src.collector.streams.base import StreamHandler
 from src.collector.streams.depth import DepthHandler
 from src.common.async_utils import cancel_tasks
 from src.common.envelope import create_data_envelope
+from src.collector.backup_chain_reader import read_last_depth_update_id, other_depth_topic
 from src.exchanges.binance import BinanceAdapter, _PUBLIC_STREAMS, _MARKET_STREAMS
 
 logger = structlog.get_logger()
@@ -35,6 +36,7 @@ class WebSocketManager:
         handlers: dict[str, StreamHandler],
         symbols: list[str],
         enabled_streams: list[str],
+        brokers: list[str] | None = None,
     ):
         self.exchange = exchange
         self.collector_session_id = collector_session_id
@@ -43,6 +45,7 @@ class WebSocketManager:
         self.handlers = handlers
         self.symbols = symbols
         self.enabled_streams = enabled_streams
+        self._brokers = brokers or []
         self._seq_counters: dict[tuple[str, str], int] = {}
         self._running = False
         self._ws_connected: dict[str, bool] = {}  # {socket_name: connected}
@@ -211,6 +214,22 @@ class WebSocketManager:
             return
 
         depth_handler.reset(symbol)
+
+        # Check if the other collector's depth topic has recent diffs.
+        # If so, seed the pu chain from there and skip the REST snapshot.
+        if self._brokers:
+            backup_topic = other_depth_topic(self.producer.topic_prefix, self.exchange)
+            backup_u = read_last_depth_update_id(
+                brokers=self._brokers,
+                topic=backup_topic,
+                symbol=symbol,
+                max_age_seconds=30,
+            )
+            if backup_u is not None:
+                depth_handler.set_sync_point(symbol, backup_u)
+                logger.info("depth_resync_skipped_snapshot",
+                            symbol=symbol, backup_last_u=backup_u)
+                return
 
         retries = 3
         for attempt in range(retries):

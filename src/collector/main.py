@@ -71,6 +71,7 @@ class Collector:
             handlers=self.handlers,
             symbols=self.symbols,
             enabled_streams=self.enabled_streams,
+            brokers=self.config.redpanda.brokers,
         )
         self._tasks: list[asyncio.Task] = []
         # Wire producer overflow to WS backpressure

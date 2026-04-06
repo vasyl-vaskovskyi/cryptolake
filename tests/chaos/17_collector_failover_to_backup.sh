@@ -66,6 +66,13 @@ else
     fail "writer did not switchback to primary"
 fi
 
+step 10.5 "Checking that restarted collector skipped depth snapshot..."
+if $COMPOSE logs collector 2>&1 | grep -q "depth_resync_skipped_snapshot"; then
+    pass "collector skipped depth resync snapshot (backup had recent data)"
+else
+    fail "collector did NOT skip depth resync snapshot"
+fi
+
 section "Verification"
 
 # Failover metrics
