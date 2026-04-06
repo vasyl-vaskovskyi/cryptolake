@@ -51,11 +51,18 @@ def verify_envelopes(envelopes: list[dict]) -> list[str]:
 
 
 def check_duplicate_offsets(envelopes: list[dict]) -> list[str]:
-    """Find duplicate (topic, partition, offset) tuples."""
+    """Find duplicate (topic, partition, offset) tuples.
+
+    Records with _offset == -1 are skipped — these are backup failover
+    records or synthetic gap envelopes that don't have meaningful offsets.
+    """
     seen: set[tuple] = set()
     errors: list[str] = []
     for env in envelopes:
-        key = (env.get("_topic"), env.get("_partition"), env.get("_offset"))
+        offset = env.get("_offset")
+        if offset is not None and offset < 0:
+            continue
+        key = (env.get("_topic"), env.get("_partition"), offset)
         if key in seen:
             errors.append(f"Duplicate broker record: {key}")
         seen.add(key)

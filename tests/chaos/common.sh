@@ -94,7 +94,7 @@ wait_healthy() {
     local attempts=0 max_attempts=40
     while (( attempts < max_attempts )); do
         local all_healthy=true
-        for svc in postgres redpanda collector writer; do
+        for svc in postgres redpanda collector collector-backup writer; do
             local status
             status=$($COMPOSE ps "$svc" --format '{{.Status}}' 2>/dev/null || echo "missing")
             if ! echo "$status" | grep -q "(healthy)"; then

@@ -44,6 +44,7 @@ section "Verification"
 
 assert_container_healthy "writer"
 assert_container_healthy "collector"
+assert_container_healthy "collector-backup"
 
 # Writer should have caught up — more data than before the kill
 post_recovery=$(count_envelopes)
@@ -63,8 +64,8 @@ else
     fail "gap timestamp validation failed"
 fi
 
-# Validate gap metadata: docker kill sends SIGTERM (unplanned), so planned=false
-# Writer may or may not produce gaps (SIGTERM allows graceful shutdown),
+# Validate gap metadata: docker kill sends SIGKILL (unplanned), so planned=false
+# Writer may or may not produce gaps depending on SIGTERM handling,
 # but if gaps exist they must have correct metadata.
 if validate_restart_gap_fields; then
     pass "restart_gap metadata valid (planned=false if gaps exist)"
@@ -81,12 +82,12 @@ if (( gaps > 0 )); then
         fail "restart_gap timestamp accuracy check failed"
     fi
 else
-    pass "no restart_gap records (writer handled SIGTERM gracefully)"
+    pass "no restart_gap records (writer handled shutdown gracefully)"
 fi
 
-step 8 "Stopping collector to quiesce input before archive verification..."
-$COMPOSE stop collector 2>&1
-if wait_for_writer_lag_below 0 30; then
+step 8 "Stopping both collectors to quiesce input before archive verification..."
+$COMPOSE stop collector collector-backup 2>&1
+if wait_for_writer_lag_below 0 60; then
     pass "writer drained remaining backlog after collector stop"
 else
     fail "writer still had backlog after collector stop"
