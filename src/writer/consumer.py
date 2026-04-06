@@ -800,6 +800,12 @@ class WriterConsumer:
                 if msg is None:
                     if self._failover.should_activate():
                         self._failover.activate()
+                        # Seek primary consumer to end so that old buffered
+                        # messages don't trigger premature switchback.
+                        from confluent_kafka import TopicPartition as _TP
+                        for tp in self._consumer.assignment():
+                            _, high = self._consumer.get_watermark_offsets(tp)
+                            self._consumer.seek(_TP(tp.topic, tp.partition, high))
                     if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
                         await self._flush_and_commit()
                         last_flush_time = time.monotonic()
@@ -872,9 +878,16 @@ class WriterConsumer:
                                 self._count_consumed(envelope)
                                 self._failover.track_record(envelope)
                                 self._failover.reset_silence_timer()
-                                if envelope.get("type") == "data":
-                                    await self._handle_gap_detection(envelope, primary_msg)
+                                # Skip gap detection during switchback — the primary
+                                # restarted with a new session_id, but the backup
+                                # covered the gap seamlessly. No data was lost.
                                 await self._handle_rotation_and_buffer(envelope, active_hours)
+                        # Suppress session-change detection for ALL streams after
+                        # failover — the primary restarted with a new session, but
+                        # backup covered it. Use the existing _recovery_gap_emitted
+                        # mechanism to suppress the first session change per stream.
+                        for sk in list(self._failover._last_key):
+                            self._recovery_gap_emitted.add(sk)
                         self._failover.deactivate()
 
             # Timer-based flush: runs EVERY iteration to ensure low-volume streams
