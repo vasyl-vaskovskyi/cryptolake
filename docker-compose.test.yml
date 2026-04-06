@@ -46,6 +46,35 @@ services:
     cap_add:
       - NET_ADMIN
 
+  collector-backup:
+    extends:
+      file: docker-compose.yml
+      service: collector-backup
+    networks:
+      - cryptolake_internal
+      - backup_egress
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - CONFIG_PATH=/app/config/config.test.yaml
+      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - COLLECTOR_ID=binance-collector-backup
+      - TOPIC_PREFIX=backup.
+      - TEST_DURATION_SECONDS=${TEST_DURATION_SECONDS:-600}
+    init: true
+    command:
+      - sh
+      - -c
+      - exec timeout "$${TEST_DURATION_SECONDS}" /app/.venv/bin/python -m src.collector.main
+    stop_grace_period: 30s
+    restart: "no"
+    cap_add:
+      - NET_ADMIN
+
   writer:
     extends:
       file: docker-compose.yml
@@ -110,6 +139,8 @@ networks:
   host_access:
     driver: bridge
   collector_egress:
+    driver: bridge
+  backup_egress:
     driver: bridge
   alertmanager_egress:
     driver: bridge

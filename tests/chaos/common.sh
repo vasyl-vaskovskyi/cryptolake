@@ -19,6 +19,7 @@ export TEST_DATA_DIR
 
 # Container names used by the test compose project (cryptolake-test)
 COLLECTOR_CONTAINER="cryptolake-test-collector-1"
+BACKUP_COLLECTOR_CONTAINER="cryptolake-test-collector-backup-1"
 WRITER_CONTAINER="cryptolake-test-writer-1"
 REDPANDA_CONTAINER="cryptolake-test-redpanda-1"
 
@@ -391,6 +392,47 @@ print(f'OK: {found} {reason} gap(s) with valid timestamps (tolerance: ${toleranc
 # Usage: ts_now_ns  →  prints nanosecond epoch
 ts_now_ns() {
     python3 -c "import time; print(time.time_ns())"
+}
+
+# ---------------------------------------------------------------------------
+# Writer failover metric helpers
+# ---------------------------------------------------------------------------
+
+# Read a single writer metric value by name.
+# Usage: get_writer_metric "writer_failover_active"  →  prints value
+get_writer_metric() {
+    local metric_name="${1:?Usage: get_writer_metric <metric_name>}"
+    $COMPOSE exec -T writer python -c "
+from urllib.request import urlopen
+data = urlopen('http://localhost:8001/metrics', timeout=2).read().decode()
+for line in data.splitlines():
+    if line.startswith('${metric_name}') and not line.startswith('#'):
+        val = line.split()[-1]
+        # Handle both '1.0' and '1' formats
+        print(int(float(val)))
+        raise SystemExit(0)
+print(0)
+" 2>/dev/null
+}
+
+# Wait for writer_failover_active to reach expected value.
+# Usage: wait_for_failover_state <expected_value> [max_seconds]
+wait_for_failover_state() {
+    local expected="${1:?Usage: wait_for_failover_state <0|1> [max_seconds]}"
+    local max_wait="${2:-60}"
+    local label="active"
+    [[ "$expected" == "0" ]] && label="inactive"
+    echo "   Polling writer until failover is ${label}..."
+    for i in $(seq 1 "$max_wait"); do
+        val="$(get_writer_metric writer_failover_active 2>/dev/null || echo "-1")"
+        if [[ "$val" == "$expected" ]]; then
+            echo "   Writer failover is ${label} after ${i}s"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "   WARNING: Writer failover did not become ${label} after ${max_wait}s"
+    return 1
 }
 
 # ---------------------------------------------------------------------------
