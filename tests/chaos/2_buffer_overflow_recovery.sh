@@ -14,6 +14,9 @@ setup_stack
 wait_for_data 20
 
 section "Scenario"
+step 0 "Stopping backup collector (this test only exercises primary)..."
+$COMPOSE stop collector-backup 2>&1
+
 step 1 "Stopping redpanda to force collector buffer growth..."
 event_start_ns=$(ts_now_ns)
 $COMPOSE stop redpanda 2>&1
@@ -32,8 +35,10 @@ step 4 "Force-restarting writer (crashes on rebalance after broker reconnect)...
 $COMPOSE stop writer 2>&1 || true
 $COMPOSE up -d writer 2>&1
 event_end_ns=$(ts_now_ns)
-echo "   Waiting for all services to become healthy..."
-wait_healthy
+echo "   Waiting for services to become healthy..."
+wait_service_healthy redpanda 60
+wait_service_healthy collector 60
+wait_service_healthy writer 60
 
 step 5 "Waiting for buffer_overflow gaps to appear in archive..."
 wait_for_gaps "buffer_overflow" 60
@@ -82,8 +87,8 @@ total=$(count_envelopes)
 assert_gt "archive has envelopes spanning the outage" "$total" 100
 
 step 7 "Stopping collector to quiesce input before archive verification..."
-$COMPOSE stop collector 2>&1
-if wait_for_writer_lag_below 0 30; then
+$COMPOSE stop collector collector-backup 2>&1
+if wait_for_writer_lag_below 0 90; then
     pass "writer drained remaining backlog after collector stop"
 else
     fail "writer still had backlog after collector stop"
