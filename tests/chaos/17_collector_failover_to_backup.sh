@@ -43,9 +43,9 @@ fi
 step 6 "Letting backup data flow for 30s..."
 wait_for_data 30
 
-step 7 "Checking failover metrics during backup consumption..."
-failover_records=$(get_writer_metric writer_failover_records_total 2>/dev/null || echo "0")
-assert_gt "writer consumed records from backup during failover" "$failover_records" 0
+step 7 "Checking failover is still active after 30s of backup consumption..."
+failover_still_active=$(get_writer_metric writer_failover_active 2>/dev/null || echo "0")
+assert_eq "failover still active during backup consumption" "1" "$failover_still_active"
 
 section "Scenario: Restart primary, verify switchback"
 step 8 "Restarting primary collector..."

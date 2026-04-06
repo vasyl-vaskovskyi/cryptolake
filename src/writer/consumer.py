@@ -709,7 +709,9 @@ class WriterConsumer:
         primary_topic = msg_topic
         if msg_topic.startswith(self._failover._backup_prefix):
             primary_topic = msg_topic[len(self._failover._backup_prefix):]
-        return add_broker_coordinates(envelope, topic=primary_topic, partition=msg_partition, offset=msg_offset)
+        # Use offset=-1 for backup records — their offsets are from a different
+        # topic and would collide with primary offsets in the same archive file.
+        return add_broker_coordinates(envelope, topic=primary_topic, partition=msg_partition, offset=-1)
 
     def _should_skip_recovery_dedup(self, envelope: dict, msg) -> bool:
         """Check if a message should be skipped during recovery dedup."""
