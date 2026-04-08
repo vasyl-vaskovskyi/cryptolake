@@ -53,6 +53,9 @@ class WebSocketManager:
         self._consecutive_drops = 0
         self._backpressure_threshold = 10  # consecutive drops before pausing WS reads
         self._tasks: list[asyncio.Task] = []
+        # Tracks (symbol, stream) pairs with a pending disconnect gap that
+        # has already been emitted. Cleared on successful reconnect/data.
+        self._disconnect_gap_emitted: set[tuple[str, str]] = set()
 
     def _next_seq(self, symbol: str, stream: str) -> int:
         key = (symbol, stream)
@@ -183,6 +186,9 @@ class WebSocketManager:
                     exchange=self.exchange, symbol=symbol, stream=stream_type,
                 ).observe(latency)
 
+            # Clear any pending disconnect-gap flag — data resumed
+            self._disconnect_gap_emitted.discard((symbol, stream_type))
+
             self._last_received_at[(symbol, stream_type)] = time.time_ns()
             await handler.handle(symbol, raw_text, exchange_ts, seq)
 
@@ -277,9 +283,10 @@ class WebSocketManager:
     def _emit_disconnect_gaps(self, socket_name: str) -> None:
         """Emit gap records for all symbol/stream combos on this socket.
 
-        Always emits — session_seq continuity cannot prove Binance data
-        continuity since session_seq is our internal counter. The actual
-        record count is determined later by the integrity checker or backfill.
+        Only emits on the FIRST call after a disconnect. Subsequent calls
+        during the reconnect-retry loop are coalesced (the flag is cleared
+        in _receive_loop when data resumes). The writer's CoverageFilter
+        still coalesces any leakage by gap_start_ts as a defense in depth.
         """
         now = time.time_ns()
         if socket_name == "public":
@@ -293,6 +300,8 @@ class WebSocketManager:
             for stream in affected:
                 if stream not in self.enabled_streams:
                     continue
+                if (symbol, stream) in self._disconnect_gap_emitted:
+                    continue  # already emitted on first disconnect for this outage
                 gap_start = self._last_received_at.get((symbol, stream), now)
                 seq = self._next_seq(symbol, stream)
                 self.producer.emit_gap(
@@ -302,6 +311,7 @@ class WebSocketManager:
                     detail=f"WebSocket {socket_name} disconnected",
                     gap_start_ts=gap_start, gap_end_ts=now,
                 )
+                self._disconnect_gap_emitted.add((symbol, stream))
                 # Advance the stream handler's seq tracker past the gap
                 # envelope's seq so the next data message doesn't trigger
                 # a spurious session_seq_skip.
