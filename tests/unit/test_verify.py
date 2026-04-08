@@ -233,6 +233,46 @@ class TestDepthReplay:
         assert any("ethusdt" in e for e in errors)
         assert not any("btcusdt" in e for e in errors)
 
+        def test_multiple_snapshots_picks_spannable_one(self):
+        """When multiple snapshots exist (e.g., SnapshotScheduler publishes
+        before depth_resync), verify must pick the snapshot whose lid is
+        actually spanned by the live diffs, not the first one in time order."""
+        from src.cli.verify import verify_depth_replay
+        # Snapshot 1 (e.g., from SnapshotScheduler) — published first but
+        # stale relative to the live ws state
+        snap1 = self._make_snap_env(0, 500)
+        # Snapshot 2 (e.g., from depth_resync) — also published before any
+        # live diff, with the lid the depth_handler actually synced to
+        snap2 = self._make_snap_env(1, 1000)
+        # Live diffs — span snap2 (lid=1000), not snap1 (lid=500)
+        diffs = [
+            self._make_depth_env(2, 999, 1002, 998),
+            self._make_depth_env(3, 1003, 1005, 1002),
+        ]
+        errors = verify_depth_replay(diffs, [snap1, snap2], [])
+        assert errors == []
+
+    def test_periodic_snapshot_does_not_break_chain(self):
+        """A periodic snapshot published mid-stream must not require the
+        next diff to span its lastUpdateId — periodic snapshots are
+        reconstruction checkpoints, not live sync points."""
+        from src.cli.verify import verify_depth_replay
+        # Initial snapshot — synced to live
+        snap_initial = self._make_snap_env(0, 1000)
+        diff1 = self._make_depth_env(1, 999, 1002, 998)
+        diff2 = self._make_depth_env(2, 1003, 1005, 1002)
+        # Periodic snapshot mid-stream with stale lid (lid << live u)
+        snap_periodic = self._make_snap_env(3, 1004)
+        # Live diffs continue with normal pu chain
+        diff3 = self._make_depth_env(4, 1006, 1010, 1005)
+        diff4 = self._make_depth_env(5, 1011, 1015, 1010)
+        errors = verify_depth_replay(
+            [diff1, diff2, diff3, diff4],
+            [snap_initial, snap_periodic],
+            [],
+        )
+        assert errors == []
+
 
 class TestGenerateManifest:
     def test_manifest_structure(self, tmp_path):

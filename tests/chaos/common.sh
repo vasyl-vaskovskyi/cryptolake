@@ -282,20 +282,29 @@ print(int(total))
 }
 
 # Wait for the writer to drain its Redpanda backlog after restart.
+# Default threshold is 10 because the high watermark includes Kafka transaction
+# control records that consumers never see, so lag never reaches exactly 0 even
+# when fully drained.
 # Usage: wait_for_writer_lag_below [threshold] [max_seconds]
 wait_for_writer_lag_below() {
-    local threshold="${1:-0}"
+    local threshold="${1:-10}"
     local max_wait="${2:-120}"
     echo "   Polling writer lag until <= ${threshold}..."
+    local last_lag="?"
     for i in $(seq 1 "$max_wait"); do
         lag="$(get_writer_total_lag 2>/dev/null || true)"
         if [[ "${lag}" =~ ^[0-9]+$ ]] && (( lag <= threshold )); then
             echo "   Writer lag drained after ${i}s (lag=${lag})"
             return 0
         fi
+        # Print every 10 seconds for visibility
+        if (( i % 10 == 0 )); then
+            echo "   ... still polling (i=${i}s, lag=${lag})"
+        fi
+        last_lag="${lag}"
         sleep 1
     done
-    echo "   WARNING: Writer lag stayed above ${threshold} after ${max_wait}s"
+    echo "   WARNING: Writer lag stayed above ${threshold} after ${max_wait}s (last lag=${last_lag})"
     return 1
 }
 

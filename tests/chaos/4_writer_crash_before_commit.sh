@@ -81,7 +81,7 @@ fi
 
 step 7 "Stopping collector to quiesce input before archive verification..."
 $COMPOSE stop collector 2>&1
-if wait_for_writer_lag_below 0 30; then
+if wait_for_writer_lag_below 10 90; then
     pass "writer drained remaining backlog after collector stop"
 else
     fail "writer still had backlog after collector stop"

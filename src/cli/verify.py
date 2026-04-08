@@ -128,10 +128,25 @@ def verify_depth_replay(
         def _in_gap(received_at: int) -> bool:
             return any(s <= received_at <= e for s, e in gap_windows)
 
-        snap_idx = 0
+        # Multiple snapshots may exist for one stream:
+        #   - Initial depth_resync snapshot (sets the live pu chain sync point)
+        #   - Periodic SnapshotScheduler snapshots (reconstruction checkpoints
+        #     that do NOT reset the live pu chain — see src/collector/snapshot.py)
+        # These snapshots can interleave: SnapshotScheduler may publish first
+        # at startup, before depth_resync produces its REST snapshot. Verify
+        # therefore picks the FIRST diff that spans ANY available snapshot lid
+        # as the sync point, and uses that snapshot to anchor the pu chain.
+        # Subsequent snapshots are accepted as checkpoints without resetting.
+        snap_lids: list[int] = []
+        for s in sym_snaps:
+            try:
+                snap_raw = orjson.loads(s["raw_text"])
+                snap_lids.append(snap_raw["lastUpdateId"])
+            except (KeyError, ValueError, TypeError):
+                pass
+
         synced = False
         last_u: int | None = None
-        sync_lid: int | None = None
 
         for env in sym_depths:
             raw = orjson.loads(env["raw_text"])
@@ -139,38 +154,30 @@ def verify_depth_replay(
             u = raw.get("u", 0)
             pu = raw.get("pu", 0)
 
-            # Advance snapshot pointer: consume all snapshots received
-            # before or at the same time as this diff.
-            while (
-                snap_idx < len(sym_snaps)
-                and sym_snaps[snap_idx]["received_at"] <= env["received_at"]
-            ):
-                snap_raw = orjson.loads(sym_snaps[snap_idx]["raw_text"])
-                sync_lid = snap_raw["lastUpdateId"]
-                synced = True
-                last_u = None
-                snap_idx += 1
-
             if not synced:
-                if not _in_gap(env["received_at"]):
+                # Find any snapshot lid that this diff can span: U <= lid+1 <= u
+                spanned_lid: int | None = None
+                for lid in snap_lids:
+                    if U <= lid + 1 <= u:
+                        spanned_lid = lid
+                        break
+                if spanned_lid is not None:
+                    synced = True
+                    last_u = u
+                    continue
+                # No snapshot found yet — record error if not in gap
+                if snap_lids and not _in_gap(env["received_at"]):
+                    errors.append(
+                        f"[{symbol}] First diff does not span any snapshot "
+                        f"sync point: U={U}, u={u}, "
+                        f"snapshot lids={snap_lids[:3]} at received_at "
+                        f"{env['received_at']}"
+                    )
+                if not snap_lids and not _in_gap(env["received_at"]):
                     errors.append(
                         f"[{symbol}] Depth diff at received_at "
                         f"{env['received_at']} has no preceding snapshot"
                     )
-                continue
-
-            # First diff after a snapshot must span the sync point.
-            if last_u is None:
-                if not (U <= sync_lid + 1 <= u):  # type: ignore[operator]
-                    if not _in_gap(env["received_at"]):
-                        errors.append(
-                            f"[{symbol}] First diff after snapshot does not "
-                            f"span sync point: lastUpdateId={sync_lid}, "
-                            f"U={U}, u={u} at received_at "
-                            f"{env['received_at']}"
-                        )
-                    continue
-                last_u = u
                 continue
 
             # Subsequent diffs: pu must equal previous u.

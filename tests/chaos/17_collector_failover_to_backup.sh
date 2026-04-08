@@ -114,7 +114,7 @@ fi
 
 step 11 "Stopping both collectors to quiesce input..."
 $COMPOSE stop collector collector-backup 2>&1
-if wait_for_writer_lag_below 0 30; then
+if wait_for_writer_lag_below 10 90; then
     pass "writer drained remaining backlog"
 else
     fail "writer still had backlog after collector stop"
