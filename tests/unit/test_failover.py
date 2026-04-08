@@ -54,7 +54,7 @@ class TestExtractNaturalKey:
 import time
 from unittest.mock import MagicMock, patch
 
-from src.writer.failover import FailoverManager
+from src.writer.failover import CoverageFilter, FailoverManager
 from src.writer import metrics as writer_metrics
 
 
@@ -390,3 +390,72 @@ writer:
         p.write_text(cfg_yaml)
         with pytest.raises(ConfigValidationError):
             load_config(p, env_overrides={})
+
+
+def _data_env(exchange="binance", symbol="btcusdt", stream="trades", received_at=1000, raw_text='{"a": 1}'):
+    return {
+        "type": "data",
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "received_at": received_at,
+        "raw_text": raw_text,
+    }
+
+
+class TestCoverageFilterInit:
+    def test_enabled_when_grace_period_positive(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        assert cf.enabled is True
+
+    def test_disabled_when_grace_period_zero(self):
+        cf = CoverageFilter(grace_period_seconds=0.0)
+        assert cf.enabled is False
+
+    def test_pending_starts_empty(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        assert cf.pending_size == 0
+
+    def test_last_received_starts_zero(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        assert cf.last_received("primary", ("binance", "btcusdt", "trades")) == 0
+
+    def test_max_received_starts_zero(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        assert cf.max_received(("binance", "btcusdt", "trades")) == 0
+
+
+class TestCoverageFilterHandleData:
+    def test_data_updates_last_received_for_source(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=5000))
+        assert cf.last_received("primary", ("binance", "btcusdt", "trades")) == 5000
+
+    def test_data_does_not_update_other_source(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=5000))
+        assert cf.last_received("backup", ("binance", "btcusdt", "trades")) == 0
+
+    def test_data_updates_max_received(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=5000))
+        cf.handle_data("backup", _data_env(received_at=7000))
+        assert cf.max_received(("binance", "btcusdt", "trades")) == 7000
+
+    def test_data_does_not_regress_last_received(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=5000))
+        cf.handle_data("primary", _data_env(received_at=3000))  # out-of-order
+        assert cf.last_received("primary", ("binance", "btcusdt", "trades")) == 5000
+
+    def test_data_ignored_when_disabled(self):
+        cf = CoverageFilter(grace_period_seconds=0.0)
+        cf.handle_data("primary", _data_env(received_at=5000))
+        assert cf.last_received("primary", ("binance", "btcusdt", "trades")) == 0
+
+    def test_data_without_received_at_is_ignored(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        env = _data_env()
+        del env["received_at"]
+        cf.handle_data("primary", env)
+        assert cf.last_received("primary", ("binance", "btcusdt", "trades")) == 0

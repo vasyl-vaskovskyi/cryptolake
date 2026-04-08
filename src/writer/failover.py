@@ -249,3 +249,52 @@ class FailoverManager:
             self._backup_consumer = None
         self._is_active = False
         writer_metrics.failover_active.set(0)
+
+
+class CoverageFilter:
+    """Tracks per-source data coverage and filters redundant gap envelopes.
+
+    A gap belongs in the archive if and only if neither collector had data for
+    that window. This filter drops gap envelopes whose window is already covered
+    by data from the other source, and parks the rest briefly so backup data
+    arriving late can still cover them.
+    """
+
+    def __init__(self, grace_period_seconds: float):
+        self._grace_period = float(grace_period_seconds)
+        # (exchange, symbol, stream) -> {"primary": received_at_ns, "backup": received_at_ns}
+        self._last_received: dict[tuple[str, str, str], dict[str, int]] = {}
+        # (source, stream_key, gap_start_ts) -> (envelope, first_seen_monotonic)
+        self._pending: dict[tuple[str, tuple[str, str, str], int], tuple[dict, float]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self._grace_period > 0
+
+    @property
+    def pending_size(self) -> int:
+        return len(self._pending)
+
+    def last_received(self, source: str, stream_key: tuple[str, str, str]) -> int:
+        return self._last_received.get(stream_key, {}).get(source, 0)
+
+    def max_received(self, stream_key: tuple[str, str, str]) -> int:
+        entry = self._last_received.get(stream_key, {})
+        return max(entry.values(), default=0)
+
+    def handle_data(self, source: str, envelope: dict) -> None:
+        """Record a data envelope's arrival. Updates coverage and drops any
+        newly-covered pending gaps (added in a later task)."""
+        if not self.enabled:
+            return
+        received_at = envelope.get("received_at")
+        if received_at is None:
+            return
+        stream_key = (
+            envelope.get("exchange", ""),
+            envelope.get("symbol", ""),
+            envelope.get("stream", ""),
+        )
+        coverage = self._last_received.setdefault(stream_key, {})
+        if received_at > coverage.get(source, 0):
+            coverage[source] = received_at
