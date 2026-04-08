@@ -119,3 +119,21 @@ switchback_total = Counter(
     "writer_switchback_total",
     "Successful switchbacks from backup to primary",
 )
+
+# --- Gap coverage filter metrics ---
+gap_envelopes_suppressed_total = Counter(
+    "writer_gap_envelopes_suppressed_total",
+    "Gap envelopes dropped because the other collector covered the window",
+    ["source", "reason"],
+)
+
+gap_coalesced_total = Counter(
+    "writer_gap_coalesced_total",
+    "Gap envelopes merged into an existing pending entry (stacked reconnect gaps)",
+    ["source"],
+)
+
+gap_pending_size = Gauge(
+    "writer_gap_pending_size",
+    "Current size of the coverage filter's pending gap queue",
+)
