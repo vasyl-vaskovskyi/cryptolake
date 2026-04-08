@@ -52,12 +52,14 @@ class FailoverManager:
         primary_topics: list[str],
         backup_prefix: str = "backup.",
         silence_timeout: float = 5.0,
+        coverage_filter: "CoverageFilter | None" = None,
     ):
         self._brokers = brokers
         self._primary_topics = primary_topics
         self._backup_prefix = backup_prefix
         self._backup_topics = [f"{backup_prefix}{t}" for t in primary_topics]
         self._silence_timeout = silence_timeout
+        self._coverage_filter = coverage_filter
 
         self._last_key: dict[tuple[str, str, str], int] = {}
         self._last_received: dict[tuple[str, str, str], int] = {}
@@ -148,12 +150,19 @@ class FailoverManager:
                 primary_topic = backup_topic[len(self._backup_prefix):]
 
                 seek_ts_ns: int | None = None
-                for stream_key, received_ns in self._last_received.items():
+                for stream_key in list(self._last_received.keys()):
                     exchange, symbol, stream = stream_key
-                    if f"{exchange}.{stream}" == primary_topic:
-                        ts = received_ns - 10_000_000_000
-                        if seek_ts_ns is None or ts < seek_ts_ns:
-                            seek_ts_ns = ts
+                    if f"{exchange}.{stream}" != primary_topic:
+                        continue
+                    if self._coverage_filter is not None:
+                        received_ns = self._coverage_filter.max_received(stream_key)
+                    else:
+                        received_ns = self._last_received.get(stream_key, 0)
+                    if received_ns <= 0:
+                        continue
+                    ts = received_ns - 10_000_000_000
+                    if seek_ts_ns is None or ts < seek_ts_ns:
+                        seek_ts_ns = ts
 
                 seek_ts_ms = (seek_ts_ns // 1_000_000) if seek_ts_ns is not None else (int(time.time() * 1000) - 10000)
 

@@ -99,18 +99,19 @@ class WriterConsumer:
         self._rest_poll_interval_ns: int = _DEFAULT_REST_POLL_INTERVAL_NS
         self._hours_sealed_count: dict[tuple[str, str, str], int] = {}
 
-        # Real-time failover manager
-        self._failover = FailoverManager(
-            brokers=brokers,
-            primary_topics=topics,
-            backup_prefix=os.environ.get("BACKUP_TOPIC_PREFIX", "backup."),
-        )
-
         # Coverage filter — drops collector-emitted gap envelopes already covered
         # by data from the other source.
         from src.writer.failover import CoverageFilter
         self._coverage_filter = CoverageFilter(
             grace_period_seconds=gap_filter_grace_period_seconds,
+        )
+
+        # Real-time failover manager
+        self._failover = FailoverManager(
+            brokers=brokers,
+            primary_topics=topics,
+            backup_prefix=os.environ.get("BACKUP_TOPIC_PREFIX", "backup."),
+            coverage_filter=self._coverage_filter,
         )
 
     async def start(self) -> None:

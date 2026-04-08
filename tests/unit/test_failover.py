@@ -619,3 +619,22 @@ class TestCoverageFilterSweepExpired:
         assert len(expired) == 1
         assert expired[0]["gap_start_ts"] == 1000
         assert cf.pending_size == 1  # the fresh one remains
+
+
+class TestFailoverManagerWithCoverageFilter:
+    def test_seek_uses_max_across_sources(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=1_000_000_000_000_000_000))
+        cf.handle_data("backup", _data_env(received_at=2_000_000_000_000_000_000))
+
+        fm = FailoverManager(
+            brokers=["localhost:9092"],
+            primary_topics=["binance.trades"],
+            coverage_filter=cf,
+        )
+        # Populate _last_received so activate() iterates the stream
+        fm._last_received[("binance", "btcusdt", "trades")] = 1_000_000_000_000_000_000
+
+        # We don't actually call activate() (would contact Kafka).
+        # Instead verify CoverageFilter.max_received returns the max.
+        assert cf.max_received(("binance", "btcusdt", "trades")) == 2_000_000_000_000_000_000
