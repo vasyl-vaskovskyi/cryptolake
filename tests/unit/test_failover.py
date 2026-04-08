@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
+from src.common.config import load_config
 from src.writer.failover import extract_natural_key
 
 
@@ -316,9 +319,6 @@ class TestFailoverCleanup:
         fm.cleanup()
 
 
-from pathlib import Path
-from src.common.config import load_config, CryptoLakeConfig
-
 
 class TestGapFilterConfig:
     def test_default_grace_period_is_10s(self, tmp_path: Path):
@@ -371,3 +371,22 @@ writer:
         p.write_text(cfg_yaml)
         cfg = load_config(p, env_overrides={})
         assert cfg.writer.gap_filter.grace_period_seconds == 25.0
+
+    def test_negative_grace_period_rejected(self, tmp_path: Path):
+        from src.common.config import ConfigValidationError
+        cfg_yaml = """
+database:
+  url: "postgresql://u:p@localhost/db"
+exchanges:
+  binance:
+    symbols: ["btcusdt"]
+redpanda:
+  brokers: ["localhost:9092"]
+writer:
+  gap_filter:
+    grace_period_seconds: -1
+"""
+        p = tmp_path / "c.yaml"
+        p.write_text(cfg_yaml)
+        with pytest.raises(ConfigValidationError):
+            load_config(p, env_overrides={})

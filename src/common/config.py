@@ -110,7 +110,7 @@ def default_archive_dir() -> str:
 
 
 class GapFilterConfig(BaseModel):
-    grace_period_seconds: float = 10.0
+    grace_period_seconds: float = Field(default=10.0, ge=0.0)
 
 
 class WriterConfig(BaseModel):
