@@ -298,3 +298,37 @@ class CoverageFilter:
         coverage = self._last_received.setdefault(stream_key, {})
         if received_at > coverage.get(source, 0):
             coverage[source] = received_at
+
+    def handle_gap(self, source: str, envelope: dict) -> bool:
+        """Try to suppress or park a gap envelope.
+
+        Returns True if the envelope was handled (dropped or parked) — caller
+        must NOT write it. Returns False if the filter is disabled — caller
+        should write as usual.
+        """
+        if not self.enabled:
+            return False
+
+        from src.writer import metrics as writer_metrics
+
+        stream_key = (
+            envelope.get("exchange", ""),
+            envelope.get("symbol", ""),
+            envelope.get("stream", ""),
+        )
+        gap_start = envelope.get("gap_start_ts", 0)
+        gap_end = envelope.get("gap_end_ts", 0)
+        reason = envelope.get("reason", "unknown")
+
+        other_source = "backup" if source == "primary" else "primary"
+        other_received = self._last_received.get(stream_key, {}).get(other_source, 0)
+
+        if other_received >= gap_end:
+            writer_metrics.gap_envelopes_suppressed_total.labels(
+                source=source, reason=reason,
+            ).inc()
+            return True
+
+        # Park — full implementation in Task 5.
+        self._pending[(source, stream_key, gap_start)] = (envelope, time.monotonic())
+        return True

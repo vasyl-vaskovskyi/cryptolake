@@ -459,3 +459,52 @@ class TestCoverageFilterHandleData:
         del env["received_at"]
         cf.handle_data("primary", env)
         assert cf.last_received("primary", ("binance", "btcusdt", "trades")) == 0
+
+
+def _gap_env(exchange="binance", symbol="btcusdt", stream="trades",
+             gap_start=1000, gap_end=2000, reason="ws_disconnect"):
+    return {
+        "type": "gap",
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "gap_start_ts": gap_start,
+        "gap_end_ts": gap_end,
+        "reason": reason,
+    }
+
+
+class TestCoverageFilterHandleGap:
+    def test_primary_gap_dropped_when_backup_covers(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("backup", _data_env(received_at=3000))
+        handled = cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        assert handled is True
+        assert cf.pending_size == 0
+
+    def test_backup_gap_dropped_when_primary_covers(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=3000))
+        handled = cf.handle_gap("backup", _gap_env(gap_start=1000, gap_end=2000))
+        assert handled is True
+        assert cf.pending_size == 0
+
+    def test_primary_gap_dropped_when_backup_equal_to_gap_end(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("backup", _data_env(received_at=2000))
+        handled = cf.handle_gap("primary", _gap_env(gap_end=2000))
+        assert handled is True
+
+    def test_gap_handled_false_when_disabled(self):
+        cf = CoverageFilter(grace_period_seconds=0.0)
+        handled = cf.handle_gap("primary", _gap_env())
+        assert handled is False
+
+    def test_same_source_coverage_does_not_count(self):
+        # primary data cannot cover primary's own gap — that would be circular
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("primary", _data_env(received_at=3000))
+        handled = cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        # Parked (not dropped immediately) because other_source=backup has no data yet.
+        assert handled is True
+        assert cf.pending_size == 1
