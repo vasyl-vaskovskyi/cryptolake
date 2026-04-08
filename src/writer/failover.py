@@ -370,3 +370,24 @@ class CoverageFilter:
 
         writer_metrics.gap_pending_size.set(len(self._pending))
         return True
+
+    def sweep_expired(self) -> list[dict]:
+        """Return and remove pending gap envelopes whose grace period has elapsed.
+
+        Caller must write these to the archive — they represent real bilateral outages.
+        """
+        if not self.enabled or not self._pending:
+            return []
+        now = time.monotonic()
+        expired: list[dict] = []
+        to_remove: list[tuple[str, tuple[str, str, str], int]] = []
+        for key, (gap_env, first_seen) in self._pending.items():
+            if (now - first_seen) >= self._grace_period:
+                expired.append(gap_env)
+                to_remove.append(key)
+        for key in to_remove:
+            del self._pending[key]
+        if to_remove:
+            from src.writer import metrics as writer_metrics
+            writer_metrics.gap_pending_size.set(len(self._pending))
+        return expired

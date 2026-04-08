@@ -582,3 +582,40 @@ class TestCoverageFilterPending:
         cf.handle_gap("primary", _gap_env(stream="trades", gap_end=2000))
         cf.handle_data("backup", _data_env(stream="depth", received_at=3000))
         assert cf.pending_size == 1
+
+
+class TestCoverageFilterSweepExpired:
+    def test_sweep_empty_when_no_pending(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        assert cf.sweep_expired() == []
+
+    def test_sweep_does_not_flush_within_grace_period(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env())
+        assert cf.sweep_expired() == []
+        assert cf.pending_size == 1
+
+    def test_sweep_flushes_after_grace_period(self):
+        cf = CoverageFilter(grace_period_seconds=0.01)  # 10ms
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        time.sleep(0.02)
+        expired = cf.sweep_expired()
+        assert len(expired) == 1
+        assert expired[0]["gap_start_ts"] == 1000
+        assert expired[0]["gap_end_ts"] == 2000
+        assert cf.pending_size == 0
+
+    def test_sweep_returns_empty_when_disabled(self):
+        cf = CoverageFilter(grace_period_seconds=0.0)
+        # Can't park while disabled, but should still return empty safely
+        assert cf.sweep_expired() == []
+
+    def test_sweep_partial_flush(self):
+        cf = CoverageFilter(grace_period_seconds=0.05)  # 50ms
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        time.sleep(0.08)
+        cf.handle_gap("primary", _gap_env(gap_start=5000, gap_end=6000))  # fresh
+        expired = cf.sweep_expired()
+        assert len(expired) == 1
+        assert expired[0]["gap_start_ts"] == 1000
+        assert cf.pending_size == 1  # the fresh one remains
