@@ -67,6 +67,7 @@ class Writer:
             state_manager=self.state_manager,
             base_dir=self.config.writer.base_dir,
             host_evidence=host_evidence,
+            gap_filter_grace_period_seconds=self.config.writer.gap_filter.grace_period_seconds,
         )
 
         # Writer runtime metadata

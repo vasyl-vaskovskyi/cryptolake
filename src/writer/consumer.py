@@ -62,6 +62,7 @@ class WriterConsumer:
         state_manager: StateManager,
         base_dir: str,
         host_evidence: HostLifecycleEvidence | None = None,
+        gap_filter_grace_period_seconds: float = 10.0,
     ):
         self.brokers = brokers
         self.topics = topics
@@ -103,6 +104,13 @@ class WriterConsumer:
             brokers=brokers,
             primary_topics=topics,
             backup_prefix=os.environ.get("BACKUP_TOPIC_PREFIX", "backup."),
+        )
+
+        # Coverage filter — drops collector-emitted gap envelopes already covered
+        # by data from the other source.
+        from src.writer.failover import CoverageFilter
+        self._coverage_filter = CoverageFilter(
+            grace_period_seconds=gap_filter_grace_period_seconds,
         )
 
     async def start(self) -> None:
@@ -823,13 +831,28 @@ class WriterConsumer:
                     continue
 
                 self._count_consumed(envelope)
-                self._failover.track_record(envelope)
-                self._failover.reset_silence_timer()
 
-                if envelope.get("type") == "data":
-                    await self._handle_gap_detection(envelope, msg)
-
-                await self._handle_rotation_and_buffer(envelope, active_hours)
+                env_type = envelope.get("type")
+                if env_type == "gap":
+                    if self._coverage_filter.handle_gap("primary", envelope):
+                        # Suppressed or parked. Deliberately skip silence-timer
+                        # reset: primary emitting gaps ≠ primary healthy, and we
+                        # want failover to activate so backup data can flow.
+                        # Do NOT use `continue` here — the post-if sweep/flush
+                        # code below must still run this iteration.
+                        pass
+                    else:
+                        # Filter disabled — fall through to normal write path
+                        self._failover.track_record(envelope)
+                        self._failover.reset_silence_timer()
+                        await self._handle_rotation_and_buffer(envelope, active_hours)
+                else:
+                    self._coverage_filter.handle_data("primary", envelope)
+                    self._failover.track_record(envelope)
+                    self._failover.reset_silence_timer()
+                    if env_type == "data":
+                        await self._handle_gap_detection(envelope, msg)
+                    await self._handle_rotation_and_buffer(envelope, active_hours)
             else:
                 # --- Failover path: consume from backup, probe primary ---
                 backup_consumer = self._failover.backup_consumer
@@ -838,34 +861,43 @@ class WriterConsumer:
                     if backup_msg is not None and not backup_msg.error():
                         envelope = self._deserialize_backup_msg(backup_msg)
                         if envelope is not None and not self._failover.should_filter(envelope):
-                            # Check for gap on first backup record per stream
-                            if envelope.get("type") == "data":
-                                stream_key = (envelope.get("exchange", ""),
-                                              envelope.get("symbol", ""),
-                                              envelope.get("stream", ""))
-                                nk = extract_natural_key(envelope)
-                                if stream_key not in self._failover._gap_checked and nk is not None:
-                                    self._failover._gap_checked.add(stream_key)
-                                    gap = self._failover.check_failover_gap(
-                                        stream_key=stream_key,
-                                        first_backup_key=nk,
-                                        first_backup_received_at=envelope.get("received_at", 0),
-                                    )
-                                    if gap is not None:
-                                        gap = add_broker_coordinates(
-                                            gap, topic=backup_msg.topic(),
-                                            partition=backup_msg.partition(), offset=-1)
-                                        gap_results = self.buffer_manager.add(gap)
-                                        if gap_results:
-                                            await self._write_and_save(gap_results)
+                            env_type = envelope.get("type")
+                            backup_handled_by_filter = (
+                                env_type == "gap"
+                                and self._coverage_filter.handle_gap("backup", envelope)
+                            )
+                            if not backup_handled_by_filter:
+                                if env_type != "gap":
+                                    self._coverage_filter.handle_data("backup", envelope)
 
-                            self._count_consumed(envelope)
-                            self._failover.track_record(envelope)
-                            writer_metrics.failover_records_total.inc()
-                            # NOTE: skip _check_session_change for backup records --
-                            # backup collector has its own session ID which would
-                            # incorrectly trigger session change detection.
-                            await self._handle_rotation_and_buffer(envelope, active_hours)
+                                # Check for gap on first backup record per stream
+                                if env_type == "data":
+                                    stream_key = (envelope.get("exchange", ""),
+                                                  envelope.get("symbol", ""),
+                                                  envelope.get("stream", ""))
+                                    nk = extract_natural_key(envelope)
+                                    if stream_key not in self._failover._gap_checked and nk is not None:
+                                        self._failover._gap_checked.add(stream_key)
+                                        gap = self._failover.check_failover_gap(
+                                            stream_key=stream_key,
+                                            first_backup_key=nk,
+                                            first_backup_received_at=envelope.get("received_at", 0),
+                                        )
+                                        if gap is not None:
+                                            gap = add_broker_coordinates(
+                                                gap, topic=backup_msg.topic(),
+                                                partition=backup_msg.partition(), offset=-1)
+                                            gap_results = self.buffer_manager.add(gap)
+                                            if gap_results:
+                                                await self._write_and_save(gap_results)
+
+                                self._count_consumed(envelope)
+                                self._failover.track_record(envelope)
+                                writer_metrics.failover_records_total.inc()
+                                # NOTE: skip _check_session_change for backup records --
+                                # backup collector has its own session ID which would
+                                # incorrectly trigger session change detection.
+                                await self._handle_rotation_and_buffer(envelope, active_hours)
 
                 # Probe primary -- short timeout
                 primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
@@ -889,6 +921,14 @@ class WriterConsumer:
                         for sk in list(self._failover._last_key):
                             self._recovery_gap_emitted.add(sk)
                         self._failover.deactivate()
+
+            # Sweep coverage-filter pending gaps whose grace period expired.
+            # These are real bilateral outages — write them as usual.
+            expired_gaps = self._coverage_filter.sweep_expired()
+            for gap_env in expired_gaps:
+                flush_results = self.buffer_manager.add(gap_env)
+                if flush_results:
+                    await self._write_and_save(flush_results)
 
             # Timer-based flush: runs EVERY iteration to ensure low-volume streams
             # reach disk even when high-volume streams keep poll() busy.
