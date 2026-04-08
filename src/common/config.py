@@ -109,6 +109,10 @@ def default_archive_dir() -> str:
     return os.environ.get("HOST_DATA_DIR", "/data")
 
 
+class GapFilterConfig(BaseModel):
+    grace_period_seconds: float = 10.0
+
+
 class WriterConfig(BaseModel):
     base_dir: str = Field(default_factory=default_archive_dir)
     rotation: str = "hourly"
@@ -117,6 +121,7 @@ class WriterConfig(BaseModel):
     checksum: str = "sha256"
     flush_messages: int = 10000
     flush_interval_seconds: int = 30
+    gap_filter: GapFilterConfig = Field(default_factory=GapFilterConfig)
 
 
 class CryptoLakeConfig(BaseModel):

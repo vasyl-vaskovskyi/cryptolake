@@ -314,3 +314,60 @@ class TestFailoverCleanup:
     def test_cleanup_when_no_consumer_is_noop(self):
         fm = FailoverManager(brokers=["localhost:9092"], primary_topics=["binance.trades"])
         fm.cleanup()
+
+
+from pathlib import Path
+from src.common.config import load_config, CryptoLakeConfig
+
+
+class TestGapFilterConfig:
+    def test_default_grace_period_is_10s(self, tmp_path: Path):
+        cfg_yaml = """
+database:
+  url: "postgresql://u:p@localhost/db"
+exchanges:
+  binance:
+    symbols: ["btcusdt"]
+redpanda:
+  brokers: ["localhost:9092"]
+"""
+        p = tmp_path / "c.yaml"
+        p.write_text(cfg_yaml)
+        cfg = load_config(p, env_overrides={})
+        assert cfg.writer.gap_filter.grace_period_seconds == 10.0
+
+    def test_grace_period_zero_is_allowed(self, tmp_path: Path):
+        cfg_yaml = """
+database:
+  url: "postgresql://u:p@localhost/db"
+exchanges:
+  binance:
+    symbols: ["btcusdt"]
+redpanda:
+  brokers: ["localhost:9092"]
+writer:
+  gap_filter:
+    grace_period_seconds: 0
+"""
+        p = tmp_path / "c.yaml"
+        p.write_text(cfg_yaml)
+        cfg = load_config(p, env_overrides={})
+        assert cfg.writer.gap_filter.grace_period_seconds == 0.0
+
+    def test_grace_period_custom_value(self, tmp_path: Path):
+        cfg_yaml = """
+database:
+  url: "postgresql://u:p@localhost/db"
+exchanges:
+  binance:
+    symbols: ["btcusdt"]
+redpanda:
+  brokers: ["localhost:9092"]
+writer:
+  gap_filter:
+    grace_period_seconds: 25
+"""
+        p = tmp_path / "c.yaml"
+        p.write_text(cfg_yaml)
+        cfg = load_config(p, env_overrides={})
+        assert cfg.writer.gap_filter.grace_period_seconds == 25.0

@@ -37,6 +37,8 @@ writer:
   checksum: "sha256"
   flush_messages: 10000
   flush_interval_seconds: 30
+  gap_filter:
+    grace_period_seconds: 10
 
 consolidation:
   start_hour_utc: 2
