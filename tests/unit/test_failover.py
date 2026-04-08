@@ -508,3 +508,77 @@ class TestCoverageFilterHandleGap:
         # Parked (not dropped immediately) because other_source=backup has no data yet.
         assert handled is True
         assert cf.pending_size == 1
+
+
+class TestCoverageFilterPending:
+    def test_gap_parked_when_not_yet_covered(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        assert cf.pending_size == 1
+
+    def test_stacked_gaps_coalesce_into_one_entry(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=3000))
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=4000))
+        assert cf.pending_size == 1
+
+    def test_coalesced_entry_has_latest_gap_end(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=5000))
+        # Peek via internal state — acceptable in unit test
+        key = ("primary", ("binance", "btcusdt", "trades"), 1000)
+        assert cf._pending[key][0]["gap_end_ts"] == 5000
+
+    def test_coalesce_does_not_reset_first_seen(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        key = ("primary", ("binance", "btcusdt", "trades"), 1000)
+        original_first_seen = cf._pending[key][1]
+        time.sleep(0.01)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=3000))
+        assert cf._pending[key][1] == original_first_seen
+
+    def test_different_gap_start_creates_separate_entries(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        cf.handle_gap("primary", _gap_env(gap_start=5000, gap_end=6000))
+        assert cf.pending_size == 2
+
+    def test_gap_from_different_source_creates_separate_entry(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        cf.handle_gap("backup", _gap_env(gap_start=1000, gap_end=2000))
+        assert cf.pending_size == 2
+
+    def test_data_sweep_drops_now_covered_pending_primary_gap(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        assert cf.pending_size == 1
+        cf.handle_data("backup", _data_env(received_at=3000))
+        assert cf.pending_size == 0
+
+    def test_data_sweep_drops_now_covered_pending_backup_gap(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("backup", _gap_env(gap_start=1000, gap_end=2000))
+        cf.handle_data("primary", _data_env(received_at=3000))
+        assert cf.pending_size == 0
+
+    def test_data_sweep_does_not_drop_uncovered_pending(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=5000))
+        cf.handle_data("backup", _data_env(received_at=2000))  # not past gap_end
+        assert cf.pending_size == 1
+
+    def test_same_source_data_does_not_cover_own_gap(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        cf.handle_data("primary", _data_env(received_at=3000))  # primary's own data
+        assert cf.pending_size == 1
+
+    def test_data_for_different_stream_does_not_drop(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(stream="trades", gap_end=2000))
+        cf.handle_data("backup", _data_env(stream="depth", received_at=3000))
+        assert cf.pending_size == 1

@@ -283,8 +283,7 @@ class CoverageFilter:
         return max(entry.values(), default=0)
 
     def handle_data(self, source: str, envelope: dict) -> None:
-        """Record a data envelope's arrival. Updates coverage and drops any
-        newly-covered pending gaps (added in a later task)."""
+        """Record a data envelope's arrival and drop any newly-covered pending gaps."""
         if not self.enabled:
             return
         received_at = envelope.get("received_at")
@@ -298,6 +297,31 @@ class CoverageFilter:
         coverage = self._last_received.setdefault(stream_key, {})
         if received_at > coverage.get(source, 0):
             coverage[source] = received_at
+
+        if not self._pending:
+            return
+
+        from src.writer import metrics as writer_metrics
+
+        # Sweep pending gaps: drop any whose other-source coverage now reaches gap_end_ts
+        to_remove: list[tuple[str, tuple[str, str, str], int]] = []
+        for key, (gap_env, _first_seen) in self._pending.items():
+            pending_source, pending_stream, _ = key
+            if pending_stream != stream_key:
+                continue
+            other_source = "backup" if pending_source == "primary" else "primary"
+            other_received = coverage.get(other_source, 0)
+            if other_received >= gap_env.get("gap_end_ts", 0):
+                to_remove.append(key)
+                writer_metrics.gap_envelopes_suppressed_total.labels(
+                    source=pending_source, reason=gap_env.get("reason", "unknown"),
+                ).inc()
+
+        for key in to_remove:
+            del self._pending[key]
+
+        if to_remove:
+            writer_metrics.gap_pending_size.set(len(self._pending))
 
     def handle_gap(self, source: str, envelope: dict) -> bool:
         """Try to suppress or park a gap envelope.
@@ -329,6 +353,20 @@ class CoverageFilter:
             ).inc()
             return True
 
-        # Park — full implementation in Task 5.
-        self._pending[(source, stream_key, gap_start)] = (envelope, time.monotonic())
+        # Park in pending queue, coalescing stacked records with the same gap_start.
+        key = (source, stream_key, gap_start)
+        existing = self._pending.get(key)
+        if existing is not None:
+            old_env, first_seen = existing
+            if gap_end > old_env.get("gap_end_ts", 0):
+                old_env["gap_end_ts"] = gap_end
+                detail = envelope.get("detail")
+                if detail:
+                    old_env["detail"] = detail
+            # Preserve first_seen so grace period counts from original arrival
+            writer_metrics.gap_coalesced_total.labels(source=source).inc()
+        else:
+            self._pending[key] = (envelope, time.monotonic())
+
+        writer_metrics.gap_pending_size.set(len(self._pending))
         return True
