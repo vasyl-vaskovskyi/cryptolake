@@ -937,12 +937,13 @@ class WriterConsumer:
                                     # restarted with a new session_id, but the backup
                                     # covered the gap seamlessly. No data was lost.
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
-                            # Suppress session-change detection for ALL streams after
-                            # failover — the primary restarted with a new session, but
-                            # backup covered it. Use the existing _recovery_gap_emitted
-                            # mechanism to suppress the first session change per stream.
-                            for sk in list(self._failover._last_key):
-                                self._recovery_gap_emitted.add(sk)
+                            # Only suppress session-change detection if backup
+                            # actually delivered data during this failover episode.
+                            # If backup was stopped/unavailable, the session change
+                            # represents a real gap that must be recorded.
+                            if self._failover._backup_data_seen:
+                                for sk in list(self._failover._last_key):
+                                    self._recovery_gap_emitted.add(sk)
                             self._failover.deactivate()
 
             # Sweep coverage-filter pending gaps whose grace period expired.
