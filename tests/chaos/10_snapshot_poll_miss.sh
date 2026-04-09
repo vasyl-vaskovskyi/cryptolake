@@ -59,13 +59,13 @@ assert_eq "archive has 0 ws_disconnect gaps (backup covered)" 0 "$archive_ws_gap
 assert_eq "archive has 0 snapshot_poll_miss gaps (backup covered)" 0 "$archive_poll_miss_gaps"
 
 # --- Data is continuous through the blackout window — backup actually fed the writer ---
-if assert_continuous_data "bookticker" "$event_start_ns" "$event_end_ns" 5; then
-    pass "bookticker data continuous across blackout window (<=5s inter-record gaps)"
+if assert_continuous_data "bookticker" "$event_start_ns" "$event_end_ns" 3; then
+    pass "bookticker data continuous across blackout window (<=3s inter-record gaps)"
 else
     fail "bookticker has data holes during blackout — backup did NOT cover"
 fi
 
-if assert_continuous_data "trades" "$event_start_ns" "$event_end_ns" 5; then
+if assert_continuous_data "trades" "$event_start_ns" "$event_end_ns" 3; then
     pass "trades data continuous across blackout window"
 else
     fail "trades has data holes during blackout"
