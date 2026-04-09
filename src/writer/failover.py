@@ -71,6 +71,7 @@ class FailoverManager:
 
         self._switchback_filtering: dict[tuple[str, str, str], bool] = {}
         self._gap_checked: set[tuple[str, str, str]] = set()
+        self._backup_data_seen: bool = False
 
     @property
     def is_active(self) -> bool:
@@ -118,6 +119,7 @@ class FailoverManager:
         self._is_active = True
         self._switchback_filtering = {}
         self._gap_checked = set()
+        self._backup_data_seen = False
         writer_metrics.failover_active.set(1)
         writer_metrics.failover_total.inc()
 
@@ -425,6 +427,23 @@ class CoverageFilter:
 
         writer_metrics.gap_pending_size.set(len(self._pending))
         return True
+
+    def flush_all_pending(self) -> list[dict]:
+        """Return and remove ALL pending gap envelopes regardless of grace period.
+
+        Used during writer shutdown to prevent gap loss — the pending queue is
+        in-memory only and Kafka offsets are already committed past these gaps.
+        """
+        if not self._pending:
+            return []
+        flushed = [gap_env for gap_env, _first_seen in self._pending.values()]
+        self._pending.clear()
+        from src.writer import metrics as writer_metrics
+        writer_metrics.gap_pending_size.set(0)
+        for g in flushed:
+            logger.info("coverage_filter_gap_flushed_on_shutdown",
+                        reason=g.get("reason"), stream=g.get("stream"))
+        return flushed
 
     def sweep_expired(self) -> list[dict]:
         """Return and remove pending gap envelopes whose grace period has elapsed.

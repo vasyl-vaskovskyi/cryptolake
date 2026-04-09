@@ -839,8 +839,6 @@ class WriterConsumer:
                         # Suppressed or parked. Deliberately skip silence-timer
                         # reset: primary emitting gaps ≠ primary healthy, and we
                         # want failover to activate so backup data can flow.
-                        # Do NOT use `continue` here — the post-if sweep/flush
-                        # code below must still run this iteration.
                         pass
                     else:
                         # Filter disabled — fall through to normal write path
@@ -895,6 +893,8 @@ class WriterConsumer:
                                 self._count_consumed(envelope)
                                 self._failover.track_record(envelope)
                                 writer_metrics.failover_records_total.inc()
+                                if env_type == "data":
+                                    self._failover._backup_data_seen = True
                                 # NOTE: skip _check_session_change for backup records --
                                 # backup collector has its own session ID which would
                                 # incorrectly trigger session change detection.
@@ -913,17 +913,13 @@ class WriterConsumer:
                             # filter so backup coverage can suppress it, and do NOT
                             # trigger switchback.
                             #
-                            # Before passing the gap to the filter, assert the backup
-                            # was alive right now. While in failover the backup collector
-                            # is confirmed running (unaffected network, WS connected),
-                            # but Kafka message ordering can leave the coverage filter's
-                            # backup global-max stale if the backup consumer hasn't
-                            # polled new messages yet. Asserting liveness here ensures
-                            # any primary gap that arrives during failover is immediately
-                            # suppressible by backup coverage.
-                            self._coverage_filter.assert_source_alive(
-                                "backup", time.time_ns()
-                            )
+                            # Assert backup was alive if we have evidence it's
+                            # producing data. Without this guard, a stopped backup
+                            # would be falsely marked alive, suppressing real gaps.
+                            if self._failover._backup_data_seen:
+                                self._coverage_filter.assert_source_alive(
+                                    "backup", time.time_ns()
+                                )
                             if not self._coverage_filter.handle_gap("primary", envelope):
                                 # Filter disabled — write it as usual
                                 if not self._should_skip_recovery_dedup(envelope, primary_msg):
@@ -1315,6 +1311,12 @@ class WriterConsumer:
 
     async def stop(self) -> None:
         self._running = False
+        # Flush any pending gaps from the coverage filter before shutdown.
+        # The pending queue is in-memory only — if we don't flush here,
+        # gaps are lost because Kafka offsets are already committed past them.
+        expired_gaps = self._coverage_filter.flush_all_pending()
+        for gap_env in expired_gaps:
+            self.buffer_manager.add(gap_env)
         # _rotate_hour handles flush -> write -> seal -> commit in correct order
         await self._rotate_hour()
         self._failover.cleanup()
