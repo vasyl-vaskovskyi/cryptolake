@@ -3,9 +3,10 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 10: Snapshot Poll Miss ==="
-echo "Blocks collector HTTPS egress to trigger snapshot_poll_miss gaps"
-echo "while WebSocket streams continue via existing connections."
+echo "=== Chaos 10: Primary Collector Isolation ==="
+echo "Blocks primary collector HTTPS egress (including WebSocket). Backup"
+echo "collector is unaffected. Asserts writer's CoverageFilter suppresses"
+echo "primary's gap envelopes and backup data flows continuously through."
 echo ""
 
 setup_stack
@@ -41,71 +42,40 @@ section "Verification"
 assert_container_healthy "collector"
 assert_container_healthy "writer"
 
-# Wait for snapshot_poll_miss gaps to appear in archive
-wait_for_gaps "snapshot_poll_miss" 60
-poll_gaps=$(count_gaps "snapshot_poll_miss")
-assert_gt "snapshot_poll_miss gaps exist in archive" "$poll_gaps" 0
+# --- Chaos landed on primary ---
+primary_reconnects=$(get_collector_metric "${COLLECTOR_CONTAINER}" "collector_ws_reconnects_total")
+primary_ws_gaps=$(get_collector_metric "${COLLECTOR_CONTAINER}" 'collector_gaps_detected_total{exchange="binance",reason="ws_disconnect"')
+assert_gt "primary collector saw reconnects (chaos landed)" "$primary_reconnects" 0
+assert_gt "primary collector emitted ws_disconnect gaps internally" "$primary_ws_gaps" 0
 
-# Validate gap records have valid timestamps
-validate_poll_miss_gaps() {
-    uv run python -c "
-import zstandard as zstd, orjson
-from pathlib import Path
-base = Path('${TEST_DATA_DIR}')
-found = 0
-errors = []
-for f in base.rglob('*.zst'):
-    with open(f, 'rb') as fh:
-        data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    for line in data.strip().split(b'\n'):
-        if not line:
-            continue
-        env = orjson.loads(line)
-        if env.get('type') == 'gap' and env.get('reason') == 'snapshot_poll_miss':
-            found += 1
-            gs = env.get('gap_start_ts', 0)
-            ge = env.get('gap_end_ts', 0)
-            if gs <= 0:
-                errors.append(f'gap_start_ts invalid: {gs}')
-            if ge <= 0:
-                errors.append(f'gap_end_ts invalid: {ge}')
-            if ge <= gs:
-                errors.append(f'gap_end_ts ({ge}) <= gap_start_ts ({gs})')
-            stream = env.get('stream', '')
-            if stream not in ('depth_snapshot', 'open_interest'):
-                errors.append(f'unexpected stream for snapshot_poll_miss: {stream}')
-if errors:
-    for e in errors:
-        print(f'ERROR: {e}')
-    exit(1)
-if found == 0:
-    print('ERROR: no snapshot_poll_miss gap records found')
-    exit(1)
-print(f'OK: {found} snapshot_poll_miss record(s) with valid timestamps')
-"
-}
+# --- Backup was unaffected ---
+backup_reconnects=$(get_collector_metric "${BACKUP_COLLECTOR_CONTAINER}" "collector_ws_reconnects_total")
+assert_eq "backup collector had no reconnects (network untouched)" 0 "$backup_reconnects"
 
-if validate_poll_miss_gaps; then
-    pass "snapshot_poll_miss gap metadata valid"
+# --- Archive is clean — writer's CoverageFilter suppressed primary's gap envelopes ---
+archive_ws_gaps=$(count_gaps "ws_disconnect")
+archive_poll_miss_gaps=$(count_gaps "snapshot_poll_miss")
+assert_eq "archive has 0 ws_disconnect gaps (backup covered)" 0 "$archive_ws_gaps"
+assert_eq "archive has 0 snapshot_poll_miss gaps (backup covered)" 0 "$archive_poll_miss_gaps"
+
+# --- Data is continuous through the blackout window — backup actually fed the writer ---
+if assert_continuous_data "bookticker" "$event_start_ns" "$event_end_ns" 5; then
+    pass "bookticker data continuous across blackout window (<=5s inter-record gaps)"
 else
-    fail "snapshot_poll_miss gap validation failed"
+    fail "bookticker has data holes during blackout — backup did NOT cover"
 fi
 
-# Data integrity
+if assert_continuous_data "trades" "$event_start_ns" "$event_end_ns" 5; then
+    pass "trades data continuous across blackout window"
+else
+    fail "trades has data holes during blackout"
+fi
+
+# --- Data integrity ---
 if check_integrity; then
     pass "data integrity OK"
 else
     fail "data integrity check failed"
-fi
-
-# WebSocket data should still have been flowing during the block
-total=$(count_envelopes)
-assert_gt "archive has envelopes (WS stayed up during REST block)" "$total" 100
-
-if validate_gap_window_accuracy "snapshot_poll_miss" "$event_start_ns" "$event_end_ns" 180; then
-    pass "snapshot_poll_miss gap timestamps are accurate (within 180s tolerance)"
-else
-    fail "snapshot_poll_miss gap timestamp accuracy check failed"
 fi
 
 print_test_report

@@ -267,12 +267,21 @@ class CoverageFilter:
     that window. This filter drops gap envelopes whose window is already covered
     by data from the other source, and parks the rest briefly so backup data
     arriving late can still cover them.
+
+    Coverage is tracked both per-stream and globally per-source. A gap is
+    suppressed if either the per-stream coverage or the global source coverage
+    shows that the other source was active after the gap started. Using global
+    coverage handles the case where stream-specific coverage lags due to Kafka
+    consumer ordering (e.g. the backup consumer processes high-volume streams
+    first, delaying updates to lower-volume stream coverage).
     """
 
     def __init__(self, grace_period_seconds: float):
         self._grace_period = float(grace_period_seconds)
         # (exchange, symbol, stream) -> {"primary": received_at_ns, "backup": received_at_ns}
         self._last_received: dict[tuple[str, str, str], dict[str, int]] = {}
+        # source -> max received_at_ns across ALL streams (global liveness indicator)
+        self._global_max_received: dict[str, int] = {}
         # (source, stream_key, gap_start_ts) -> (envelope, first_seen_monotonic)
         self._pending: dict[tuple[str, tuple[str, str, str], int], tuple[dict, float]] = {}
 
@@ -291,6 +300,29 @@ class CoverageFilter:
         entry = self._last_received.get(stream_key, {})
         return max(entry.values(), default=0)
 
+    def _other_covers(self, other_source: str, stream_key: tuple[str, str, str], gap_start: int) -> bool:
+        """True if the other source has any data received after gap_start.
+
+        Checks both per-stream coverage and global coverage. Global coverage is
+        the liveness signal: if the other source sent ANY data after gap_start,
+        the collector was alive and collecting all its streams at that time.
+        """
+        per_stream = self._last_received.get(stream_key, {}).get(other_source, 0)
+        global_max = self._global_max_received.get(other_source, 0)
+        return per_stream > gap_start or global_max > gap_start
+
+    def assert_source_alive(self, source: str, at_ns: int) -> None:
+        """Assert that a source was alive (collecting) at a given nanosecond timestamp.
+
+        Advances the global max for this source to at_ns if at_ns is more recent
+        than the current global max. Use this when external knowledge (e.g., active
+        failover) confirms a source was collecting even if no Kafka messages have
+        arrived to update the coverage state.
+        """
+        current = self._global_max_received.get(source, 0)
+        if at_ns > current:
+            self._global_max_received[source] = at_ns
+
     def handle_data(self, source: str, envelope: dict) -> None:
         """Record a data envelope's arrival and drop any newly-covered pending gaps."""
         if not self.enabled:
@@ -306,21 +338,26 @@ class CoverageFilter:
         coverage = self._last_received.setdefault(stream_key, {})
         if received_at > coverage.get(source, 0):
             coverage[source] = received_at
+        if received_at > self._global_max_received.get(source, 0):
+            self._global_max_received[source] = received_at
 
         if not self._pending:
             return
 
         from src.writer import metrics as writer_metrics
 
-        # Sweep pending gaps: drop any whose other-source coverage now reaches gap_end_ts
+        # Sweep pending gaps: drop any whose other-source coverage now exceeds gap_start_ts.
+        # Using gap_start_ts rather than gap_end_ts ensures that REST-polled streams
+        # with long retry windows (where gap_end_ts can be far in the future) are
+        # correctly suppressed as soon as the other source has any coverage after
+        # the gap began.
+        # Uses _other_covers which checks both per-stream and global coverage.
         to_remove: list[tuple[str, tuple[str, str, str], int]] = []
         for key, (gap_env, _first_seen) in self._pending.items():
             pending_source, pending_stream, _ = key
-            if pending_stream != stream_key:
-                continue
             other_source = "backup" if pending_source == "primary" else "primary"
-            other_received = coverage.get(other_source, 0)
-            if other_received >= gap_env.get("gap_end_ts", 0):
+            gap_start_ts = gap_env.get("gap_start_ts", 0)
+            if self._other_covers(other_source, pending_stream, gap_start_ts):
                 to_remove.append(key)
                 writer_metrics.gap_envelopes_suppressed_total.labels(
                     source=pending_source, reason=gap_env.get("reason", "unknown"),
@@ -338,6 +375,13 @@ class CoverageFilter:
         Returns True if the envelope was handled (dropped or parked) — caller
         must NOT write it. Returns False if the filter is disabled — caller
         should write as usual.
+
+        A gap is immediately suppressed if the other source received data after
+        the gap started (i.e. the other source was collecting during the outage
+        window). Using gap_start_ts rather than gap_end_ts avoids race conditions
+        where the gap_end is very recent and the other source's latest coverage
+        timestamp trails it by a fraction of a second — or where the gap_end is
+        far in the future (e.g. for REST-polled streams with long retry windows).
         """
         if not self.enabled:
             return False
@@ -354,9 +398,11 @@ class CoverageFilter:
         reason = envelope.get("reason", "unknown")
 
         other_source = "backup" if source == "primary" else "primary"
-        other_received = self._last_received.get(stream_key, {}).get(other_source, 0)
 
-        if other_received >= gap_end:
+        # Suppress immediately if the other source has data received after the gap
+        # started — this means the other source was collecting during the outage.
+        # Uses both per-stream and global coverage (see _other_covers docstring).
+        if self._other_covers(other_source, stream_key, gap_start):
             writer_metrics.gap_envelopes_suppressed_total.labels(
                 source=source, reason=reason,
             ).inc()

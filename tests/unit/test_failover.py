@@ -566,9 +566,12 @@ class TestCoverageFilterPending:
         assert cf.pending_size == 0
 
     def test_data_sweep_does_not_drop_uncovered_pending(self):
+        # Backup data received BEFORE the gap started → bilateral outage, gap stays pending.
+        # (The check is other_received > gap_start_ts, so data at or before gap_start
+        # does not count as coverage.)
         cf = CoverageFilter(grace_period_seconds=10.0)
         cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=5000))
-        cf.handle_data("backup", _data_env(received_at=2000))  # not past gap_end
+        cf.handle_data("backup", _data_env(received_at=999))  # before gap_start
         assert cf.pending_size == 1
 
     def test_same_source_data_does_not_cover_own_gap(self):
@@ -577,10 +580,22 @@ class TestCoverageFilterPending:
         cf.handle_data("primary", _data_env(received_at=3000))  # primary's own data
         assert cf.pending_size == 1
 
-    def test_data_for_different_stream_does_not_drop(self):
+    def test_data_for_different_stream_covers_via_global_max(self):
+        # Backup data for any stream signals the backup collector is alive, so
+        # it covers gaps for all streams (global-max coverage). A live backup
+        # collector collects all streams simultaneously via the same WS connections.
         cf = CoverageFilter(grace_period_seconds=10.0)
-        cf.handle_gap("primary", _gap_env(stream="trades", gap_end=2000))
+        cf.handle_gap("primary", _gap_env(stream="trades", gap_start=1000, gap_end=2000))
         cf.handle_data("backup", _data_env(stream="depth", received_at=3000))
+        # Global backup max = 3000 > gap_start 1000 → gap is swept
+        assert cf.pending_size == 0
+
+    def test_data_before_gap_start_does_not_cover_different_stream(self):
+        # If backup's global max is before the gap started, no coverage.
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_gap("primary", _gap_env(stream="trades", gap_start=5000, gap_end=6000))
+        cf.handle_data("backup", _data_env(stream="depth", received_at=3000))
+        # Global backup max = 3000 < gap_start 5000 → gap stays pending
         assert cf.pending_size == 1
 
 
@@ -619,6 +634,42 @@ class TestCoverageFilterSweepExpired:
         assert len(expired) == 1
         assert expired[0]["gap_start_ts"] == 1000
         assert cf.pending_size == 1  # the fresh one remains
+
+
+class TestCoverageFilterAssertSourceAlive:
+    def test_assert_source_alive_advances_global_max(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.assert_source_alive("backup", 5000)
+        assert cf._global_max_received.get("backup", 0) == 5000
+
+    def test_assert_source_alive_does_not_regress(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.assert_source_alive("backup", 5000)
+        cf.assert_source_alive("backup", 3000)  # older timestamp
+        assert cf._global_max_received.get("backup", 0) == 5000
+
+    def test_assert_source_alive_enables_gap_suppression(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        # Primary gap at gap_start=1000
+        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        assert cf.pending_size == 1  # parked, no backup coverage yet
+        # Assert backup was alive at 5000 (after gap_start)
+        cf.assert_source_alive("backup", 5000)
+        # Next handle_data call will sweep — but assert_source_alive alone
+        # does not sweep. Need to trigger a sweep via handle_data or check
+        # that handle_gap immediately suppresses if called again.
+        # Calling handle_data with backup data at 5000 sweeps the pending gap.
+        cf.handle_data("backup", _data_env(received_at=5000))
+        assert cf.pending_size == 0
+
+    def test_assert_source_alive_allows_immediate_gap_suppression(self):
+        # If assert_source_alive is called BEFORE handle_gap, the gap is
+        # immediately suppressed (not parked).
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.assert_source_alive("backup", 5000)
+        handled = cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
+        assert handled is True
+        assert cf.pending_size == 0
 
 
 class TestFailoverManagerWithCoverageFilter:

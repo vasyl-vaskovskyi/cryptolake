@@ -663,3 +663,63 @@ else:
     print(f'OK: {found} restart_gap record(s) with {\", \".join(msg_parts)}')
 "
 }
+
+# Scrape a single collector metric value from the collector's Prometheus endpoint.
+# Usage: get_collector_metric <container> <metric_line_prefix>  →  prints integer value or 0
+get_collector_metric() {
+    local container="${1:?Usage: get_collector_metric <container> <metric_prefix>}"
+    local prefix="${2:?Usage: get_collector_metric <container> <metric_prefix>}"
+    docker exec -i "${container}" python -c "
+from urllib.request import urlopen
+data = urlopen('http://localhost:8000/metrics', timeout=2).read().decode()
+total = 0.0
+for line in data.splitlines():
+    if line.startswith('${prefix}') and not line.startswith('#'):
+        try:
+            total += float(line.split()[-1])
+        except Exception:
+            pass
+print(int(total))
+" 2>/dev/null || echo "0"
+}
+
+# Assert that a per-stream data record interval inside a time window is never
+# larger than max_gap_seconds. Proves backup filled in the outage.
+# Usage: assert_continuous_data <stream> <window_start_ns> <window_end_ns> <max_gap_seconds>
+assert_continuous_data() {
+    local stream="${1:?Usage: assert_continuous_data <stream> <start_ns> <end_ns> <max_gap_s>}"
+    local start_ns="$2"
+    local end_ns="$3"
+    local max_gap_s="$4"
+    uv run python -c "
+import zstandard as zstd, orjson
+from pathlib import Path
+base = Path('${TEST_DATA_DIR}')
+start_ns = ${start_ns}
+end_ns = ${end_ns}
+max_gap_ns = int(${max_gap_s}) * 1_000_000_000
+stream = '${stream}'
+errors = []
+for f in sorted(base.rglob(f'*/{stream}/*.zst')):
+    with open(f, 'rb') as fh:
+        data = zstd.ZstdDecompressor().stream_reader(fh).read()
+    prev_ts = None
+    for line in data.strip().split(b'\n'):
+        if not line:
+            continue
+        env = orjson.loads(line)
+        if env.get('type') != 'data':
+            continue
+        ts = env.get('received_at', 0)
+        if ts < start_ns or ts > end_ns:
+            continue
+        if prev_ts is not None and (ts - prev_ts) > max_gap_ns:
+            errors.append(f'{f.name}: {(ts - prev_ts)/1e9:.1f}s gap between {prev_ts} and {ts}')
+        prev_ts = ts
+if errors:
+    for e in errors:
+        print(f'ERROR: {e}')
+    exit(1)
+print(f'OK: {stream} continuous within window (max interval <= {${max_gap_s}}s)')
+"
+}

@@ -233,7 +233,7 @@ class TestDepthReplay:
         assert any("ethusdt" in e for e in errors)
         assert not any("btcusdt" in e for e in errors)
 
-        def test_multiple_snapshots_picks_spannable_one(self):
+    def test_multiple_snapshots_picks_spannable_one(self):
         """When multiple snapshots exist (e.g., SnapshotScheduler publishes
         before depth_resync), verify must pick the snapshot whose lid is
         actually spanned by the live diffs, not the first one in time order."""

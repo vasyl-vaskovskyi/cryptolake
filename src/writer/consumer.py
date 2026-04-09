@@ -905,23 +905,49 @@ class WriterConsumer:
                 if primary_msg is not None and not primary_msg.error():
                     envelope = self._deserialize_and_stamp(primary_msg)
                     if envelope is not None:
-                        self._failover.begin_switchback()
-                        if not self._failover.check_switchback_filter(envelope):
-                            if not self._should_skip_recovery_dedup(envelope, primary_msg):
-                                self._count_consumed(envelope)
-                                self._failover.track_record(envelope)
-                                self._failover.reset_silence_timer()
-                                # Skip gap detection during switchback — the primary
-                                # restarted with a new session_id, but the backup
-                                # covered the gap seamlessly. No data was lost.
-                                await self._handle_rotation_and_buffer(envelope, active_hours)
-                        # Suppress session-change detection for ALL streams after
-                        # failover — the primary restarted with a new session, but
-                        # backup covered it. Use the existing _recovery_gap_emitted
-                        # mechanism to suppress the first session change per stream.
-                        for sk in list(self._failover._last_key):
-                            self._recovery_gap_emitted.add(sk)
-                        self._failover.deactivate()
+                        probe_type = envelope.get("type")
+                        if probe_type == "gap":
+                            # A primary gap envelope during failover is NOT a sign the
+                            # primary is healthy — it means the primary had an outage
+                            # while backup was covering. Route it through the coverage
+                            # filter so backup coverage can suppress it, and do NOT
+                            # trigger switchback.
+                            #
+                            # Before passing the gap to the filter, assert the backup
+                            # was alive right now. While in failover the backup collector
+                            # is confirmed running (unaffected network, WS connected),
+                            # but Kafka message ordering can leave the coverage filter's
+                            # backup global-max stale if the backup consumer hasn't
+                            # polled new messages yet. Asserting liveness here ensures
+                            # any primary gap that arrives during failover is immediately
+                            # suppressible by backup coverage.
+                            self._coverage_filter.assert_source_alive(
+                                "backup", time.time_ns()
+                            )
+                            if not self._coverage_filter.handle_gap("primary", envelope):
+                                # Filter disabled — write it as usual
+                                if not self._should_skip_recovery_dedup(envelope, primary_msg):
+                                    self._count_consumed(envelope)
+                                    await self._handle_rotation_and_buffer(envelope, active_hours)
+                        else:
+                            # A primary DATA envelope — the primary is healthy again.
+                            self._failover.begin_switchback()
+                            if not self._failover.check_switchback_filter(envelope):
+                                if not self._should_skip_recovery_dedup(envelope, primary_msg):
+                                    self._count_consumed(envelope)
+                                    self._failover.track_record(envelope)
+                                    self._failover.reset_silence_timer()
+                                    # Skip gap detection during switchback — the primary
+                                    # restarted with a new session_id, but the backup
+                                    # covered the gap seamlessly. No data was lost.
+                                    await self._handle_rotation_and_buffer(envelope, active_hours)
+                            # Suppress session-change detection for ALL streams after
+                            # failover — the primary restarted with a new session, but
+                            # backup covered it. Use the existing _recovery_gap_emitted
+                            # mechanism to suppress the first session change per stream.
+                            for sk in list(self._failover._last_key):
+                                self._recovery_gap_emitted.add(sk)
+                            self._failover.deactivate()
 
             # Sweep coverage-filter pending gaps whose grace period expired.
             # These are real bilateral outages — write them as usual.
