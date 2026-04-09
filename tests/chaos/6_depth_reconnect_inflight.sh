@@ -11,6 +11,9 @@ echo ""
 setup_stack
 
 section "Scenario"
+step 0 "Stopping backup collector (this test exercises primary gap recording)..."
+$COMPOSE stop collector-backup 2>&1
+
 step 1 "Letting collector stream depth updates for 30s..."
 wait_for_data 30
 

@@ -14,6 +14,9 @@ setup_stack
 wait_for_data 20
 
 section "Scenario"
+step 0 "Stopping backup collector (this test exercises primary gap recording)..."
+$COMPOSE stop collector-backup 2>&1
+
 step 1 "Recording pre-kill state..."
 pre_kill=$(count_envelopes)
 event_start_ns=$(ts_now_ns)
