@@ -37,7 +37,8 @@ sleep 10
 step 4 "Restarting collector..."
 $COMPOSE up -d collector 2>&1
 event_end_ns=$(ts_now_ns)
-wait_healthy
+wait_service_healthy collector 60
+wait_service_healthy writer 60
 wait_for_data 30
 
 section "Verification"
