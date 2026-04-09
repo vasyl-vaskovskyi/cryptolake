@@ -246,7 +246,7 @@ class FailoverManager:
             exchange=exchange, symbol=symbol, stream=stream,
             collector_session_id="", session_seq=-1,
             gap_start_ts=last_received, gap_end_ts=first_backup_received_at,
-            reason="restart_gap",
+            reason="restart_gap", planned=False,
             detail=f"Failover gap: primary key {last_key} -> backup key {first_backup_key}",
             received_at=first_backup_received_at,
         )
