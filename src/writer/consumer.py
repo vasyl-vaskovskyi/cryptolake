@@ -809,12 +809,6 @@ class WriterConsumer:
                 if msg is None:
                     if self._failover.should_activate():
                         self._failover.activate()
-                        # Seek primary consumer to end so that old buffered
-                        # messages don't trigger premature switchback.
-                        from confluent_kafka import TopicPartition as _TP
-                        for tp in self._consumer.assignment():
-                            _, high = self._consumer.get_watermark_offsets(tp)
-                            self._consumer.seek(_TP(tp.topic, tp.partition, high))
                     if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
                         await self._flush_and_commit()
                         last_flush_time = time.monotonic()
@@ -929,22 +923,17 @@ class WriterConsumer:
                             # A primary DATA envelope — the primary is healthy again.
                             self._failover.begin_switchback()
                             if not self._failover.check_switchback_filter(envelope):
+                                # Primary has data newer than backup's last key —
+                                # genuine recovery. Switch back.
                                 if not self._should_skip_recovery_dedup(envelope, primary_msg):
                                     self._count_consumed(envelope)
                                     self._failover.track_record(envelope)
                                     self._failover.reset_silence_timer()
-                                    # Skip gap detection during switchback — the primary
-                                    # restarted with a new session_id, but the backup
-                                    # covered the gap seamlessly. No data was lost.
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
-                            # Only suppress session-change detection if backup
-                            # actually delivered data during this failover episode.
-                            # If backup was stopped/unavailable, the session change
-                            # represents a real gap that must be recorded.
-                            if self._failover._backup_data_seen:
-                                for sk in list(self._failover._last_key):
-                                    self._recovery_gap_emitted.add(sk)
-                            self._failover.deactivate()
+                                if self._failover._backup_data_seen:
+                                    for sk in list(self._failover._last_key):
+                                        self._recovery_gap_emitted.add(sk)
+                                self._failover.deactivate()
 
             # Sweep coverage-filter pending gaps whose grace period expired.
             # These are real bilateral outages — write them as usual.
