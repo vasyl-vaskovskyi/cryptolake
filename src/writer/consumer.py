@@ -809,6 +809,14 @@ class WriterConsumer:
                 if msg is None:
                     if self._failover.should_activate():
                         self._failover.activate()
+                        # Seek primary consumer to end so that old buffered
+                        # messages don't trigger premature switchback.
+                        # After switchback, the consumer resumes from here;
+                        # skipped messages were already covered by backup.
+                        from confluent_kafka import TopicPartition as _TP
+                        for tp in self._consumer.assignment():
+                            _, high = self._consumer.get_watermark_offsets(tp)
+                            self._consumer.seek(_TP(tp.topic, tp.partition, high))
                     if time.monotonic() - last_flush_time >= self.buffer_manager.flush_interval_seconds:
                         await self._flush_and_commit()
                         last_flush_time = time.monotonic()
@@ -894,14 +902,8 @@ class WriterConsumer:
                                 # incorrectly trigger session change detection.
                                 await self._handle_rotation_and_buffer(envelope, active_hours)
 
-                # Probe primary — but only after backup has delivered data.
-                # Until then, _last_key still holds the PRIMARY's last key and
-                # the switchback filter can't distinguish stale buffered messages
-                # from genuinely new ones.
-                if not self._failover._backup_data_seen:
-                    primary_msg = None
-                else:
-                    primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
+                # Probe primary -- short timeout
+                primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
                 if primary_msg is not None and not primary_msg.error():
                     envelope = self._deserialize_and_stamp(primary_msg)
                     if envelope is not None:
@@ -929,17 +931,15 @@ class WriterConsumer:
                             # A primary DATA envelope — the primary is healthy again.
                             self._failover.begin_switchback()
                             if not self._failover.check_switchback_filter(envelope):
-                                # Primary has data newer than backup's last key —
-                                # genuine recovery. Switch back.
                                 if not self._should_skip_recovery_dedup(envelope, primary_msg):
                                     self._count_consumed(envelope)
                                     self._failover.track_record(envelope)
                                     self._failover.reset_silence_timer()
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
-                                if self._failover._backup_data_seen:
-                                    for sk in list(self._failover._last_key):
-                                        self._recovery_gap_emitted.add(sk)
-                                self._failover.deactivate()
+                            if self._failover._backup_data_seen:
+                                for sk in list(self._failover._last_key):
+                                    self._recovery_gap_emitted.add(sk)
+                            self._failover.deactivate()
 
             # Sweep coverage-filter pending gaps whose grace period expired.
             # These are real bilateral outages — write them as usual.
