@@ -894,8 +894,14 @@ class WriterConsumer:
                                 # incorrectly trigger session change detection.
                                 await self._handle_rotation_and_buffer(envelope, active_hours)
 
-                # Probe primary -- short timeout
-                primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
+                # Probe primary — but only after backup has delivered data.
+                # Until then, _last_key still holds the PRIMARY's last key and
+                # the switchback filter can't distinguish stale buffered messages
+                # from genuinely new ones.
+                if not self._failover._backup_data_seen:
+                    primary_msg = None
+                else:
+                    primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
                 if primary_msg is not None and not primary_msg.error():
                     envelope = self._deserialize_and_stamp(primary_msg)
                     if envelope is not None:
