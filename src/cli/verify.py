@@ -128,6 +128,10 @@ def verify_depth_replay(
         def _in_gap(received_at: int) -> bool:
             return any(s <= received_at <= e for s, e in gap_windows)
 
+        def _gap_between(prev_ts: int, cur_ts: int) -> bool:
+            """True if any gap overlaps the interval [prev_ts, cur_ts]."""
+            return any(s <= cur_ts and e >= prev_ts for s, e in gap_windows)
+
         # Multiple snapshots may exist for one stream:
         #   - Initial depth_resync snapshot (sets the live pu chain sync point)
         #   - Periodic SnapshotScheduler snapshots (reconstruction checkpoints
@@ -147,12 +151,14 @@ def verify_depth_replay(
 
         synced = False
         last_u: int | None = None
+        last_received_at: int = 0
 
         for env in sym_depths:
             raw = orjson.loads(env["raw_text"])
             U = raw.get("U", 0)
             u = raw.get("u", 0)
             pu = raw.get("pu", 0)
+            cur_received_at = env.get("received_at", 0)
 
             if not synced:
                 # Find any snapshot lid that this diff can span: U <= lid+1 <= u
@@ -164,31 +170,44 @@ def verify_depth_replay(
                 if spanned_lid is not None:
                     synced = True
                     last_u = u
+                    last_received_at = cur_received_at
                     continue
                 # No snapshot found yet — record error if not in gap
-                if snap_lids and not _in_gap(env["received_at"]):
+                if snap_lids and not _in_gap(cur_received_at):
                     errors.append(
                         f"[{symbol}] First diff does not span any snapshot "
                         f"sync point: U={U}, u={u}, "
                         f"snapshot lids={snap_lids[:3]} at received_at "
-                        f"{env['received_at']}"
+                        f"{cur_received_at}"
                     )
-                if not snap_lids and not _in_gap(env["received_at"]):
+                if not snap_lids and not _in_gap(cur_received_at):
                     errors.append(
                         f"[{symbol}] Depth diff at received_at "
-                        f"{env['received_at']} has no preceding snapshot"
+                        f"{cur_received_at} has no preceding snapshot"
                     )
+                last_received_at = cur_received_at
                 continue
 
             # Subsequent diffs: pu must equal previous u.
             if pu != last_u:
-                if not _in_gap(env["received_at"]):
+                if _in_gap(cur_received_at) or _gap_between(last_received_at, cur_received_at):
+                    # pu-chain break is explained by a gap — try to re-sync
+                    # with a snapshot so subsequent diffs can be validated.
+                    resynced = False
+                    for lid in snap_lids:
+                        if U <= lid + 1 <= u:
+                            resynced = True
+                            break
+                    if not resynced:
+                        synced = False
+                else:
                     errors.append(
                         f"[{symbol}] pu chain break at received_at "
-                        f"{env['received_at']}: expected pu={last_u}, "
+                        f"{cur_received_at}: expected pu={last_u}, "
                         f"got pu={pu}"
                     )
             last_u = u
+            last_received_at = cur_received_at
 
     return errors
 
