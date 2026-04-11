@@ -6,7 +6,7 @@ from typing import Any
 
 import orjson
 import structlog
-from confluent_kafka import Consumer as KafkaConsumer, TopicPartition
+from confluent_kafka import Consumer as KafkaConsumer
 
 from src.common.envelope import create_gap_envelope
 from src.writer import metrics as writer_metrics
@@ -138,49 +138,20 @@ class FailoverManager:
 
         self._backup_consumer = consumer
 
-        all_partitions: list[TopicPartition] = []
-        for backup_topic in self._backup_topics:
-            try:
-                md = consumer.list_topics(topic=backup_topic, timeout=5)
-                topic_md = md.topics.get(backup_topic)
-                if topic_md is None or topic_md.error is not None or not topic_md.partitions:
-                    logger.warning("failover_topic_not_available", topic=backup_topic)
-                    continue
+        # Subscribe to backup topics with auto.offset.reset=latest — consumer
+        # starts from end of partition at subscription time and reads forward.
+        # This avoids a librdkafka edge case where any manual seek backward
+        # (via offsets_for_times or explicit offset) causes the consumer to
+        # stop receiving new messages after exhausting the initial window.
+        try:
+            consumer.subscribe(self._backup_topics)
+        except Exception as exc:
+            logger.error("failover_subscribe_failed", error=str(exc))
+            self._is_active = False
+            writer_metrics.failover_active.set(0)
+            return
 
-                primary_topic = backup_topic[len(self._backup_prefix):]
-
-                seek_ts_ns: int | None = None
-                for stream_key in list(self._last_received.keys()):
-                    exchange, symbol, stream = stream_key
-                    if f"{exchange}.{stream}" != primary_topic:
-                        continue
-                    if self._coverage_filter is not None:
-                        received_ns = self._coverage_filter.max_received(stream_key)
-                    else:
-                        received_ns = self._last_received.get(stream_key, 0)
-                    if received_ns <= 0:
-                        continue
-                    ts = received_ns - 10_000_000_000
-                    if seek_ts_ns is None or ts < seek_ts_ns:
-                        seek_ts_ns = ts
-
-                seek_ts_ms = (seek_ts_ns // 1_000_000) if seek_ts_ns is not None else (int(time.time() * 1000) - 10000)
-
-                for pid in topic_md.partitions:
-                    all_partitions.append(TopicPartition(backup_topic, pid, seek_ts_ms))
-            except Exception as exc:
-                logger.warning("failover_topic_seek_failed", topic=backup_topic, error=str(exc))
-
-        if all_partitions:
-            try:
-                offsets = consumer.offsets_for_times(all_partitions, timeout=5)
-                consumer.assign(offsets)
-            except Exception as exc:
-                logger.error("failover_seek_failed", error=str(exc))
-        else:
-            logger.warning("failover_no_partitions_found")
-
-        logger.info("failover_activated", backup_topics=self._backup_topics, partitions=len(all_partitions))
+        logger.info("failover_activated", backup_topics=self._backup_topics)
 
     def deactivate(self) -> None:
         if not self._is_active:
@@ -322,6 +293,13 @@ class CoverageFilter:
             gap_start_ts = gap_env.get("gap_start_ts", 0)
             if self._other_covers(other_source, pending_stream, gap_start_ts):
                 to_remove.append(key)
+                logger.info("cov_filter_sweep_drop",
+                            pending_source=pending_source,
+                            reason=gap_env.get("reason"),
+                            stream=pending_stream[2],
+                            gap_start=gap_start_ts,
+                            triggering_source=source,
+                            triggering_stream=stream_key[2])
                 writer_metrics.gap_envelopes_suppressed_total.labels(
                     source=pending_source, reason=gap_env.get("reason", "unknown"),
                 ).inc()
@@ -366,6 +344,10 @@ class CoverageFilter:
         # started — this means the other source was collecting during the outage.
         # Uses both per-stream and global coverage (see _other_covers docstring).
         if self._other_covers(other_source, stream_key, gap_start):
+            logger.info("cov_filter_suppress_immediate",
+                        source=source, reason=reason, stream=stream_key[2],
+                        gap_start=gap_start, gap_end=gap_end,
+                        backup_global=self._global_max_received.get("backup", 0))
             writer_metrics.gap_envelopes_suppressed_total.labels(
                 source=source, reason=reason,
             ).inc()
@@ -384,6 +366,10 @@ class CoverageFilter:
             # Preserve first_seen so grace period counts from original arrival
             writer_metrics.gap_coalesced_total.labels(source=source).inc()
         else:
+            logger.info("cov_filter_park",
+                        source=source, reason=reason, stream=stream_key[2],
+                        gap_start=gap_start, gap_end=gap_end,
+                        backup_global=self._global_max_received.get("backup", 0))
             self._pending[key] = (envelope, time.monotonic())
 
         writer_metrics.gap_pending_size.set(len(self._pending))
@@ -422,6 +408,13 @@ class CoverageFilter:
                 to_remove.append(key)
         for key in to_remove:
             del self._pending[key]
+        if expired:
+            for g in expired:
+                logger.info("cov_filter_expire_to_disk",
+                            reason=g.get("reason"), stream=g.get("stream"),
+                            gap_start=g.get("gap_start_ts"),
+                            gap_end=g.get("gap_end_ts"),
+                            backup_global=self._global_max_received.get("backup", 0))
         if to_remove:
             from src.writer import metrics as writer_metrics
             writer_metrics.gap_pending_size.set(len(self._pending))
