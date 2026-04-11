@@ -37,10 +37,6 @@ echo "   Restored HTTPS connections"
 step 4 "Waiting 45s for next successful poll cycle..."
 sleep 45
 
-echo "--- DEBUG: Writer filter log lines ---"
-$COMPOSE logs writer --no-log-prefix 2>/dev/null | grep -iE "cov_filter|coverage_filter|failover_activ|failover_deact|handle_gap|sweep" | tail -50 || true
-echo "--- END DEBUG ---"
-
 section "Verification"
 
 assert_container_healthy "collector"

@@ -6,7 +6,7 @@ from typing import Any
 
 import orjson
 import structlog
-from confluent_kafka import Consumer as KafkaConsumer
+from confluent_kafka import Consumer as KafkaConsumer, TopicPartition
 
 from src.common.envelope import create_gap_envelope
 from src.writer import metrics as writer_metrics
@@ -138,20 +138,34 @@ class FailoverManager:
 
         self._backup_consumer = consumer
 
-        # Subscribe to backup topics with auto.offset.reset=latest — consumer
-        # starts from end of partition at subscription time and reads forward.
-        # This avoids a librdkafka edge case where any manual seek backward
-        # (via offsets_for_times or explicit offset) causes the consumer to
-        # stop receiving new messages after exhausting the initial window.
+        # Subscribe to backup topics. After the rebalance completes (first
+        # poll), we seek each assigned partition back so the writer reads
+        # backup data that overlaps with primary's last delivered data. This
+        # preserves depth pu-chain continuity in the archive.
         try:
             consumer.subscribe(self._backup_topics)
+            # Trigger rebalance so partitions get assigned
+            consumer.poll(timeout=2.0)
+            assignment = consumer.assignment()
+            for tp in assignment:
+                try:
+                    low, high = consumer.get_watermark_offsets(
+                        tp, timeout=5, cached=False,
+                    )
+                    # Seek back ~2000 messages (covers ~20s at typical rates)
+                    target = max(low, high - 2000)
+                    consumer.seek(TopicPartition(tp.topic, tp.partition, target))
+                except Exception as exc:
+                    logger.warning("failover_seek_back_failed",
+                                   topic=tp.topic, partition=tp.partition, error=str(exc))
+            logger.info("failover_activated",
+                        backup_topics=self._backup_topics,
+                        partitions=len(assignment))
         except Exception as exc:
             logger.error("failover_subscribe_failed", error=str(exc))
             self._is_active = False
             writer_metrics.failover_active.set(0)
             return
-
-        logger.info("failover_activated", backup_topics=self._backup_topics)
 
     def deactivate(self) -> None:
         if not self._is_active:
@@ -293,13 +307,6 @@ class CoverageFilter:
             gap_start_ts = gap_env.get("gap_start_ts", 0)
             if self._other_covers(other_source, pending_stream, gap_start_ts):
                 to_remove.append(key)
-                logger.info("cov_filter_sweep_drop",
-                            pending_source=pending_source,
-                            reason=gap_env.get("reason"),
-                            stream=pending_stream[2],
-                            gap_start=gap_start_ts,
-                            triggering_source=source,
-                            triggering_stream=stream_key[2])
                 writer_metrics.gap_envelopes_suppressed_total.labels(
                     source=pending_source, reason=gap_env.get("reason", "unknown"),
                 ).inc()
@@ -344,10 +351,6 @@ class CoverageFilter:
         # started — this means the other source was collecting during the outage.
         # Uses both per-stream and global coverage (see _other_covers docstring).
         if self._other_covers(other_source, stream_key, gap_start):
-            logger.info("cov_filter_suppress_immediate",
-                        source=source, reason=reason, stream=stream_key[2],
-                        gap_start=gap_start, gap_end=gap_end,
-                        backup_global=self._global_max_received.get("backup", 0))
             writer_metrics.gap_envelopes_suppressed_total.labels(
                 source=source, reason=reason,
             ).inc()
@@ -366,10 +369,6 @@ class CoverageFilter:
             # Preserve first_seen so grace period counts from original arrival
             writer_metrics.gap_coalesced_total.labels(source=source).inc()
         else:
-            logger.info("cov_filter_park",
-                        source=source, reason=reason, stream=stream_key[2],
-                        gap_start=gap_start, gap_end=gap_end,
-                        backup_global=self._global_max_received.get("backup", 0))
             self._pending[key] = (envelope, time.monotonic())
 
         writer_metrics.gap_pending_size.set(len(self._pending))
@@ -408,13 +407,6 @@ class CoverageFilter:
                 to_remove.append(key)
         for key in to_remove:
             del self._pending[key]
-        if expired:
-            for g in expired:
-                logger.info("cov_filter_expire_to_disk",
-                            reason=g.get("reason"), stream=g.get("stream"),
-                            gap_start=g.get("gap_start_ts"),
-                            gap_end=g.get("gap_end_ts"),
-                            backup_global=self._global_max_received.get("backup", 0))
         if to_remove:
             from src.writer import metrics as writer_metrics
             writer_metrics.gap_pending_size.set(len(self._pending))
