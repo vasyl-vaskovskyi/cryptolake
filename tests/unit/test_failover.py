@@ -265,40 +265,6 @@ class TestSwitchbackFiltering:
         assert fm._switchback_filtering[("binance", "btcusdt", "depth")] is True
 
 
-class TestFailoverGapEnvelope:
-    def test_no_gap_when_backup_key_is_contiguous(self):
-        fm = FailoverManager(brokers=["localhost:9092"], primary_topics=["binance.trades"])
-        fm._last_key[("binance", "btcusdt", "trades")] = 500
-        fm._last_received[("binance", "btcusdt", "trades")] = 1000_000_000_000_000_000
-        gap = fm.check_failover_gap(
-            stream_key=("binance", "btcusdt", "trades"),
-            first_backup_key=501, first_backup_received_at=1000_000_005_000_000_000,
-        )
-        assert gap is None
-
-    def test_gap_when_backup_key_skips(self):
-        fm = FailoverManager(brokers=["localhost:9092"], primary_topics=["binance.trades"])
-        fm._last_key[("binance", "btcusdt", "trades")] = 500
-        fm._last_received[("binance", "btcusdt", "trades")] = 1000_000_000_000_000_000
-        gap = fm.check_failover_gap(
-            stream_key=("binance", "btcusdt", "trades"),
-            first_backup_key=510, first_backup_received_at=1000_000_005_000_000_000,
-        )
-        assert gap is not None
-        assert gap["type"] == "gap"
-        assert gap["reason"] == "restart_gap"
-        assert gap["gap_start_ts"] == 1000_000_000_000_000_000
-        assert gap["gap_end_ts"] == 1000_000_005_000_000_000
-
-    def test_gap_when_no_last_key_for_stream(self):
-        fm = FailoverManager(brokers=["localhost:9092"], primary_topics=["binance.trades"])
-        gap = fm.check_failover_gap(
-            stream_key=("binance", "btcusdt", "trades"),
-            first_backup_key=1, first_backup_received_at=1000_000_000_000_000_000,
-        )
-        assert gap is None
-
-
 class TestFailoverCleanup:
     @patch("src.writer.failover.KafkaConsumer")
     def test_cleanup_closes_active_backup_consumer(self, MockConsumer):
@@ -634,42 +600,6 @@ class TestCoverageFilterSweepExpired:
         assert len(expired) == 1
         assert expired[0]["gap_start_ts"] == 1000
         assert cf.pending_size == 1  # the fresh one remains
-
-
-class TestCoverageFilterAssertSourceAlive:
-    def test_assert_source_alive_advances_global_max(self):
-        cf = CoverageFilter(grace_period_seconds=10.0)
-        cf.assert_source_alive("backup", 5000)
-        assert cf._global_max_received.get("backup", 0) == 5000
-
-    def test_assert_source_alive_does_not_regress(self):
-        cf = CoverageFilter(grace_period_seconds=10.0)
-        cf.assert_source_alive("backup", 5000)
-        cf.assert_source_alive("backup", 3000)  # older timestamp
-        assert cf._global_max_received.get("backup", 0) == 5000
-
-    def test_assert_source_alive_enables_gap_suppression(self):
-        cf = CoverageFilter(grace_period_seconds=10.0)
-        # Primary gap at gap_start=1000
-        cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
-        assert cf.pending_size == 1  # parked, no backup coverage yet
-        # Assert backup was alive at 5000 (after gap_start)
-        cf.assert_source_alive("backup", 5000)
-        # Next handle_data call will sweep — but assert_source_alive alone
-        # does not sweep. Need to trigger a sweep via handle_data or check
-        # that handle_gap immediately suppresses if called again.
-        # Calling handle_data with backup data at 5000 sweeps the pending gap.
-        cf.handle_data("backup", _data_env(received_at=5000))
-        assert cf.pending_size == 0
-
-    def test_assert_source_alive_allows_immediate_gap_suppression(self):
-        # If assert_source_alive is called BEFORE handle_gap, the gap is
-        # immediately suppressed (not parked).
-        cf = CoverageFilter(grace_period_seconds=10.0)
-        cf.assert_source_alive("backup", 5000)
-        handled = cf.handle_gap("primary", _gap_env(gap_start=1000, gap_end=2000))
-        assert handled is True
-        assert cf.pending_size == 0
 
 
 class TestFailoverManagerWithCoverageFilter:

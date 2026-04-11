@@ -748,25 +748,35 @@ class WriterConsumer:
             stream=envelope.get("stream", "")).inc()
 
     async def _handle_gap_detection(self, envelope: dict, msg) -> None:
-        """Run recovery gap check and runtime session change detection."""
+        """Run recovery gap check and runtime session change detection.
+
+        Both gap types are routed through the CoverageFilter so that backup
+        coverage can suppress them if backup had data for the gap window.
+        If the filter is disabled or the gap isn't covered, the gap is
+        either written immediately (disabled) or parked in the pending
+        queue (enabled) to be released after the grace period.
+        """
         msg_topic = msg.topic()
         msg_partition = msg.partition()
 
-        recovery_gap = self._check_recovery_gap(envelope)
-        if recovery_gap is not None:
-            recovery_gap = add_broker_coordinates(
-                recovery_gap, topic=msg_topic, partition=msg_partition, offset=-1)
-            gap_results = self.buffer_manager.add(recovery_gap)
+        async def _route_gap(gap_env: dict) -> None:
+            gap_env = add_broker_coordinates(
+                gap_env, topic=msg_topic, partition=msg_partition, offset=-1)
+            if self._coverage_filter.handle_gap("primary", gap_env):
+                # Suppressed (covered) or parked in pending queue
+                return
+            # Filter disabled — write directly
+            gap_results = self.buffer_manager.add(gap_env)
             if gap_results:
                 await self._write_and_save(gap_results)
 
+        recovery_gap = self._check_recovery_gap(envelope)
+        if recovery_gap is not None:
+            await _route_gap(recovery_gap)
+
         gap_envelope = await self._check_session_change(envelope)
         if gap_envelope is not None:
-            gap_envelope = add_broker_coordinates(
-                gap_envelope, topic=msg_topic, partition=msg_partition, offset=-1)
-            gap_results = self.buffer_manager.add(gap_envelope)
-            if gap_results:
-                await self._write_and_save(gap_results)
+            await _route_gap(gap_envelope)
 
     async def _handle_rotation_and_buffer(
         self, envelope: dict, active_hours: dict[tuple[str, str, str], tuple[int, str]],
@@ -871,32 +881,9 @@ class WriterConsumer:
                                 if env_type != "gap":
                                     self._coverage_filter.handle_data("backup", envelope)
 
-                                # Check for gap on first backup record per stream
-                                if env_type == "data":
-                                    stream_key = (envelope.get("exchange", ""),
-                                                  envelope.get("symbol", ""),
-                                                  envelope.get("stream", ""))
-                                    nk = extract_natural_key(envelope)
-                                    if stream_key not in self._failover._gap_checked and nk is not None:
-                                        self._failover._gap_checked.add(stream_key)
-                                        gap = self._failover.check_failover_gap(
-                                            stream_key=stream_key,
-                                            first_backup_key=nk,
-                                            first_backup_received_at=envelope.get("received_at", 0),
-                                        )
-                                        if gap is not None:
-                                            gap = add_broker_coordinates(
-                                                gap, topic=backup_msg.topic(),
-                                                partition=backup_msg.partition(), offset=-1)
-                                            gap_results = self.buffer_manager.add(gap)
-                                            if gap_results:
-                                                await self._write_and_save(gap_results)
-
                                 self._count_consumed(envelope)
                                 self._failover.track_record(envelope)
                                 writer_metrics.failover_records_total.inc()
-                                if env_type == "data":
-                                    self._failover._backup_data_seen = True
                                 # NOTE: skip _check_session_change for backup records --
                                 # backup collector has its own session ID which would
                                 # incorrectly trigger session change detection.
@@ -910,18 +897,10 @@ class WriterConsumer:
                         probe_type = envelope.get("type")
                         if probe_type == "gap":
                             # A primary gap envelope during failover is NOT a sign the
-                            # primary is healthy — it means the primary had an outage
-                            # while backup was covering. Route it through the coverage
-                            # filter so backup coverage can suppress it, and do NOT
-                            # trigger switchback.
-                            #
-                            # Assert backup was alive if we have evidence it's
-                            # producing data. Without this guard, a stopped backup
-                            # would be falsely marked alive, suppressing real gaps.
-                            if self._failover._backup_data_seen:
-                                self._coverage_filter.assert_source_alive(
-                                    "backup", time.time_ns()
-                                )
+                            # primary is healthy — do NOT trigger switchback. Route it
+                            # through the coverage filter which will suppress it if
+                            # backup data has covered the window, or park it for the
+                            # grace period otherwise.
                             if not self._coverage_filter.handle_gap("primary", envelope):
                                 # Filter disabled — write it as usual
                                 if not self._should_skip_recovery_dedup(envelope, primary_msg):
@@ -929,16 +908,22 @@ class WriterConsumer:
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
                         else:
                             # A primary DATA envelope — the primary is healthy again.
+                            # Session-change detection will fire on the next data envelope
+                            # via _handle_gap_detection and its restart_gap will be routed
+                            # through the CoverageFilter. If backup covered the gap, the
+                            # filter suppresses it; otherwise it gets written after the
+                            # grace period. No special suppression needed here.
                             self._failover.begin_switchback()
                             if not self._failover.check_switchback_filter(envelope):
                                 if not self._should_skip_recovery_dedup(envelope, primary_msg):
                                     self._count_consumed(envelope)
                                     self._failover.track_record(envelope)
                                     self._failover.reset_silence_timer()
+                                    # Run gap detection now — it will emit a classified
+                                    # restart_gap if the session changed. The filter
+                                    # decides whether it survives to disk.
+                                    await self._handle_gap_detection(envelope, primary_msg)
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
-                            if self._failover._backup_data_seen:
-                                for sk in list(self._failover._last_key):
-                                    self._recovery_gap_emitted.add(sk)
                             self._failover.deactivate()
 
             # Sweep coverage-filter pending gaps whose grace period expired.

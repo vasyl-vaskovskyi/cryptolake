@@ -71,7 +71,6 @@ class FailoverManager:
 
         self._switchback_filtering: dict[tuple[str, str, str], bool] = {}
         self._gap_checked: set[tuple[str, str, str]] = set()
-        self._backup_data_seen: bool = False
 
     @property
     def is_active(self) -> bool:
@@ -119,7 +118,6 @@ class FailoverManager:
         self._is_active = True
         self._switchback_filtering = {}
         self._gap_checked = set()
-        self._backup_data_seen = False
         writer_metrics.failover_active.set(1)
         writer_metrics.failover_total.inc()
 
@@ -226,31 +224,6 @@ class FailoverManager:
         self._switchback_filtering[stream_key] = False
         return False
 
-    def check_failover_gap(
-        self,
-        stream_key: tuple[str, str, str],
-        first_backup_key: int,
-        first_backup_received_at: int,
-    ) -> dict | None:
-        last_key = self._last_key.get(stream_key)
-        if last_key is None:
-            return None
-
-        last_received = self._last_received.get(stream_key, 0)
-
-        if first_backup_key <= last_key + 1:
-            return None
-
-        exchange, symbol, stream = stream_key
-        return create_gap_envelope(
-            exchange=exchange, symbol=symbol, stream=stream,
-            collector_session_id="", session_seq=-1,
-            gap_start_ts=last_received, gap_end_ts=first_backup_received_at,
-            reason="restart_gap", planned=False,
-            detail=f"Failover gap: primary key {last_key} -> backup key {first_backup_key}",
-            received_at=first_backup_received_at,
-        )
-
     def cleanup(self) -> None:
         if self._backup_consumer is not None:
             try:
@@ -312,18 +285,6 @@ class CoverageFilter:
         per_stream = self._last_received.get(stream_key, {}).get(other_source, 0)
         global_max = self._global_max_received.get(other_source, 0)
         return per_stream > gap_start or global_max > gap_start
-
-    def assert_source_alive(self, source: str, at_ns: int) -> None:
-        """Assert that a source was alive (collecting) at a given nanosecond timestamp.
-
-        Advances the global max for this source to at_ns if at_ns is more recent
-        than the current global max. Use this when external knowledge (e.g., active
-        failover) confirms a source was collecting even if no Kafka messages have
-        arrived to update the coverage state.
-        """
-        current = self._global_max_received.get(source, 0)
-        if at_ns > current:
-            self._global_max_received[source] = at_ns
 
     def handle_data(self, source: str, envelope: dict) -> None:
         """Record a data envelope's arrival and drop any newly-covered pending gaps."""
