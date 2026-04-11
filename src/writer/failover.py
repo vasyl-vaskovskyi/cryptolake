@@ -6,7 +6,7 @@ from typing import Any
 
 import orjson
 import structlog
-from confluent_kafka import Consumer as KafkaConsumer, TopicPartition
+from confluent_kafka import Consumer as KafkaConsumer
 
 from src.common.envelope import create_gap_envelope
 from src.writer import metrics as writer_metrics
@@ -138,34 +138,12 @@ class FailoverManager:
 
         self._backup_consumer = consumer
 
-        # Subscribe to backup topics. After the rebalance completes (first
-        # poll), we seek each assigned partition back so the writer reads
-        # backup data that overlaps with primary's last delivered data. This
-        # preserves depth pu-chain continuity in the archive.
         try:
             consumer.subscribe(self._backup_topics)
-            # Trigger rebalance so partitions get assigned
-            consumer.poll(timeout=2.0)
-            assignment = consumer.assignment()
-            for tp in assignment:
-                try:
-                    low, high = consumer.get_watermark_offsets(
-                        tp, timeout=5, cached=False,
-                    )
-                    # Seek back ~2000 messages (covers ~20s at typical rates)
-                    target = max(low, high - 2000)
-                    consumer.seek(TopicPartition(tp.topic, tp.partition, target))
-                except Exception as exc:
-                    logger.warning("failover_seek_back_failed",
-                                   topic=tp.topic, partition=tp.partition, error=str(exc))
-            logger.info("failover_activated",
-                        backup_topics=self._backup_topics,
-                        partitions=len(assignment))
         except Exception as exc:
             logger.error("failover_subscribe_failed", error=str(exc))
-            self._is_active = False
-            writer_metrics.failover_active.set(0)
-            return
+
+        logger.info("failover_activated", backup_topics=self._backup_topics)
 
     def deactivate(self) -> None:
         if not self._is_active:

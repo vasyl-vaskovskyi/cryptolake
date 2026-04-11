@@ -170,6 +170,7 @@ class TestFailoverActivate:
         mock_topic_md.partitions = {0: MagicMock()}
         mock_md.topics = {"backup.binance.trades": mock_topic_md}
         mock_instance.list_topics.return_value = mock_md
+        mock_instance.get_watermark_offsets.return_value = (0, 10000)
 
         fm = FailoverManager(brokers=["localhost:9092"], primary_topics=["binance.trades"])
         fm._last_received[("binance", "btcusdt", "trades")] = 1000_000_000_000_000_000
