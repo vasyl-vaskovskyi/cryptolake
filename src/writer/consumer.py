@@ -88,11 +88,6 @@ class WriterConsumer:
         # Streams where recovery emitted a gap — suppress the first runtime
         # session change detection (it would duplicate the recovery gap).
         self._recovery_gap_emitted: set[tuple[str, str, str]] = set()
-        # Streams that need their next session-change gap emitted DIRECTLY
-        # (bypassing the coverage filter). Populated at failover switchback
-        # so restart_gap records are written even when the filter would
-        # consider the window "covered" — needed for verify pu-chain tolerance.
-        self._switchback_bypass_filter: set[tuple[str, str, str]] = set()
         # Boot ID and component state for classification
         self._current_boot_id: str = get_host_boot_id()
         self._previous_writer_state: ComponentRuntimeState | None = None
@@ -752,41 +747,32 @@ class WriterConsumer:
             symbol=envelope.get("symbol", ""),
             stream=envelope.get("stream", "")).inc()
 
-    async def _handle_gap_detection(self, envelope: dict, msg, bypass_filter: bool = False) -> None:
+    async def _handle_gap_detection(self, envelope: dict, msg) -> None:
         """Run recovery gap check and runtime session change detection.
 
-        Both gap types are routed through the CoverageFilter so that backup
-        coverage can suppress them if backup had data for the gap window.
-        If the filter is disabled or the gap isn't covered, the gap is
-        either written immediately (disabled) or parked in the pending
-        queue (enabled) to be released after the grace period.
-
-        bypass_filter: when True, gaps go straight to the buffer without
-        consulting the coverage filter. Used at failover switchback where
-        the filter's coverage check would incorrectly suppress restart_gaps
-        that are needed to cover potential pu-chain breaks at the transition.
+        Writer-emitted gaps (recovery_gap, session_change) are written
+        DIRECTLY to the buffer — they represent state transitions observed
+        by the writer, not collector claims about lost data. The CoverageFilter
+        is only for collector-emitted gap envelopes from the primary topic.
         """
         msg_topic = msg.topic()
         msg_partition = msg.partition()
 
-        async def _route_gap(gap_env: dict) -> None:
-            gap_env = add_broker_coordinates(
-                gap_env, topic=msg_topic, partition=msg_partition, offset=-1)
-            if not bypass_filter and self._coverage_filter.handle_gap("primary", gap_env):
-                # Suppressed (covered) or parked in pending queue
-                return
-            # Filter disabled, bypass requested, or not covered — write directly
-            gap_results = self.buffer_manager.add(gap_env)
+        recovery_gap = self._check_recovery_gap(envelope)
+        if recovery_gap is not None:
+            recovery_gap = add_broker_coordinates(
+                recovery_gap, topic=msg_topic, partition=msg_partition, offset=-1)
+            gap_results = self.buffer_manager.add(recovery_gap)
             if gap_results:
                 await self._write_and_save(gap_results)
 
-        recovery_gap = self._check_recovery_gap(envelope)
-        if recovery_gap is not None:
-            await _route_gap(recovery_gap)
-
         gap_envelope = await self._check_session_change(envelope)
         if gap_envelope is not None:
-            await _route_gap(gap_envelope)
+            gap_envelope = add_broker_coordinates(
+                gap_envelope, topic=msg_topic, partition=msg_partition, offset=-1)
+            gap_results = self.buffer_manager.add(gap_envelope)
+            if gap_results:
+                await self._write_and_save(gap_results)
 
     async def _handle_rotation_and_buffer(
         self, envelope: dict, active_hours: dict[tuple[str, str, str], tuple[int, str]],
@@ -971,56 +957,10 @@ class WriterConsumer:
                                     self._count_consumed(envelope)
                                     self._failover.track_record(envelope)
                                     self._failover.reset_silence_timer()
-                                    # Emit session-change restart_gap DIRECTLY
-                                    # (bypassing the filter). At switchback, there
-                                    # may be a physical pu-chain gap between
-                                    # backup's last consumed diff and primary's
-                                    # depth_resync seed, even though the filter
-                                    # would consider the window "covered". The
-                                    # direct restart_gap ensures verify tolerates
-                                    # the small break at the failover boundary.
-                                    # Emit synthetic restart_gap envelopes for
-                                    # EVERY tracked stream immediately. Don't
-                                    # wait for each stream's first post-switchback
-                                    # envelope — depth streams may be in pu-chain
-                                    # recovery and not produce data for seconds,
-                                    # during which the test may have already
-                                    # finished and verify would see a pu-chain
-                                    # break with no gap to tolerate.
-                                    new_session_id = envelope.get("collector_session_id", "")
-                                    new_received_at = envelope.get("received_at", 0)
-                                    for sk, (old_session, old_received) in list(self._last_session.items()):
-                                        if old_session == new_session_id:
-                                            continue  # no session change
-                                        exchange, symbol, stream = sk
-                                        synthetic_gap = create_gap_envelope(
-                                            exchange=exchange, symbol=symbol, stream=stream,
-                                            collector_session_id=new_session_id,
-                                            session_seq=-1,
-                                            gap_start_ts=old_received,
-                                            gap_end_ts=new_received_at,
-                                            reason="restart_gap",
-                                            detail=f"Failover switchback: {old_session} -> {new_session_id}",
-                                            component="collector",
-                                            cause="unclean_exit",
-                                            planned=False,
-                                            classifier="failover_switchback",
-                                        )
-                                        synthetic_gap = add_broker_coordinates(
-                                            synthetic_gap,
-                                            topic=primary_msg.topic(),
-                                            partition=primary_msg.partition(),
-                                            offset=-1,
-                                        )
-                                        sg_results = self.buffer_manager.add(synthetic_gap)
-                                        if sg_results:
-                                            await self._write_and_save(sg_results)
-                                        # Update _last_session so the runtime
-                                        # gap detection doesn't fire again
-                                        # for this stream's first envelope.
-                                        self._last_session[sk] = (new_session_id, new_received_at)
-                                    logger.info("switchback_synthetic_gaps_emitted",
-                                                streams=[sk[2] for sk in self._last_session.keys()])
+                                    # Run gap detection — _check_session_change
+                                    # will fire with proper classifier + DB lookup.
+                                    # Writes directly to buffer (not through filter).
+                                    await self._handle_gap_detection(envelope, primary_msg)
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
                             self._failover.deactivate()
 
