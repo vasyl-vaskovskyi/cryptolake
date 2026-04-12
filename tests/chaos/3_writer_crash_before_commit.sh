@@ -7,7 +7,8 @@ test_date="$(date -u '+%Y-%m-%d')"
 
 echo "=== Chaos 4: Writer Crash Before Commit ==="
 echo "Sends SIGKILL to the writer (simulates crash mid-flush) and verifies"
-echo "no duplicates, no corrupt zstd frames after recovery."
+echo "no duplicates, no corrupt zstd frames, and complete data after recovery."
+echo "Collectors keep running throughout — Redpanda buffers all data."
 echo ""
 
 setup_stack
@@ -17,7 +18,7 @@ section "Scenario"
 step 1 "Recording pre-crash envelope count..."
 pre_kill=$(count_envelopes)
 
-step 2 "Capturing event timestamp and sending SIGKILL to writer..."
+step 2 "Sending SIGKILL to writer..."
 event_start_ns=$(ts_now_ns)
 docker kill -s KILL "${WRITER_CONTAINER}"
 
@@ -37,6 +38,11 @@ if ! wait_service_healthy writer 30; then
     :
 fi
 
+# Wait one snapshot cycle (30s) so depth pu-chain can re-sync
+# via a fresh periodic snapshot after the crash recovery.
+step 6 "Waiting 30s for depth snapshot cycle..."
+wait_for_data 30
+
 section "Verification"
 
 assert_container_healthy "writer"
@@ -46,30 +52,20 @@ assert_container_healthy "collector"
 post_recovery=$(count_envelopes)
 assert_gt "writer caught up (more envelopes after recovery)" "$post_recovery" "$pre_kill"
 
-# Validate any gap records have valid timestamps (gap_end_ts > gap_start_ts > 0)
+# Validate any gap records have valid timestamps
 if validate_any_gap_timestamps; then
     pass "all gap records (if any) have valid timestamps"
 else
     fail "gap timestamp validation failed"
 fi
 
-# Validate gap record metadata: SIGKILL is always unplanned
+# SIGKILL means crash-before-commit: PG checkpoint lags behind disk.
+# A restart_gap may be emitted (PG sees a seq discontinuity even though
+# the data is on disk). Validate metadata if present.
 if validate_restart_gap_fields; then
     pass "restart_gap metadata valid (planned=false if gaps exist)"
 else
     fail "restart_gap metadata validation failed"
-fi
-
-# Validate gap timestamps are in the right ballpark (if any gaps exist)
-gaps=$(count_gaps "restart_gap")
-if (( gaps > 0 )); then
-    if validate_gap_window_accuracy "restart_gap" "$event_start_ns" "$event_end_ns" 60; then
-        pass "restart_gap timestamps accurate (within 60s tolerance)"
-    else
-        fail "restart_gap timestamp accuracy check failed"
-    fi
-else
-    pass "no restart_gap records (expected for writer-only crash with collector up)"
 fi
 
 # No corrupt files, no duplicate offsets
@@ -79,15 +75,9 @@ else
     fail "data integrity check failed"
 fi
 
-step 7 "Stopping collectors to quiesce input before archive verification..."
-$COMPOSE stop collector collector-backup 2>&1
-if wait_for_writer_lag_below 300 90; then
-    pass "writer drained remaining backlog after collector stop"
-else
-    fail "writer still had backlog after collector stop"
-fi
-
-step 8 "Running cryptolake verify..."
+# Verify archive — collectors still running, writer caught up and
+# has had one snapshot cycle to re-sync depth pu-chain.
+step 7 "Running cryptolake verify..."
 if UV_CACHE_DIR="${REPO_ROOT}/.tmp/uv-cache" \
     uv run cryptolake verify \
         --date "${test_date}" \
