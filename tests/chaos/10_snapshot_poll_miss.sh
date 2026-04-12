@@ -37,6 +37,10 @@ echo "   Restored HTTPS connections"
 step 4 "Waiting 45s for next successful poll cycle..."
 sleep 45
 
+echo "--- DEBUG ---"
+$COMPOSE logs writer --no-log-prefix 2>/dev/null | grep -iE "cov_filter_handle_gap|failover_activ" | tail -30 || true
+echo "--- END DEBUG ---"
+
 section "Verification"
 
 assert_container_healthy "collector"

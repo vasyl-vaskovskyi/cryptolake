@@ -88,6 +88,11 @@ class WriterConsumer:
         # Streams where recovery emitted a gap — suppress the first runtime
         # session change detection (it would duplicate the recovery gap).
         self._recovery_gap_emitted: set[tuple[str, str, str]] = set()
+        # Streams that need their next session-change gap emitted DIRECTLY
+        # (bypassing the coverage filter). Populated at failover switchback
+        # so restart_gap records are written even when the filter would
+        # consider the window "covered" — needed for verify pu-chain tolerance.
+        self._switchback_bypass_filter: set[tuple[str, str, str]] = set()
         # Boot ID and component state for classification
         self._current_boot_id: str = get_host_boot_id()
         self._previous_writer_state: ComponentRuntimeState | None = None
@@ -747,7 +752,7 @@ class WriterConsumer:
             symbol=envelope.get("symbol", ""),
             stream=envelope.get("stream", "")).inc()
 
-    async def _handle_gap_detection(self, envelope: dict, msg) -> None:
+    async def _handle_gap_detection(self, envelope: dict, msg, bypass_filter: bool = False) -> None:
         """Run recovery gap check and runtime session change detection.
 
         Both gap types are routed through the CoverageFilter so that backup
@@ -755,6 +760,11 @@ class WriterConsumer:
         If the filter is disabled or the gap isn't covered, the gap is
         either written immediately (disabled) or parked in the pending
         queue (enabled) to be released after the grace period.
+
+        bypass_filter: when True, gaps go straight to the buffer without
+        consulting the coverage filter. Used at failover switchback where
+        the filter's coverage check would incorrectly suppress restart_gaps
+        that are needed to cover potential pu-chain breaks at the transition.
         """
         msg_topic = msg.topic()
         msg_partition = msg.partition()
@@ -762,10 +772,10 @@ class WriterConsumer:
         async def _route_gap(gap_env: dict) -> None:
             gap_env = add_broker_coordinates(
                 gap_env, topic=msg_topic, partition=msg_partition, offset=-1)
-            if self._coverage_filter.handle_gap("primary", gap_env):
+            if not bypass_filter and self._coverage_filter.handle_gap("primary", gap_env):
                 # Suppressed (covered) or parked in pending queue
                 return
-            # Filter disabled — write directly
+            # Filter disabled, bypass requested, or not covered — write directly
             gap_results = self.buffer_manager.add(gap_env)
             if gap_results:
                 await self._write_and_save(gap_results)
@@ -908,21 +918,109 @@ class WriterConsumer:
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
                         else:
                             # A primary DATA envelope — the primary is healthy again.
-                            # Session-change detection will fire on the next data envelope
-                            # via _handle_gap_detection and its restart_gap will be routed
-                            # through the CoverageFilter. If backup covered the gap, the
-                            # filter suppresses it; otherwise it gets written after the
-                            # grace period. No special suppression needed here.
+                            # BEFORE switching back, drain backup until backup's last
+                            # received_at >= primary's new received_at. This ensures
+                            # the archive has continuous data across the failover
+                            # boundary — without this, primary's depth_resync seeds
+                            # from backup topic's HW while the writer's last consumed
+                            # backup is behind, creating a pu-chain break.
+                            primary_restart_ts = envelope.get("received_at", 0)
+                            drain_deadline = time.monotonic() + 10.0  # 10s safety budget
+                            consecutive_empty = 0
+                            caught_up = False
+                            while (
+                                self._failover.backup_consumer is not None
+                                and time.monotonic() < drain_deadline
+                                and consecutive_empty < 10
+                            ):
+                                bkup = await loop.run_in_executor(
+                                    None, self._failover.backup_consumer.poll, 0.1,
+                                )
+                                if bkup is None or bkup.error():
+                                    consecutive_empty += 1
+                                    # If already caught up AND backup is going idle,
+                                    # we can exit early.
+                                    if caught_up and consecutive_empty >= 3:
+                                        break
+                                    continue
+                                consecutive_empty = 0
+                                bkup_env = self._deserialize_backup_msg(bkup)
+                                if bkup_env is None or self._failover.should_filter(bkup_env):
+                                    continue
+                                bkup_type = bkup_env.get("type")
+                                if bkup_type == "gap":
+                                    if self._coverage_filter.handle_gap("backup", bkup_env):
+                                        continue
+                                else:
+                                    self._coverage_filter.handle_data("backup", bkup_env)
+                                self._count_consumed(bkup_env)
+                                self._failover.track_record(bkup_env)
+                                writer_metrics.failover_records_total.inc()
+                                await self._handle_rotation_and_buffer(bkup_env, active_hours)
+                                if bkup_env.get("received_at", 0) >= primary_restart_ts:
+                                    caught_up = True
+                                    # Don't break immediately — keep reading a bit
+                                    # more to overshoot the exact timestamp and
+                                    # cover primary's depth_resync seed point.
+
+                            # Now switchback safely — backup is caught up (or drain
+                            # gave up after 10s / consecutive empty polls).
                             self._failover.begin_switchback()
                             if not self._failover.check_switchback_filter(envelope):
                                 if not self._should_skip_recovery_dedup(envelope, primary_msg):
                                     self._count_consumed(envelope)
                                     self._failover.track_record(envelope)
                                     self._failover.reset_silence_timer()
-                                    # Run gap detection now — it will emit a classified
-                                    # restart_gap if the session changed. The filter
-                                    # decides whether it survives to disk.
-                                    await self._handle_gap_detection(envelope, primary_msg)
+                                    # Emit session-change restart_gap DIRECTLY
+                                    # (bypassing the filter). At switchback, there
+                                    # may be a physical pu-chain gap between
+                                    # backup's last consumed diff and primary's
+                                    # depth_resync seed, even though the filter
+                                    # would consider the window "covered". The
+                                    # direct restart_gap ensures verify tolerates
+                                    # the small break at the failover boundary.
+                                    # Emit synthetic restart_gap envelopes for
+                                    # EVERY tracked stream immediately. Don't
+                                    # wait for each stream's first post-switchback
+                                    # envelope — depth streams may be in pu-chain
+                                    # recovery and not produce data for seconds,
+                                    # during which the test may have already
+                                    # finished and verify would see a pu-chain
+                                    # break with no gap to tolerate.
+                                    new_session_id = envelope.get("collector_session_id", "")
+                                    new_received_at = envelope.get("received_at", 0)
+                                    for sk, (old_session, old_received) in list(self._last_session.items()):
+                                        if old_session == new_session_id:
+                                            continue  # no session change
+                                        exchange, symbol, stream = sk
+                                        synthetic_gap = create_gap_envelope(
+                                            exchange=exchange, symbol=symbol, stream=stream,
+                                            collector_session_id=new_session_id,
+                                            session_seq=-1,
+                                            gap_start_ts=old_received,
+                                            gap_end_ts=new_received_at,
+                                            reason="restart_gap",
+                                            detail=f"Failover switchback: {old_session} -> {new_session_id}",
+                                            component="collector",
+                                            cause="unclean_exit",
+                                            planned=False,
+                                            classifier="failover_switchback",
+                                        )
+                                        synthetic_gap = add_broker_coordinates(
+                                            synthetic_gap,
+                                            topic=primary_msg.topic(),
+                                            partition=primary_msg.partition(),
+                                            offset=-1,
+                                        )
+                                        sg_results = self.buffer_manager.add(synthetic_gap)
+                                        if sg_results:
+                                            await self._write_and_save(sg_results)
+                                        # Update _last_session so the runtime
+                                        # gap detection doesn't fire again
+                                        # for this stream's first envelope.
+                                        self._last_session[sk] = (new_session_id, new_received_at)
+                                    logger.info("switchback_synthetic_gaps_emitted",
+                                                streams=[sk[2] for sk in self._last_session.keys()])
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
                             self._failover.deactivate()
 

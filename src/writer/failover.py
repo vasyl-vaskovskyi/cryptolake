@@ -129,6 +129,13 @@ class FailoverManager:
                 "enable.auto.commit": False,
                 "session.timeout.ms": 10000,
                 "max.poll.interval.ms": 30000,
+                # Refresh topic metadata often so the consumer notices new
+                # messages appearing at partition HWs. Default is 300000ms
+                # (5 min) which lets backup consumer lag badly.
+                "topic.metadata.refresh.interval.ms": 1000,
+                # Disable broker-side prefetch throttling so the consumer
+                # keeps fetching aggressively.
+                "fetch.wait.max.ms": 100,
             })
         except Exception as exc:
             logger.error("failover_consumer_creation_failed", error=str(exc))
@@ -328,6 +335,12 @@ class CoverageFilter:
         # Suppress immediately if the other source has data received after the gap
         # started — this means the other source was collecting during the outage.
         # Uses both per-stream and global coverage (see _other_covers docstring).
+        logger.info("cov_filter_handle_gap",
+                    source=source, reason=reason, stream=stream_key[2],
+                    gap_start=gap_start,
+                    backup_global=self._global_max_received.get("backup", 0),
+                    primary_global=self._global_max_received.get("primary", 0),
+                    covers=self._other_covers(other_source, stream_key, gap_start))
         if self._other_covers(other_source, stream_key, gap_start):
             writer_metrics.gap_envelopes_suppressed_total.labels(
                 source=source, reason=reason,
