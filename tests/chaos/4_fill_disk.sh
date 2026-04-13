@@ -128,7 +128,13 @@ $COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" "${DISK_DATA_DI
     || docker run --rm -v "$(docker volume ls -q | grep disk_test_data | head -1)":/data/disk_test alpine \
            rm -f /data/disk_test/fill_disk.tmp /data/disk_test/fill_disk_last.tmp 2>/dev/null || true
 
-step 8 "Restarting writer for recovery..."
+step 8 "Waiting 35s for writer to flush write_error gaps now that space is free..."
+# The writer generated write_error gaps in memory during ENOSPC but couldn't
+# flush them while the disk was full. Give it one full flush cycle (30s default)
+# to write them to disk before restarting.
+sleep 35
+
+step 9 "Restarting writer for recovery..."
 # Force-restart so _recover_files truncates corrupt partial frames back
 # to PG-recorded byte sizes.  "up -d" is a no-op for a running container.
 $COMPOSE_DISK stop writer 2>&1
