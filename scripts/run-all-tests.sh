@@ -115,6 +115,12 @@ if $CHAOS; then
             done
         fi
 
+        COMPOSE_FILE="${REPO_ROOT}/docker-compose.test.yml"
+
+        # Pre-suite cleanup: ensure no leftover test resources from a prior run
+        echo "Cleaning stale Docker resources from project cryptolake-test..."
+        docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
+
         for script in "${chaos_scripts[@]}"; do
             name="$(basename "$script" .sh)"
             echo ""
@@ -127,6 +133,9 @@ if $CHAOS; then
                 elapsed=$((SECONDS - start_ts))
                 record "chaos: ${name}" "FAIL" "${elapsed}s"
             fi
+            # Safety net: ensure all test containers/volumes/networks are gone
+            # before the next test, even if the test's own teardown was incomplete.
+            docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
         done
     fi
     echo ""
