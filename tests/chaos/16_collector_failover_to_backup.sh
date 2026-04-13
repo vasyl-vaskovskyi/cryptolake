@@ -5,7 +5,7 @@ trap teardown_stack EXIT
 
 test_date="$(date -u '+%Y-%m-%d')"
 
-echo "=== Chaos 17: Collector Failover to Backup ==="
+echo "=== Chaos 16: Collector Failover to Backup ==="
 echo "Verifies that when the primary collector dies, the writer switches"
 echo "to consuming from backup.* topics in real time, then switches back"
 echo "when the primary resumes — with zero duplicates and seamless data."
@@ -13,9 +13,8 @@ echo ""
 
 setup_stack
 
-section "Start backup collector"
-step 1 "Starting collector-backup service..."
-$COMPOSE up -d collector-backup 2>&1
+section "Verify backup collector"
+step 1 "Checking collector-backup is healthy (started by setup_stack)..."
 if wait_service_healthy collector-backup 60; then
     pass "collector-backup is healthy"
 else
@@ -114,7 +113,7 @@ fi
 
 step 11 "Stopping both collectors to quiesce input..."
 $COMPOSE stop collector collector-backup 2>&1
-if wait_for_writer_lag_below 300 90; then
+if wait_for_writer_lag_below 10 120; then
     pass "writer drained remaining backlog"
 else
     fail "writer still had backlog after collector stop"
