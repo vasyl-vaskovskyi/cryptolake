@@ -5,7 +5,7 @@ trap teardown_stack EXIT
 
 test_date="$(date -u '+%Y-%m-%d')"
 
-echo "=== Chaos 4: Writer Crash Before Commit ==="
+echo "=== Chaos 3: Writer Crash Before Commit ==="
 echo "Sends SIGKILL to the writer (simulates crash mid-flush) and verifies"
 echo "no duplicates, no corrupt zstd frames, and complete data after recovery."
 echo "Collectors keep running throughout — Redpanda buffers all data."
@@ -77,7 +77,15 @@ fi
 
 # Verify archive — collectors still running, writer caught up and
 # has had one snapshot cycle to re-sync depth pu-chain.
-step 7 "Running cryptolake verify..."
+step 7 "Stopping collectors and draining writer lag before verify..."
+$COMPOSE stop collector collector-backup 2>&1
+if wait_for_writer_lag_below 10 90; then
+    pass "writer drained remaining backlog"
+else
+    fail "writer still had backlog after collector stop"
+fi
+
+step 8 "Running cryptolake verify..."
 if UV_CACHE_DIR="${REPO_ROOT}/.tmp/uv-cache" \
     uv run cryptolake verify \
         --date "${test_date}" \
