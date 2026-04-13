@@ -40,6 +40,7 @@ else
 fi
 
 section "Verification"
+wait_service_healthy writer 60 || true
 assert_container_healthy "writer"
 assert_container_healthy "collector"
 
