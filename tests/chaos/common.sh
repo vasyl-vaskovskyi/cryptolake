@@ -81,8 +81,13 @@ setup_stack() {
     preflight_checks
     TEST_START="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     SECONDS=0
+    _TEARDOWN_DONE=false
     section "Setup"
     echo "  Start time: ${TEST_START}"
+    # Ensure clean state: kill leftovers from a previous test that may have
+    # crashed before its teardown completed.
+    echo "  Cleaning leftover containers/volumes/networks..."
+    $COMPOSE down -v --remove-orphans 2>/dev/null || true
     rm -rf "${TEST_DATA_DIR:?}/binance"
     $COMPOSE build --quiet 2>&1
     TEST_DURATION_SECONDS=600 $COMPOSE up -d 2>&1
@@ -106,7 +111,7 @@ wait_healthy() {
         attempts=$((attempts + 1))
         sleep 2
     done
-    echo "ERROR: timed out waiting for healthy services"
+    echo "ERROR: timed out waiting for healthy services after $((max_attempts * 2))s"
     $COMPOSE ps 2>&1
     return 1
 }
@@ -118,8 +123,11 @@ wait_for_data() {
 }
 
 teardown_stack() {
+    # Guard against double-teardown (explicit call + EXIT trap).
+    if [[ "${_TEARDOWN_DONE:-}" == "true" ]]; then return 0; fi
+    _TEARDOWN_DONE=true
     section "Teardown"
-    $COMPOSE down -v --rmi local 2>&1 || true
+    $COMPOSE down -v --remove-orphans --rmi local 2>&1 || true
     rm -rf "${TEST_DATA_DIR:?}/binance"
     echo "  Cleanup complete"
 }
@@ -156,7 +164,8 @@ total = 0
 for f in base.rglob('*.zst'):
     with open(f, 'rb') as fh:
         data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    total += data.strip().count(b'\n') + 1
+    stripped = data.strip()
+    total += stripped.count(b'\n') + 1 if stripped else 0
 print(total)
 "
 }
@@ -317,9 +326,9 @@ wait_service_healthy() {
         if $COMPOSE ps "$svc" --format '{{.Status}}' 2>/dev/null | grep -q "(healthy)"; then
             return 0
         fi
-        sleep 2
+        sleep 1
     done
-    echo "   WARNING: ${svc} not healthy after $((max_wait * 2))s"
+    echo "   WARNING: ${svc} not healthy after ${max_wait}s"
     return 1
 }
 
@@ -700,10 +709,11 @@ end_ns = ${end_ns}
 max_gap_ns = int(${max_gap_s}) * 1_000_000_000
 stream = '${stream}'
 errors = []
+# Collect all data timestamps across ALL files, then sort and check.
+all_ts = []
 for f in sorted(base.rglob(f'*/{stream}/*.zst')):
     with open(f, 'rb') as fh:
         data = zstd.ZstdDecompressor().stream_reader(fh).read()
-    prev_ts = None
     for line in data.strip().split(b'\n'):
         if not line:
             continue
@@ -711,15 +721,17 @@ for f in sorted(base.rglob(f'*/{stream}/*.zst')):
         if env.get('type') != 'data':
             continue
         ts = env.get('received_at', 0)
-        if ts < start_ns or ts > end_ns:
-            continue
-        if prev_ts is not None and (ts - prev_ts) > max_gap_ns:
-            errors.append(f'{f.name}: {(ts - prev_ts)/1e9:.1f}s gap between {prev_ts} and {ts}')
-        prev_ts = ts
+        if start_ns <= ts <= end_ns:
+            all_ts.append(ts)
+all_ts.sort()
+for i in range(1, len(all_ts)):
+    gap = all_ts[i] - all_ts[i - 1]
+    if gap > max_gap_ns:
+        errors.append(f'{gap / 1e9:.1f}s gap between ts={all_ts[i-1]} and ts={all_ts[i]}')
 if errors:
     for e in errors:
         print(f'ERROR: {e}')
     exit(1)
-print(f'OK: {stream} continuous within window (max interval <= {${max_gap_s}}s)')
+print(f'OK: {stream} continuous within window (max interval <= {${max_gap_s}}s, {len(all_ts)} samples)')
 "
 }
