@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-echo "=== Chaos 5: Fill Disk ==="
+echo "=== Chaos 4: Fill Disk ==="
 echo "Uses a size-limited tmpfs volume (150MB) for the writer's data dir"
 echo "to test real disk-pressure and ENOSPC handling."
 echo ""
@@ -39,9 +39,12 @@ YAML
 # Use both compose files — the override replaces the writer's volumes and env.
 COMPOSE_DISK="docker compose -f ${COMPOSE_FILE} -f ${DISK_OVERRIDE}"
 
+_DISK_CLEANUP_DONE=false
 cleanup() {
+    if $_DISK_CLEANUP_DONE; then return 0; fi
+    _DISK_CLEANUP_DONE=true
     section "Teardown"
-    $COMPOSE_DISK down -v --rmi local 2>&1 || true
+    $COMPOSE_DISK down -v --remove-orphans --rmi local 2>&1 || true
     rm -rf "${TEST_DATA_DIR:?}/binance"
     rm -f "${DISK_OVERRIDE}"
     echo "  Cleanup complete"
@@ -56,6 +59,11 @@ TEST_START="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 SECONDS=0
 section "Setup"
 echo "  Start time: ${TEST_START}"
+# Ensure clean state from any previous test
+echo "  Cleaning leftover containers/volumes/networks..."
+$COMPOSE_DISK down -v --remove-orphans 2>/dev/null || true
+$COMPOSE down -v --remove-orphans 2>/dev/null || true
+rm -rf "${TEST_DATA_DIR:?}/binance"
 $COMPOSE_DISK build --quiet 2>&1
 TEST_DURATION_SECONDS=600 $COMPOSE_DISK up -d 2>&1
 # Wait for health using the override compose
@@ -106,18 +114,18 @@ sleep 30
 step 6 "Checking writer status under disk pressure..."
 writer_status=$($COMPOSE_DISK ps writer --format '{{.Status}}' 2>/dev/null || echo "missing")
 echo "   Writer status: ${writer_status}"
+# The writer catches OSError in _write_to_disk(), truncates partial frames,
+# emits write_error gaps, and continues. It should survive ENOSPC.
 if echo "$writer_status" | grep -q "(healthy)"; then
-    pass "writer survived disk pressure (healthy)"
+    pass "writer survived disk pressure (healthy — OSError caught)"
 else
-    # Writer may have crashed (expected — no ENOSPC handling in _write_to_disk).
-    # This is acceptable; the important thing is recovery after freeing space.
-    pass "writer exited under disk pressure (expected — no ENOSPC handling)"
+    fail "writer crashed under disk pressure (should survive — _write_to_disk catches OSError)"
 fi
 
 step 7 "Cleaning up fill files and freeing space..."
 # If the writer crashed, exec won't work — start a temp container to clean the volume.
 $COMPOSE_DISK exec writer rm -f "${DISK_DATA_DIR}/fill_disk.tmp" "${DISK_DATA_DIR}/fill_disk_last.tmp" 2>/dev/null \
-    || docker run --rm -v cryptolake-test_disk_test_data:/data/disk_test alpine \
+    || docker run --rm -v "$(docker volume ls -q | grep disk_test_data | head -1)":/data/disk_test alpine \
            rm -f /data/disk_test/fill_disk.tmp /data/disk_test/fill_disk_last.tmp 2>/dev/null || true
 
 step 8 "Restarting writer for recovery..."
@@ -161,11 +169,20 @@ fi
 total=$(count_envelopes)
 assert_gt "archive has envelopes (data survived disk pressure)" "$total" 0
 
-# Writer crashed and restarted — a restart_gap MUST be recorded.
-# "No data lost silently" — the crash window is a real data gap.
-wait_for_gaps "restart_gap" 45
-gaps=$(count_gaps "restart_gap")
-assert_gt "restart_gap records exist (writer crash gap recorded)" "$gaps" 0
+# Writer should have emitted write_error gaps during ENOSPC.
+# The restart at step 8 will also produce a restart_gap, but the key assertion
+# is that write_error gaps exist from the disk pressure itself.
+wait_for_gaps "write_error" 45 || true
+write_err_gaps=$(count_gaps "write_error")
+assert_gt "write_error gaps exist (ENOSPC correctly recorded)" "$write_err_gaps" 0
+
+# The forced restart in step 8 may also produce restart_gap records.
+restart_gaps=$(count_gaps "restart_gap")
+if (( restart_gaps > 0 )); then
+    pass "restart_gap records also present from forced restart (count=${restart_gaps})"
+else
+    pass "no restart_gap records (writer recovered without session change)"
+fi
 
 # Verify the volume is actually small (sanity check)
 vol_size=$($COMPOSE_DISK exec writer df -m "${DISK_DATA_DIR}" | awk 'NR==2{print $2}')
