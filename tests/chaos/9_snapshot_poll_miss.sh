@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 10: Primary Collector Isolation ==="
+echo "=== Chaos 9: Primary Collector Isolation ==="
 echo "Blocks primary collector HTTPS egress (including WebSocket). Backup"
 echo "collector is unaffected. Asserts writer's CoverageFilter suppresses"
 echo "primary's gap envelopes and backup data flows continuously through."

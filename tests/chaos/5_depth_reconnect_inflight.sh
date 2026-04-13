@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 6: Depth Reconnect Inflight ==="
+echo "=== Chaos 5: Depth Reconnect Inflight ==="
 echo "Kills the collector during active depth flow and verifies that depth"
 echo "data resynchronises correctly after reconnect."
 echo ""

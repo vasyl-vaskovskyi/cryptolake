@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 9: WebSocket Disconnect ==="
+echo "=== Chaos 8: WebSocket Disconnect ==="
 echo "Blocks collector network to trigger ws_disconnect gaps while"
 echo "the collector process stays alive, then restores and verifies."
 echo ""

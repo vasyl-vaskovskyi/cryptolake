@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 12: Corrupt Message ==="
+echo "=== Chaos 11: Corrupt Message ==="
 echo "Injects corrupt (non-JSON) messages and verifies the writer"
 echo "skips them and continues processing valid data."
 echo ""

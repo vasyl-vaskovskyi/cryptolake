@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 11: Planned Collector Restart ==="
+echo "=== Chaos 10: Planned Collector Restart ==="
 echo "Stops only the collector with maintenance intent, restarts it,"
 echo "and verifies restart_gap with component=collector, cause=operator_shutdown, planned=true."
 echo ""

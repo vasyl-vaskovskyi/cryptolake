@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 13: PG Kill During Commit ==="
+echo "=== Chaos 12: PG Kill During Commit ==="
 echo "Kills PostgreSQL while data is flowing, verifies the writer"
 echo "recovers after PG comes back without data loss."
 echo ""

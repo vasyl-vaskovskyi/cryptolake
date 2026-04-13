@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 14: Rapid Restart Storm ==="
+echo "=== Chaos 13: Rapid Restart Storm ==="
 echo "Kills the writer 3 times in 60 seconds and verifies no duplicates."
 echo ""
 

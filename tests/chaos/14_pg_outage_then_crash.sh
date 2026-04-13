@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 15: PG Outage Then Crash ==="
+echo "=== Chaos 14: PG Outage Then Crash ==="
 echo "Kills PG, lets writer run without commits, then kills writer too."
 echo "Verifies recovery after both are restored."
 echo ""

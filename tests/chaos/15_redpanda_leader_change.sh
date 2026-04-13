@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 16: Redpanda Leader Change ==="
+echo "=== Chaos 15: Redpanda Leader Change ==="
 echo "Restarts Redpanda to force partition leadership changes."
 echo "Verifies no data loss across the re-election."
 echo ""

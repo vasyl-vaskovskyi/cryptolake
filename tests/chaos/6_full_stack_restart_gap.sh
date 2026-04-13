@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 trap teardown_stack EXIT
 
-echo "=== Chaos 7: Full Stack Restart Gap ==="
+echo "=== Chaos 6: Full Stack Restart Gap ==="
 echo "Verifies that a planned full-stack restart (docker compose down/up)"
 echo "with a maintenance intent produces restart_gap records with planned=true."
 echo ""
