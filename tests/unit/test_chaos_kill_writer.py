@@ -5,7 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_kill_writer_script_resumes_writes_then_runs_verify() -> None:
-    text = (PROJECT_ROOT / "tests/chaos/3_kill_writer.sh").read_text()
+    text = (PROJECT_ROOT / "tests/chaos/3_writer_crash_before_commit.sh").read_text()
 
     assert "wait_for_envelope_count_gt" in text
     assert "wait_for_writer_lag_below" in text

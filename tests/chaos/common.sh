@@ -72,6 +72,13 @@ assert_gt() {
 
 assert_container_healthy() {
     local svc="$1"
+    # Docker healthcheck uses interval=15s with no start_period, so a just-
+    # restarted container reports "(health: starting)" for ≥15s (and longer
+    # under batch-run load on Docker Desktop). Wait for the status transition
+    # before grepping, so every chaos test is absorbed from the healthcheck
+    # probe race after kill/restart scenarios — not just the handful that
+    # had wait_service_healthy band-aids added upstream.
+    wait_service_healthy "$svc" 90 >/dev/null 2>&1 || true
     local status
     status=$($COMPOSE ps "$svc" --format '{{.Status}}' 2>/dev/null)
     if echo "$status" | grep -q "(healthy)"; then pass "$svc is healthy"; else fail "$svc is NOT healthy (status: $status)"; fi

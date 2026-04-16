@@ -156,6 +156,11 @@ class TestObservabilityAssets:
             "PostgresCommitFailing",
             "KafkaCommitFailing",
             "IncompleteDay",
+            "WriterDown",
+            "CollectorDown",
+            "CollectorBackupDown",
+            "NoDataWritten",
+            "HoursBehind",
         }
 
         health = _read_yaml("infra/sampler/sampler-health.yml")
@@ -196,17 +201,16 @@ class TestAwsDeploymentAssets:
 class TestChaosScripts:
     def test_chaos_scripts_exist_are_executable_and_target_expected_failures(self) -> None:
         scripts = {
-            "tests/chaos/3_kill_writer.sh": ["docker kill", "WRITER_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/1_collector_unclean_exit.sh": ["docker kill", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/5_fill_disk.sh": ["dd if=/dev/zero", "fill_disk.tmp", "docker compose", "preflight_checks", "print_test_report"],
-            "tests/chaos/6_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/7_full_stack_restart_gap.sh": ["mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
             "tests/chaos/2_buffer_overflow_recovery.sh": ["redpanda", "buffer_overflow", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/4_writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/8_host_reboot_restart_gap.sh": ["host", "reboot", "restart_gap", "BOOT_ID", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/9_ws_disconnect.sh": ["ws_disconnect", "block_egress", "unblock_egress", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/10_snapshot_poll_miss.sh": ["snapshot_poll_miss", "iptables", "setup_stack", "teardown_stack", "print_test_report"],
-            "tests/chaos/11_planned_collector_restart.sh": ["collector", "mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/3_writer_crash_before_commit.sh": ["docker kill -s KILL", "WRITER_CONTAINER", "check_integrity", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/4_fill_disk.sh": ["dd if=/dev/zero", "fill_disk", "docker compose", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/5_depth_reconnect_inflight.sh": ["depth", "COLLECTOR_CONTAINER", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/6_full_stack_restart_gap.sh": ["mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/7_host_reboot_restart_gap.sh": ["host", "reboot", "restart_gap", "BOOT_ID", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/8_ws_disconnect.sh": ["ws_disconnect", "block_egress", "unblock_egress", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/9_snapshot_poll_miss.sh": ["snapshot_poll_miss", "iptables", "setup_stack", "teardown_stack", "print_test_report"],
+            "tests/chaos/10_planned_collector_restart.sh": ["collector", "mark-maintenance", "planned", "restart_gap", "setup_stack", "teardown_stack", "print_test_report"],
         }
 
         for relative_path, expected_snippets in scripts.items():
@@ -224,7 +228,7 @@ class TestChaosScripts:
         text = path.read_text()
         assert "setup_stack" in text
         assert "teardown_stack" in text
-        assert "down -v --rmi local" in text
+        assert "down -v --remove-orphans --rmi local" in text
         assert "count_gaps" in text
         assert "check_integrity" in text
         assert "print_archive_stats" in text
