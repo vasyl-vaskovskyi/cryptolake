@@ -88,6 +88,12 @@ class WriterConsumer:
         # Streams where recovery emitted a gap — suppress the first runtime
         # session change detection (it would duplicate the recovery gap).
         self._recovery_gap_emitted: set[tuple[str, str, str]] = set()
+        # After recovery on a depth stream, diffs arrive before the next
+        # depth_snapshot. Track the first-diff received_at so we can emit a
+        # supplementary restart_gap closing [first_diff, first_snapshot] once
+        # a fresh snapshot arrives — verify.py needs this window to tolerate
+        # the unavoidable chain break.
+        self._depth_recovery_pending: dict[tuple[str, str], int] = {}
         # Boot ID and component state for classification
         self._current_boot_id: str = get_host_boot_id()
         self._previous_writer_state: ComponentRuntimeState | None = None
@@ -371,6 +377,9 @@ class WriterConsumer:
             if records_missed is not None:
                 detail += f" ({records_missed} records missed)"
 
+            if stream == "depth":
+                self._depth_recovery_pending[(exchange, symbol)] = current_received_at
+
             return create_gap_envelope(
                 exchange=exchange,
                 symbol=symbol,
@@ -518,6 +527,9 @@ class WriterConsumer:
         if records_missed is not None:
             detail += f" ({records_missed} records missed)"
 
+        if stream == "depth":
+            self._depth_recovery_pending[(exchange, symbol)] = current_received_at
+
         return create_gap_envelope(
             exchange=exchange,
             symbol=symbol,
@@ -535,6 +547,39 @@ class WriterConsumer:
             classifier=classification.get("classifier"),
             evidence=classification.get("evidence"),
             maintenance_id=classification.get("maintenance_id"),
+        )
+
+    def _maybe_close_depth_recovery_gap(self, envelope: dict) -> dict | None:
+        """On the first post-recovery depth_snapshot, emit a supplementary
+        restart_gap covering [first_post_recovery_depth_diff, snapshot] so
+        verify.py treats the unavoidable pre-snapshot diffs as an expected gap.
+        """
+        if envelope.get("stream") != "depth_snapshot":
+            return None
+        exchange = envelope.get("exchange", "")
+        symbol = envelope.get("symbol", "")
+        key = (exchange, symbol)
+        pending_ts = self._depth_recovery_pending.pop(key, None)
+        if pending_ts is None:
+            return None
+        snapshot_ts = envelope.get("received_at", 0)
+        if snapshot_ts <= pending_ts:
+            return None
+        return create_gap_envelope(
+            exchange=exchange,
+            symbol=symbol,
+            stream="depth",
+            collector_session_id=envelope.get("collector_session_id", ""),
+            session_seq=-1,
+            gap_start_ts=pending_ts,
+            gap_end_ts=snapshot_ts,
+            reason="restart_gap",
+            detail="Writer recovery: depth anchor — diffs before first post-recovery snapshot",
+            received_at=snapshot_ts,
+            component="writer",
+            cause="recovery_depth_anchor",
+            planned=False,
+            classifier="writer_recovery_v1",
         )
 
     async def _check_session_change(self, envelope: dict) -> dict | None:
@@ -774,6 +819,14 @@ class WriterConsumer:
             if gap_results:
                 await self._write_and_save(gap_results)
 
+        depth_anchor_gap = self._maybe_close_depth_recovery_gap(envelope)
+        if depth_anchor_gap is not None:
+            depth_anchor_gap = add_broker_coordinates(
+                depth_anchor_gap, topic=msg_topic, partition=msg_partition, offset=-1)
+            anchor_results = self.buffer_manager.add(depth_anchor_gap)
+            if anchor_results:
+                await self._write_and_save(anchor_results)
+
     async def _handle_rotation_and_buffer(
         self, envelope: dict, active_hours: dict[tuple[str, str, str], tuple[int, str]],
     ) -> None:
@@ -962,7 +1015,21 @@ class WriterConsumer:
                                     # Writes directly to buffer (not through filter).
                                     await self._handle_gap_detection(envelope, primary_msg)
                                     await self._handle_rotation_and_buffer(envelope, active_hours)
+                            # Unconditional deactivate: gating by check_switchback_filter
+                            # deadlocks when primary consistently trails backup (backup
+                            # collector pipeline advances _last_key faster than primary's
+                            # post-restart catchup, so key <= last forever). The
+                            # seek-to-end at activation already protects against most
+                            # premature-switchback cases; the filter only needs to gate
+                            # data processing, not the state transition.
                             self._failover.deactivate()
+                            # Persist primary consumer position past any messages the
+                            # switchback filter discarded, so they don't linger as
+                            # phantom lag on the consumer group.
+                            try:
+                                self._consumer.commit(asynchronous=True)
+                            except Exception:
+                                pass
 
             # Sweep coverage-filter pending gaps whose grace period expired.
             # These are real bilateral outages — write them as usual.

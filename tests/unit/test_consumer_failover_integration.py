@@ -297,3 +297,52 @@ class TestFailoverRoundTrip:
 
         assert consumer._failover.is_active is False
         assert consumer._failover._last_key[("binance", "btcusdt", "trades")] == 102
+
+
+class TestCommitAfterSwitchback:
+    """After deactivate() fires, the primary consumer's position must be
+    explicitly committed so that any switchback-filtered duplicates do not
+    leave phantom lag on the consumer group."""
+
+    @pytest.mark.asyncio
+    async def test_primary_commit_called_after_switchback(self):
+        consumer = _make_consumer()
+        consumer._consumer = MagicMock()
+        consumer._running = True
+        consumer._assigned = True
+        consumer._recovery_done = {("binance", "btcusdt", "trades")}
+        consumer._durable_checkpoints = {}
+        consumer._recovery_high_water = {}
+        consumer._last_session = {("binance", "btcusdt", "trades"): ("session-1", time.time_ns())}
+
+        consumer._failover._is_active = True
+        consumer._failover._last_key[("binance", "btcusdt", "trades")] = 100
+        consumer._failover._failover_start_time = time.monotonic()
+
+        mock_backup_consumer = MagicMock()
+        mock_backup_consumer.poll.return_value = None
+        consumer._failover._backup_consumer = mock_backup_consumer
+
+        fresh_envelope = _make_data_envelope(raw_text='{"a": 150}', collector_session_id="session-1")
+        mock_fresh_msg = MagicMock()
+        mock_fresh_msg.error.return_value = None
+        mock_fresh_msg.value.return_value = orjson.dumps(fresh_envelope)
+        mock_fresh_msg.topic.return_value = "binance.trades"
+        mock_fresh_msg.partition.return_value = 0
+        mock_fresh_msg.offset.return_value = 300
+
+        call_count = 0
+        def primary_poll(timeout):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_fresh_msg
+            consumer._running = False
+            return None
+        consumer._consumer.poll.side_effect = primary_poll
+        consumer._consumer.assignment.return_value = []
+
+        await consumer.consume_loop()
+
+        assert consumer._failover.is_active is False
+        consumer._consumer.commit.assert_called()

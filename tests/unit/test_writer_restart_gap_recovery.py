@@ -700,3 +700,98 @@ class TestRecoveryGapTimestampClamping:
         # gap_start_ts must be clamped to gap_end_ts (no negative duration)
         assert result["gap_start_ts"] <= result["gap_end_ts"]
         assert result["gap_end_ts"] == older_ns
+
+
+class TestDepthRecoveryAnchorGap:
+    """After a writer-recovery restart_gap on a depth stream, diffs arriving
+    before the next depth_snapshot are unanchored: verify.py's "first diff
+    must span a sync point" check fails.  The writer emits a supplementary
+    gap closing the window [first post-recovery depth diff, first snapshot]
+    so verify tolerates the unavoidable chain break."""
+
+    def test_depth_recovery_records_pending_anchor(self):
+        consumer = _make_consumer(topics=["binance.depth"])
+        checkpoint = _make_checkpoint(
+            stream="depth",
+            last_collector_session_id="session-old",
+        )
+        consumer._durable_checkpoints = {("binance", "btcusdt", "depth"): checkpoint}
+        consumer._recovery_done = set()
+        consumer._current_boot_id = "boot-aaa"
+        consumer._previous_writer_state = _make_component_state(host_boot_id="boot-aaa")
+
+        first_diff_ts = time.time_ns()
+        envelope = _make_data_envelope(
+            stream="depth",
+            collector_session_id="session-new",
+            received_at=first_diff_ts,
+        )
+        gap = consumer._check_recovery_gap(envelope)
+        assert gap is not None
+        assert gap["reason"] == "restart_gap"
+        # The pending anchor for this (exchange, symbol) must be recorded.
+        assert ("binance", "btcusdt") in consumer._depth_recovery_pending
+        assert consumer._depth_recovery_pending[("binance", "btcusdt")] == first_diff_ts
+
+    def test_snapshot_arrival_closes_depth_recovery_window(self):
+        consumer = _make_consumer(topics=["binance.depth"])
+
+        first_diff_ts = time.time_ns()
+        snapshot_ts = first_diff_ts + 30_000_000_000  # +30s
+        consumer._depth_recovery_pending = {("binance", "btcusdt"): first_diff_ts}
+
+        snapshot_envelope = _make_data_envelope(
+            stream="depth_snapshot",
+            received_at=snapshot_ts,
+        )
+        supplementary = consumer._maybe_close_depth_recovery_gap(snapshot_envelope)
+
+        assert supplementary is not None
+        assert supplementary["reason"] == "restart_gap"
+        assert supplementary["stream"] == "depth"
+        assert supplementary["symbol"] == "btcusdt"
+        assert supplementary["gap_start_ts"] == first_diff_ts
+        assert supplementary["gap_end_ts"] == snapshot_ts
+        # Pending entry must be cleared.
+        assert ("binance", "btcusdt") not in consumer._depth_recovery_pending
+
+    def test_non_snapshot_envelopes_do_not_close_window(self):
+        consumer = _make_consumer(topics=["binance.depth"])
+        first_diff_ts = time.time_ns()
+        consumer._depth_recovery_pending = {("binance", "btcusdt"): first_diff_ts}
+
+        diff_envelope = _make_data_envelope(
+            stream="depth",
+            received_at=first_diff_ts + 1_000_000_000,
+        )
+        result = consumer._maybe_close_depth_recovery_gap(diff_envelope)
+
+        assert result is None
+        assert ("binance", "btcusdt") in consumer._depth_recovery_pending
+
+    def test_no_pending_entry_returns_none(self):
+        consumer = _make_consumer(topics=["binance.depth"])
+        # No _depth_recovery_pending entries set.
+        snapshot_envelope = _make_data_envelope(
+            stream="depth_snapshot",
+            received_at=time.time_ns(),
+        )
+        result = consumer._maybe_close_depth_recovery_gap(snapshot_envelope)
+        assert result is None
+
+    def test_non_depth_stream_recovery_does_not_record_pending(self):
+        consumer = _make_consumer()
+        checkpoint = _make_checkpoint(stream="trades", last_collector_session_id="session-old")
+        consumer._durable_checkpoints = {("binance", "btcusdt", "trades"): checkpoint}
+        consumer._recovery_done = set()
+        consumer._current_boot_id = "boot-aaa"
+        consumer._previous_writer_state = _make_component_state(host_boot_id="boot-aaa")
+
+        envelope = _make_data_envelope(
+            stream="trades",
+            collector_session_id="session-new",
+        )
+        gap = consumer._check_recovery_gap(envelope)
+        assert gap is not None
+        # Only depth streams get a pending anchor; trades do not.
+        assert ("binance", "btcusdt") not in consumer._depth_recovery_pending
