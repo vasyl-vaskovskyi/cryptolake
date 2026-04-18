@@ -102,6 +102,7 @@ class TestEnvelopeCreation:
         assert "snapshot_poll_miss" in VALID_GAP_REASONS
         assert "collector_restart" in VALID_GAP_REASONS
         assert "restart_gap" in VALID_GAP_REASONS
+        assert "recovery_depth_anchor" in VALID_GAP_REASONS
 
     def test_create_restart_gap_envelope(self) -> None:
         from src.common.envelope import create_gap_envelope

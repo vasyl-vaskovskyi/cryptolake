@@ -551,8 +551,13 @@ class WriterConsumer:
 
     def _maybe_close_depth_recovery_gap(self, envelope: dict) -> dict | None:
         """On the first post-recovery depth_snapshot, emit a supplementary
-        restart_gap covering [first_post_recovery_depth_diff, snapshot] so
-        verify.py treats the unavoidable pre-snapshot diffs as an expected gap.
+        recovery_depth_anchor gap covering [first_post_recovery_depth_diff,
+        snapshot] so verify.py tolerates the unavoidable pre-snapshot diffs.
+
+        This is semantically distinct from restart_gap (no data is lost in
+        this window — the diffs are in the archive, just unanchored against
+        any snapshot). The dedicated reason keeps restart_gap validators
+        clean and makes the archive's recovery story self-describing.
         """
         if envelope.get("stream") != "depth_snapshot":
             return None
@@ -573,13 +578,9 @@ class WriterConsumer:
             session_seq=-1,
             gap_start_ts=pending_ts,
             gap_end_ts=snapshot_ts,
-            reason="restart_gap",
-            detail="Writer recovery: depth anchor — diffs before first post-recovery snapshot",
+            reason="recovery_depth_anchor",
+            detail="Writer recovery: depth diffs before first post-recovery snapshot",
             received_at=snapshot_ts,
-            component="writer",
-            cause="recovery_depth_anchor",
-            planned=False,
-            classifier="writer_recovery_v1",
         )
 
     async def _check_session_change(self, envelope: dict) -> dict | None:

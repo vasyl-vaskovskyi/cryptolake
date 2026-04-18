@@ -747,7 +747,7 @@ class TestDepthRecoveryAnchorGap:
         supplementary = consumer._maybe_close_depth_recovery_gap(snapshot_envelope)
 
         assert supplementary is not None
-        assert supplementary["reason"] == "restart_gap"
+        assert supplementary["reason"] == "recovery_depth_anchor"
         assert supplementary["stream"] == "depth"
         assert supplementary["symbol"] == "btcusdt"
         assert supplementary["gap_start_ts"] == first_diff_ts

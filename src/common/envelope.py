@@ -15,6 +15,7 @@ VALID_GAP_REASONS = frozenset(
         "snapshot_poll_miss",
         "collector_restart",  # kept for migration: existing archives contain it
         "restart_gap",
+        "recovery_depth_anchor",
         "write_error",
         "deserialization_error",
         "checkpoint_lost",
