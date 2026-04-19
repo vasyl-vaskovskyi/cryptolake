@@ -41,7 +41,10 @@ wait_service_healthy collector 60
 wait_service_healthy writer 60
 
 step 5 "Waiting for buffer_overflow gaps to appear in archive..."
-wait_for_gaps "buffer_overflow" 60
+# 120s accounts for writer restart + rebalance + flush cycle; on slower
+# laptops 60s was not enough when the buffer overflow was small (e.g. 20
+# dropped messages), and the test would intermittently fail here.
+wait_for_gaps "buffer_overflow" 120
 
 section "Verification"
 

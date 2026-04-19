@@ -70,6 +70,11 @@ assert_gt() {
     if (( val > threshold )); then pass "$desc"; else fail "$desc (val=$val, threshold=$threshold)"; fi
 }
 
+assert_le() {
+    local desc="$1" val="$2" threshold="$3"
+    if (( val <= threshold )); then pass "$desc"; else fail "$desc (val=$val, threshold=$threshold)"; fi
+}
+
 assert_container_healthy() {
     local svc="$1"
     # Docker healthcheck uses interval=15s with no start_period, so a just-

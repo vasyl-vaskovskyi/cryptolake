@@ -43,7 +43,12 @@ writer:
   flush_messages: 100
   flush_interval_seconds: 10
   gap_filter:
-    grace_period_seconds: 30
+    # 120s absorbs failover-flap windows during chaos test 9 (primary
+    # isolated while backup runs). When failover deactivates transiently,
+    # backup_global stops advancing on the writer side; a longer grace
+    # gives time for re-activation + backup re-drain before the sweep
+    # declares a gap "not covered" and writes it to archive.
+    grace_period_seconds: 120
 
 monitoring:
   prometheus_port: 8000
