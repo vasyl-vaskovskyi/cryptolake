@@ -603,6 +603,50 @@ class TestCoverageFilterSweepExpired:
         assert cf.pending_size == 1  # the fresh one remains
 
 
+class TestCoverageFilterDualGrace:
+    """snapshot_poll_miss gaps recover slowly (REST poll interval) so they
+    need a longer grace window than network-based gaps (ws_disconnect,
+    collector_restart) that recover within seconds. Using a single long
+    grace for all reasons stalls tests that poll for the short-grace case;
+    using a single short grace drops snapshot_poll_miss gaps that would
+    have been covered by backup if given a few more seconds.
+
+    CoverageFilter must apply grace per reason."""
+
+    def test_snapshot_poll_miss_uses_long_grace(self):
+        cf = CoverageFilter(grace_period_seconds=0.05, snapshot_miss_grace_seconds=0.30)
+        cf.handle_gap("primary", _gap_env(reason="snapshot_poll_miss"))
+        # Short-grace window elapses — snapshot_poll_miss should still be pending.
+        time.sleep(0.10)
+        assert cf.sweep_expired() == []
+        assert cf.pending_size == 1
+
+    def test_ws_disconnect_uses_short_grace(self):
+        cf = CoverageFilter(grace_period_seconds=0.05, snapshot_miss_grace_seconds=0.30)
+        cf.handle_gap("primary", _gap_env(reason="ws_disconnect"))
+        time.sleep(0.10)
+        expired = cf.sweep_expired()
+        assert len(expired) == 1
+        assert expired[0]["reason"] == "ws_disconnect"
+
+    def test_snapshot_poll_miss_expires_after_long_grace(self):
+        cf = CoverageFilter(grace_period_seconds=0.02, snapshot_miss_grace_seconds=0.10)
+        cf.handle_gap("primary", _gap_env(reason="snapshot_poll_miss"))
+        time.sleep(0.15)
+        expired = cf.sweep_expired()
+        assert len(expired) == 1
+        assert expired[0]["reason"] == "snapshot_poll_miss"
+
+    def test_default_snapshot_miss_grace_equals_grace(self):
+        # Backward compatibility: if caller doesn't pass snapshot_miss_grace_seconds,
+        # it falls back to grace_period_seconds so existing tests unaffected.
+        cf = CoverageFilter(grace_period_seconds=0.05)
+        cf.handle_gap("primary", _gap_env(reason="snapshot_poll_miss"))
+        time.sleep(0.08)
+        expired = cf.sweep_expired()
+        assert len(expired) == 1
+
+
 class TestFailoverManagerWithCoverageFilter:
     def test_seek_uses_max_across_sources(self):
         cf = CoverageFilter(grace_period_seconds=10.0)

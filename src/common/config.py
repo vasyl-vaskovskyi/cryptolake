@@ -111,6 +111,11 @@ def default_archive_dir() -> str:
 
 class GapFilterConfig(BaseModel):
     grace_period_seconds: float = Field(default=10.0, ge=0.0)
+    # snapshot_poll_miss gaps recover on REST-poll cadence (can take 30s+
+    # for the next poll cycle to succeed). A longer grace here prevents
+    # them from being written to archive when backup is genuinely about
+    # to cover them. Other reasons continue to use grace_period_seconds.
+    snapshot_miss_grace_seconds: float = Field(default=60.0, ge=0.0)
 
 
 class WriterConfig(BaseModel):

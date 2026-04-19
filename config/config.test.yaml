@@ -43,12 +43,15 @@ writer:
   flush_messages: 100
   flush_interval_seconds: 10
   gap_filter:
-    # 120s absorbs failover-flap windows during chaos test 9 (primary
-    # isolated while backup runs). When failover deactivates transiently,
-    # backup_global stops advancing on the writer side; a longer grace
-    # gives time for re-activation + backup re-drain before the sweep
-    # declares a gap "not covered" and writes it to archive.
-    grace_period_seconds: 120
+    # Network gaps (ws_disconnect, collector_restart) recover in seconds;
+    # a short grace is enough and avoids stalling tests that poll for
+    # these reasons (e.g. test 8).
+    grace_period_seconds: 30
+    # snapshot_poll_miss is REST-polled and recovers only on the next
+    # successful poll cycle (30s+). A longer grace lets backup coverage
+    # catch up during failover-flap windows (test 9) before the sweep
+    # declares the gap uncovered and writes it to archive.
+    snapshot_miss_grace_seconds: 120
 
 monitoring:
   prometheus_port: 8000

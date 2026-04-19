@@ -221,8 +221,21 @@ class CoverageFilter:
     first, delaying updates to lower-volume stream coverage).
     """
 
-    def __init__(self, grace_period_seconds: float):
+    def __init__(
+        self,
+        grace_period_seconds: float,
+        snapshot_miss_grace_seconds: float | None = None,
+    ):
         self._grace_period = float(grace_period_seconds)
+        # snapshot_poll_miss gaps recover on REST-poll cadence (30s+), so they
+        # need a longer grace window than network gaps (ws_disconnect etc.)
+        # that recover in seconds. Defaults to grace_period_seconds for
+        # backward compatibility when the caller doesn't distinguish.
+        self._snapshot_miss_grace = (
+            float(snapshot_miss_grace_seconds)
+            if snapshot_miss_grace_seconds is not None
+            else self._grace_period
+        )
         # (exchange, symbol, stream) -> {"primary": received_at_ns, "backup": received_at_ns}
         self._last_received: dict[tuple[str, str, str], dict[str, int]] = {}
         # source -> max received_at_ns across ALL streams (global liveness indicator)
@@ -393,7 +406,12 @@ class CoverageFilter:
         expired: list[dict] = []
         to_remove: list[tuple[str, tuple[str, str, str], int]] = []
         for key, (gap_env, first_seen) in self._pending.items():
-            if (now - first_seen) >= self._grace_period:
+            grace = (
+                self._snapshot_miss_grace
+                if gap_env.get("reason") == "snapshot_poll_miss"
+                else self._grace_period
+            )
+            if (now - first_seen) >= grace:
                 expired.append(gap_env)
                 to_remove.append(key)
         for key in to_remove:

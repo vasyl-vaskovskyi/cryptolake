@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import orjson
 import pytest
 
 from tests.helpers import make_intent
@@ -844,11 +845,34 @@ class TestRecoveryGapTimestampClamping:
 
 
 class TestDepthRecoveryAnchorGap:
-    """After a writer-recovery restart_gap on a depth stream, diffs arriving
-    before the next depth_snapshot are unanchored: verify.py's "first diff
-    must span a sync point" check fails.  The writer emits a supplementary
-    gap closing the window [first post-recovery depth diff, first snapshot]
-    so verify tolerates the unavoidable chain break."""
+    """After a writer-recovery restart_gap on a depth stream, post-recovery
+    diffs arrive before any snapshot whose lastUpdateId (lid) lies within
+    the diff's [U, u] range can anchor them. The writer keeps an anchor
+    window open from the first post-recovery diff until a later diff is
+    spannable by a known snapshot (U <= lid+1 <= u), then emits one
+    recovery_depth_anchor gap covering that window. This accounts for the
+    case where collector snapshot polling is slower than the diff stream,
+    so multiple snapshots may arrive before one can finally span a diff."""
+
+    def _depth_diff_env(self, *, U, u, received_at):
+        raw = orjson.dumps({"U": U, "u": u})
+        return {
+            "v": 1, "type": "data", "exchange": "binance", "symbol": "btcusdt",
+            "stream": "depth", "received_at": received_at, "exchange_ts": received_at,
+            "collector_session_id": "s", "session_seq": 0,
+            "raw_text": raw.decode(), "raw_sha256": "abc",
+            "_topic": "binance.depth", "_partition": 0, "_offset": 0,
+        }
+
+    def _depth_snapshot_env(self, *, lid, received_at):
+        raw = orjson.dumps({"lastUpdateId": lid})
+        return {
+            "v": 1, "type": "data", "exchange": "binance", "symbol": "btcusdt",
+            "stream": "depth_snapshot", "received_at": received_at, "exchange_ts": received_at,
+            "collector_session_id": "s", "session_seq": 0,
+            "raw_text": raw.decode(), "raw_sha256": "abc",
+            "_topic": "binance.depth_snapshot", "_partition": 0, "_offset": 0,
+        }
 
     def test_depth_recovery_records_pending_anchor(self):
         consumer = _make_consumer(topics=["binance.depth"])
@@ -870,55 +894,109 @@ class TestDepthRecoveryAnchorGap:
         gap = consumer._check_recovery_gap(envelope)
         assert gap is not None
         assert gap["reason"] == "restart_gap"
-        # The pending anchor for this (exchange, symbol) must be recorded.
+        # Pending entry exists for this (exchange, symbol).
         assert ("binance", "btcusdt") in consumer._depth_recovery_pending
-        assert consumer._depth_recovery_pending[("binance", "btcusdt")] == first_diff_ts
+        # State structure records the first-diff timestamp.
+        entry = consumer._depth_recovery_pending[("binance", "btcusdt")]
+        assert entry["first_diff_ts"] == first_diff_ts
 
-    def test_snapshot_arrival_closes_depth_recovery_window(self):
+    def test_snapshot_arrival_alone_does_not_close_window(self):
+        """A snapshot whose lid is BELOW the first post-recovery diff's U
+        cannot anchor that diff. The anchor gap must stay open."""
         consumer = _make_consumer(topics=["binance.depth"])
-
         first_diff_ts = time.time_ns()
-        snapshot_ts = first_diff_ts + 30_000_000_000  # +30s
-        consumer._depth_recovery_pending = {("binance", "btcusdt"): first_diff_ts}
+        consumer._depth_recovery_pending = {
+            ("binance", "btcusdt"): {"first_diff_ts": first_diff_ts},
+        }
 
-        snapshot_envelope = _make_data_envelope(
-            stream="depth_snapshot",
-            received_at=snapshot_ts,
-        )
-        supplementary = consumer._maybe_close_depth_recovery_gap(snapshot_envelope)
+        # Snapshot arrives with a lid — alone, it never closes the gap.
+        snap = self._depth_snapshot_env(lid=100, received_at=first_diff_ts + 1_000_000_000)
+        result = consumer._maybe_close_depth_recovery_gap(snap)
+        assert result is None
+        # Pending still open; candidate_lid recorded.
+        assert ("binance", "btcusdt") in consumer._depth_recovery_pending
+        assert consumer._depth_recovery_pending[("binance", "btcusdt")]["candidate_lid"] == 100
 
-        assert supplementary is not None
-        assert supplementary["reason"] == "recovery_depth_anchor"
-        assert supplementary["stream"] == "depth"
-        assert supplementary["symbol"] == "btcusdt"
-        assert supplementary["gap_start_ts"] == first_diff_ts
-        assert supplementary["gap_end_ts"] == snapshot_ts
-        # Pending entry must be cleared.
+    def test_spannable_diff_closes_anchor_window(self):
+        """When a subsequent diff has U <= candidate_lid+1 <= u, the
+        snapshot can anchor it — the writer emits the anchor gap covering
+        [first_diff_ts, this_diff_ts] and clears the pending entry."""
+        consumer = _make_consumer(topics=["binance.depth"])
+        first_diff_ts = time.time_ns()
+        consumer._depth_recovery_pending = {
+            ("binance", "btcusdt"): {
+                "first_diff_ts": first_diff_ts,
+                "candidate_lid": 500,
+                "candidate_ts": first_diff_ts + 10_000_000_000,
+            },
+        }
+
+        # Diff whose range spans lid=500 (U=499, u=501 → 499 <= 501 <= 501).
+        spannable_ts = first_diff_ts + 20_000_000_000
+        env = self._depth_diff_env(U=499, u=501, received_at=spannable_ts)
+        gap = consumer._maybe_close_depth_recovery_gap(env)
+
+        assert gap is not None
+        assert gap["reason"] == "recovery_depth_anchor"
+        assert gap["stream"] == "depth"
+        assert gap["symbol"] == "btcusdt"
+        assert gap["gap_start_ts"] == first_diff_ts
+        assert gap["gap_end_ts"] == spannable_ts
         assert ("binance", "btcusdt") not in consumer._depth_recovery_pending
 
-    def test_non_snapshot_envelopes_do_not_close_window(self):
+    def test_non_spannable_diff_keeps_window_open(self):
+        """A diff whose U > candidate_lid+1 arrives before the snapshot can
+        cover it. The anchor window stays open until a later snapshot or a
+        later spannable diff arrives."""
         consumer = _make_consumer(topics=["binance.depth"])
         first_diff_ts = time.time_ns()
-        consumer._depth_recovery_pending = {("binance", "btcusdt"): first_diff_ts}
+        consumer._depth_recovery_pending = {
+            ("binance", "btcusdt"): {
+                "first_diff_ts": first_diff_ts,
+                "candidate_lid": 500,
+                "candidate_ts": first_diff_ts + 10_000_000_000,
+            },
+        }
 
-        diff_envelope = _make_data_envelope(
-            stream="depth",
-            received_at=first_diff_ts + 1_000_000_000,
-        )
-        result = consumer._maybe_close_depth_recovery_gap(diff_envelope)
-
+        # U=600 is past candidate_lid+1=501, so this diff can't be anchored by it.
+        env = self._depth_diff_env(U=600, u=610, received_at=first_diff_ts + 20_000_000_000)
+        result = consumer._maybe_close_depth_recovery_gap(env)
         assert result is None
         assert ("binance", "btcusdt") in consumer._depth_recovery_pending
+
+    def test_newer_snapshot_updates_candidate_lid(self):
+        """When multiple snapshots arrive, the latest-seen lid is retained.
+        A subsequent spannable diff uses the highest known lid."""
+        consumer = _make_consumer(topics=["binance.depth"])
+        first_diff_ts = time.time_ns()
+        consumer._depth_recovery_pending = {
+            ("binance", "btcusdt"): {"first_diff_ts": first_diff_ts},
+        }
+
+        # First snapshot: lid=500.
+        snap1 = self._depth_snapshot_env(lid=500, received_at=first_diff_ts + 1_000_000_000)
+        assert consumer._maybe_close_depth_recovery_gap(snap1) is None
+
+        # Non-spannable diff with U=700.
+        diff_nonspan = self._depth_diff_env(U=700, u=710, received_at=first_diff_ts + 2_000_000_000)
+        assert consumer._maybe_close_depth_recovery_gap(diff_nonspan) is None
+
+        # Second snapshot: lid=800. Candidate advances.
+        snap2 = self._depth_snapshot_env(lid=800, received_at=first_diff_ts + 3_000_000_000)
+        assert consumer._maybe_close_depth_recovery_gap(snap2) is None
+        assert consumer._depth_recovery_pending[("binance", "btcusdt")]["candidate_lid"] == 800
+
+        # Diff spannable by lid=800: U=799, u=801.
+        spannable = self._depth_diff_env(U=799, u=801, received_at=first_diff_ts + 4_000_000_000)
+        gap = consumer._maybe_close_depth_recovery_gap(spannable)
+        assert gap is not None
+        assert gap["gap_end_ts"] == first_diff_ts + 4_000_000_000
+        assert ("binance", "btcusdt") not in consumer._depth_recovery_pending
 
     def test_no_pending_entry_returns_none(self):
         consumer = _make_consumer(topics=["binance.depth"])
-        # No _depth_recovery_pending entries set.
-        snapshot_envelope = _make_data_envelope(
-            stream="depth_snapshot",
-            received_at=time.time_ns(),
-        )
-        result = consumer._maybe_close_depth_recovery_gap(snapshot_envelope)
-        assert result is None
+        snap = self._depth_snapshot_env(lid=100, received_at=time.time_ns())
+        assert consumer._maybe_close_depth_recovery_gap(snap) is None
 
     def test_non_depth_stream_recovery_does_not_record_pending(self):
         consumer = _make_consumer()
@@ -935,4 +1013,31 @@ class TestDepthRecoveryAnchorGap:
         gap = consumer._check_recovery_gap(envelope)
         assert gap is not None
         # Only depth streams get a pending anchor; trades do not.
+        assert ("binance", "btcusdt") not in consumer._depth_recovery_pending
+
+    def test_fallback_closes_after_deadline(self):
+        """If no spannable diff arrives within the fallback window, emit
+        the anchor gap using the most recent known snapshot's timestamp
+        so verify still accepts the eventual unanchored diffs as 'in gap'."""
+        consumer = _make_consumer(topics=["binance.depth"])
+        first_diff_ts = 1_000_000_000_000_000_000  # arbitrary anchor point
+        candidate_ts = first_diff_ts + 10_000_000_000
+        consumer._depth_recovery_pending = {
+            ("binance", "btcusdt"): {
+                "first_diff_ts": first_diff_ts,
+                "candidate_lid": 500,
+                "candidate_ts": candidate_ts,
+            },
+        }
+
+        # A diff that can't be spanned, arriving past the 5-minute fallback window.
+        late_ts = first_diff_ts + 310_000_000_000  # +310 s
+        env = self._depth_diff_env(U=600, u=610, received_at=late_ts)
+        gap = consumer._maybe_close_depth_recovery_gap(env)
+
+        # Fallback: emit gap ending at the late diff's received_at (> fallback deadline).
+        assert gap is not None
+        assert gap["reason"] == "recovery_depth_anchor"
+        assert gap["gap_start_ts"] == first_diff_ts
+        assert gap["gap_end_ts"] == late_ts
         assert ("binance", "btcusdt") not in consumer._depth_recovery_pending

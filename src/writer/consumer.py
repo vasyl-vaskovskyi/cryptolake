@@ -63,6 +63,7 @@ class WriterConsumer:
         base_dir: str,
         host_evidence: HostLifecycleEvidence | None = None,
         gap_filter_grace_period_seconds: float = 10.0,
+        gap_filter_snapshot_miss_grace_seconds: float | None = None,
     ):
         self.brokers = brokers
         self.topics = topics
@@ -88,12 +89,21 @@ class WriterConsumer:
         # Streams where recovery emitted a gap — suppress the first runtime
         # session change detection (it would duplicate the recovery gap).
         self._recovery_gap_emitted: set[tuple[str, str, str]] = set()
-        # After recovery on a depth stream, diffs arrive before the next
-        # depth_snapshot. Track the first-diff received_at so we can emit a
-        # supplementary restart_gap closing [first_diff, first_snapshot] once
-        # a fresh snapshot arrives — verify.py needs this window to tolerate
-        # the unavoidable chain break.
-        self._depth_recovery_pending: dict[tuple[str, str], int] = {}
+        # After recovery on a depth stream, post-recovery depth diffs arrive
+        # before any known snapshot can actually anchor them (snapshot's
+        # lastUpdateId must satisfy diff.U <= lid+1 <= diff.u). The writer
+        # holds an anchor window open from the first post-recovery diff
+        # until a subsequent diff is spannable by a known snapshot, then
+        # emits one recovery_depth_anchor gap covering that range so
+        # verify.py tolerates the unavoidable chain break. Value shape:
+        #   {"first_diff_ts": int,
+        #    "candidate_lid": int | absent,
+        #    "candidate_ts": int | absent}
+        self._depth_recovery_pending: dict[tuple[str, str], dict] = {}
+        # Fallback window: if no spannable diff arrives within this many
+        # nanoseconds of the first post-recovery diff, emit the anchor gap
+        # at the current diff's received_at so verify is not left dangling.
+        self._depth_recovery_fallback_ns: int = 300_000_000_000  # 5 minutes
         # Boot ID and component state for classification
         self._current_boot_id: str = get_host_boot_id()
         self._previous_writer_state: ComponentRuntimeState | None = None
@@ -110,6 +120,7 @@ class WriterConsumer:
         from src.writer.failover import CoverageFilter
         self._coverage_filter = CoverageFilter(
             grace_period_seconds=gap_filter_grace_period_seconds,
+            snapshot_miss_grace_seconds=gap_filter_snapshot_miss_grace_seconds,
         )
 
         # Real-time failover manager
@@ -378,7 +389,9 @@ class WriterConsumer:
                 detail += f" ({records_missed} records missed)"
 
             if stream == "depth":
-                self._depth_recovery_pending[(exchange, symbol)] = current_received_at
+                self._depth_recovery_pending[(exchange, symbol)] = {
+                    "first_diff_ts": current_received_at,
+                }
 
             return create_gap_envelope(
                 exchange=exchange,
@@ -528,7 +541,9 @@ class WriterConsumer:
             detail += f" ({records_missed} records missed)"
 
         if stream == "depth":
-            self._depth_recovery_pending[(exchange, symbol)] = current_received_at
+            self._depth_recovery_pending[(exchange, symbol)] = {
+                "first_diff_ts": current_received_at,
+            }
 
         return create_gap_envelope(
             exchange=exchange,
@@ -550,37 +565,86 @@ class WriterConsumer:
         )
 
     def _maybe_close_depth_recovery_gap(self, envelope: dict) -> dict | None:
-        """On the first post-recovery depth_snapshot, emit a supplementary
-        recovery_depth_anchor gap covering [first_post_recovery_depth_diff,
-        snapshot] so verify.py tolerates the unavoidable pre-snapshot diffs.
+        """Run the depth-recovery state machine for one envelope.
 
-        This is semantically distinct from restart_gap (no data is lost in
-        this window — the diffs are in the archive, just unanchored against
-        any snapshot). The dedicated reason keeps restart_gap validators
-        clean and makes the archive's recovery story self-describing.
+        State per (exchange, symbol): {first_diff_ts, candidate_lid, candidate_ts}.
+        Closes the anchor window when a depth diff is spannable by the highest
+        known snapshot (U <= candidate_lid+1 <= u). Fallback: if more than
+        `_depth_recovery_fallback_ns` have elapsed since the first post-recovery
+        diff, emit the anchor gap at the current envelope's received_at so
+        verify.py is not left with unanchored diffs indefinitely.
+
+        Emits `reason=recovery_depth_anchor` — a separate reason from
+        restart_gap so that chaos-test validators checking restart_gap
+        metadata (planned, component, cause) do not see this envelope.
         """
-        if envelope.get("stream") != "depth_snapshot":
-            return None
         exchange = envelope.get("exchange", "")
         symbol = envelope.get("symbol", "")
         key = (exchange, symbol)
-        pending_ts = self._depth_recovery_pending.pop(key, None)
-        if pending_ts is None:
+        state = self._depth_recovery_pending.get(key)
+        if state is None:
             return None
-        snapshot_ts = envelope.get("received_at", 0)
-        if snapshot_ts <= pending_ts:
+
+        stream = envelope.get("stream", "")
+        received_at = envelope.get("received_at", 0)
+
+        if stream == "depth_snapshot":
+            raw = envelope.get("raw_text")
+            if raw is None:
+                return None
+            try:
+                lid = int(orjson.loads(raw).get("lastUpdateId", 0))
+            except Exception:
+                return None
+            if lid > state.get("candidate_lid", 0):
+                state["candidate_lid"] = lid
+                state["candidate_ts"] = received_at
             return None
+
+        if stream != "depth":
+            return None
+
+        raw = envelope.get("raw_text")
+        if raw is None:
+            return None
+        try:
+            parsed = orjson.loads(raw)
+            U = int(parsed.get("U", 0))
+            u = int(parsed.get("u", 0))
+        except Exception:
+            return None
+
+        first_diff_ts = state["first_diff_ts"]
+        candidate_lid = state.get("candidate_lid", 0)
+
+        # Case 1: this diff can be spanned by a known snapshot → close window.
+        spannable = candidate_lid > 0 and U <= candidate_lid + 1 <= u
+
+        # Case 2: fallback — too long without a spannable diff. Close anyway
+        # at the current received_at so verify sees a covering gap window.
+        fallback_deadline = first_diff_ts + self._depth_recovery_fallback_ns
+        timed_out = received_at >= fallback_deadline
+
+        if not (spannable or timed_out):
+            return None
+
+        del self._depth_recovery_pending[key]
+        detail = (
+            "Writer recovery: depth diffs before first spannable snapshot"
+            if spannable
+            else "Writer recovery: depth diffs, fallback close (no spannable snapshot in time)"
+        )
         return create_gap_envelope(
             exchange=exchange,
             symbol=symbol,
             stream="depth",
             collector_session_id=envelope.get("collector_session_id", ""),
             session_seq=-1,
-            gap_start_ts=pending_ts,
-            gap_end_ts=snapshot_ts,
+            gap_start_ts=first_diff_ts,
+            gap_end_ts=received_at,
             reason="recovery_depth_anchor",
-            detail="Writer recovery: depth diffs before first post-recovery snapshot",
-            received_at=snapshot_ts,
+            detail=detail,
+            received_at=received_at,
         )
 
     async def _check_session_change(self, envelope: dict) -> dict | None:
