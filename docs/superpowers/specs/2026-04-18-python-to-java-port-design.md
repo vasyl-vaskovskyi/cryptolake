@@ -301,7 +301,7 @@ based_on_mapping: <sha of mapping.md>
 - **Inputs**: `mapping.md`, `design.md`, Tier 1+2+3 rules, Python source (read-only reference)
 - **Allowed tools**: all except `Agent` (no sub-delegation)
 - **Forbidden**: changing the design (escalate in completion.md §4 instead), editing Python, `@SuppressWarnings`, `--no-verify`
-- **Output**: Java code + tests on branch `port/<module>`; parity fixtures if required; `docs/superpowers/port/<module>/completion.md`
+- **Output**: Java code + tests committed directly to `main` (one commit per logical chunk); parity fixtures if required; `docs/superpowers/port/<module>/completion.md`
 - **Success criteria**: all 7 gates show `pass`; §2 (Deviations) empty or re-approved; §3 (Rule compliance) lists every Tier 1/2/3 rule with file:line; §4 (Escalations) empty; `./gradlew :<module>:check` clean
 
 #### 3.3.1 Completion.md schema
@@ -311,8 +311,7 @@ based_on_mapping: <sha of mapping.md>
 module: <name>
 status: complete
 produced_by: developer
-commits: [list of sha]
-branch: port/<module>
+commits: [list of sha]             # range: developer_start_sha..HEAD, module's commits on main
 ---
 
 ## 1. Gate results
@@ -347,7 +346,7 @@ All live in `.claude/commands/`:
 | `/port-module` | Advance current module by one phase (idempotent) |
 | `/port-status` | Read-only: print state.json in human form |
 | `/port-retry` | Re-dispatch last failed agent with failure log after environment fix |
-| `/port-advance` | Explicit checkpoint release; merge feature branch; advance to next module |
+| `/port-advance` | Explicit checkpoint release; tag the accepted commit; advance to next module |
 | `/port-rollback <module>` | State-only rollback; leaves code in place |
 
 Normal loop: `/port-init` → `/port-module` (repeat) → review → `/port-advance` → `/port-module` (next) → ...
@@ -466,17 +465,19 @@ All state is in `state.json` + artifact files. Fully resumable across Claude Cod
 
 ### 4.7 Git hygiene
 
+- All work lands on `main` directly — the port is sequential, no parallel module development, so branches add overhead without benefit.
 - Orchestrator commits artifacts after each successful phase: `chore(port): <module> <phase> complete`
-- Java code lives on `port/<module>` branches created by Developer
-- Merge into `main` happens at `/port-advance` time via merge commit
-- Failed gates leave branch in place for inspection
+- Developer commits Java code directly to `main` in logical chunks (one commit per class or coherent feature). At Developer-phase dispatch, orchestrator records `developer_start_sha` = current `HEAD` in `state.json` so the module's commit range is recoverable.
+- At `/port-advance`, orchestrator records `accepted_sha` in `state.json` and creates an annotated git tag `port-<module>-accepted` at that commit. The tag is the module's release marker.
+- Failed gates leave partial Java code on `main`; this is benign (Python services keep running; Java subproject just fails to build) and lets you inspect state directly via `git log`.
+- Rollback uses `git revert` over the recorded commit range, never destructive resets.
 
 ### 4.8 Safety rails
 
-1. Orchestrator refuses to dispatch if working tree dirty (outside port-produced files)
-2. Orchestrator refuses if `main` has moved under a running port (forces explicit rebase)
-3. `state.json` has schema version; mismatch = halt
-4. Skill never calls destructive git (`reset --hard`, `push --force`, `branch -D`)
+1. Orchestrator refuses to dispatch if working tree dirty (outside port-produced files and `cryptolake-java/`)
+2. `state.json` has schema version; mismatch = halt
+3. Skill never calls destructive git (`reset --hard`, `push --force`, `branch -D`, `checkout --`)
+4. Rollback uses `git revert` only; the operator always has a chance to review the revert commits before they land
 
 ---
 
@@ -518,10 +519,10 @@ accepted; next module becomes current
 - **analyst**: read-only over Python source; produce `mapping.md`; orchestrator validates schema (1 retry allowed)
 - **analyst_review** (common only): orchestrator halts; user inspects; `/port-advance` releases
 - **architect**: input `mapping.md` + all rule tiers + target architecture; produce `design.md` with `status: approved`; invariant-conflict flag = immediate halt
-- **developer**: create `port/<module>` branch; implement per design; port tests to JUnit 5; capture any additional fixtures required; commit in logical chunks; write `completion.md`
+- **developer**: orchestrator records `developer_start_sha` = HEAD; Developer implements per design on `main`; ports tests to JUnit 5; captures any additional fixtures required; commits directly to `main` in logical chunks; writes `completion.md`
 - **gates**: run 7 gates sequentially; results appended to `completion.md §1`
 - **complete**: commit `chore(port): <module> complete`; halt with summary; user reviews
-- **accepted** (via `/port-advance`): merge branch into main; update `state.json`; next module becomes current
+- **accepted** (via `/port-advance`): orchestrator records `accepted_sha` = HEAD; creates annotated tag `port-<module>-accepted`; updates `state.json`; next module becomes current
 
 ### 5.4 The 7 gates
 

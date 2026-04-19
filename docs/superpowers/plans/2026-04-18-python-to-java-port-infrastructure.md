@@ -345,8 +345,7 @@ Path: `docs/superpowers/port/<module>/completion.md`.
 module: <name>
 status: complete
 produced_by: developer
-commits: [list of sha]
-branch: port/<module>
+commits: [list of sha]             # range: developer_start_sha..HEAD on main
 ---
 ```
 
@@ -360,7 +359,7 @@ branch: port/<module>
 
 ## Validation rules
 
-- Frontmatter present with all 5 keys; `status: complete` literal.
+- Frontmatter present with all 4 keys; `status: complete` literal.
 - All 5 section headings present.
 - `## 1.` reports all 7 gates, each with pass/fail state.
 - `## 3.` lists every rule from Tiers 1, 2, 3 with `file:line` reference.
@@ -605,7 +604,7 @@ You are the **Developer** for the CryptoLake Python-to-Java port.
 
 ## Your job
 
-Implement module `{{module}}` per the Architect's design. Port tests to JUnit 5. Commit on branch `port/{{module}}`. Run the 7 gates; iterate until green. Write `completion.md`.
+Implement module `{{module}}` per the Architect's design. Port tests to JUnit 5. Commit directly to `main` in logical chunks. Run the 7 gates; iterate until green. Write `completion.md`.
 
 ## Inputs (verbatim — read and honor)
 
@@ -625,16 +624,16 @@ Implement module `{{module}}` per the Architect's design. Port tests to JUnit 5.
 - Editing Python code
 - Using `@SuppressWarnings` or `--no-verify` to pass gates
 - Modifying the skill (`.claude/skills/...`) or other modules' artifacts
-- Modifying main branch directly; all work on branch `port/{{module}}`
+- Destructive git: no `reset --hard`, no force push, no `checkout --`, no deleting other commits
 
 ## Workflow
 
-1. Create branch: `git checkout -b port/{{module}}` (from latest `main`).
-2. Implement class-by-class per design §2. Commit in logical chunks (one class or one coherent feature per commit).
+1. You are on `main`. Verify: `git rev-parse --abbrev-ref HEAD` must print `main`. The orchestrator has already recorded `developer_start_sha` = current HEAD in `state.json`.
+2. Implement class-by-class per design §2. Commit in logical chunks directly to `main` (one class or one coherent feature per commit). Each commit message: `feat({{module}}): <what>`.
 3. Port tests per design §8. Each port carries a trace comment: `// ports: tests/unit/{{module}}/test_X.py::test_name`.
 4. Capture additional parity fixtures if design §8 requires — place under `parity-fixtures/{{module}}/additions/`.
-5. Run gates in order. Fix failures. Do NOT mark a gate pass without evidence.
-6. Write `completion.md` at `docs/superpowers/port/{{module}}/completion.md`.
+5. Run gates in order. Fix failures (more commits on `main`). Do NOT mark a gate pass without evidence.
+6. Write `completion.md` at `docs/superpowers/port/{{module}}/completion.md`. Commit it.
 
 ## The 7 gates
 
@@ -658,8 +657,7 @@ Frontmatter:
 module: {{module}}
 status: complete
 produced_by: developer
-commits: [list of sha]
-branch: port/{{module}}
+commits: [list of sha]             # developer_start_sha..HEAD range, module's commits on main
 ---
 ```
 
@@ -2803,9 +2801,19 @@ Same pattern:
 
 **Dispatch the Developer.**
 
-- Ensure Developer branch exists:
+- Verify on `main` and clean:
   ```bash
-  git checkout -B port/$MODULE main
+  [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "not on main — halting"; exit 1; }
+  [[ -z "$(git status --porcelain)" ]] || { echo "working tree dirty — halting"; exit 1; }
+  ```
+- Record `developer_start_sha`:
+  ```bash
+  START_SHA=$(git rev-parse HEAD)
+  STATE=docs/superpowers/port/state.json
+  jq --arg m "$MODULE" --arg sha "$START_SHA" '
+    .modules |= map(if .name == $m then .developer_start_sha = $sha else . end)
+  ' $STATE > $STATE.tmp && mv $STATE.tmp $STATE
+  git add $STATE && git commit -m "chore(port): record $MODULE developer_start_sha"
   ```
 - Assemble prompt, dispatch `Agent` with `subagent_type: general-purpose`, `model: sonnet` (first attempt; opus on 3rd retry).
 - On return, validate `completion.md`:
@@ -2823,9 +2831,10 @@ Same pattern:
 bash .claude/skills/python-to-java-port/scripts/run_gates.sh $MODULE
 ```
 
-- If exit 0: `bash $STATE_SH set_phase gates` then `set_phase complete`. Halt with "Module <m> complete. Review the branch and run /port-advance."
+- If exit 0: `bash $STATE_SH set_phase gates` then `set_phase complete`. Halt with "Module <m> complete. Review commits <developer_start_sha>..HEAD and run /port-advance."
 - If exit 2 (gate 7 pending): dispatch Architect read-only to produce signoff file:
-  - Prompt the Architect with the final diff (`git diff main...port/$MODULE`) and `design.md`, ask for `approved` or `rejected` on first line of output.
+  - Read `developer_start_sha` from state.json: `START=$(jq -r --arg m "$MODULE" '.modules[] | select(.name==$m) | .developer_start_sha' $STATE)`
+  - Prompt the Architect with the module diff (`git diff $START..HEAD -- cryptolake-java/`) and `design.md`, ask for `approved` or `rejected` on first line of output.
   - Write stdout to `docs/superpowers/port/$MODULE/architect-signoff.txt`.
   - Re-run `run_gates.sh`.
 - If exit 1: increment developer attempts. If < 3: re-dispatch Developer with gate failure log attached. If == 3: halt and escalate.
@@ -2961,7 +2970,7 @@ git commit -m "feat(port): /port-retry slash command"
 
 ````markdown
 ---
-description: Release the module-boundary checkpoint (or checkpoint 0). Merges feature branch into main, advances to next module.
+description: Release the module-boundary checkpoint (or checkpoint 0). Tags the accepted commit on main; advances to next module.
 ---
 
 # /port-advance
@@ -3000,23 +3009,35 @@ PHASE=$(bash $STATE_SH get_current_phase)
 
 ### If PHASE == "complete"
 
-1. Confirm with user they've reviewed branch `port/$MODULE`.
-2. Merge:
+1. Verify on `main`:
    ```bash
-   git checkout main
-   git merge --no-ff port/$MODULE -m "chore(port): $MODULE module accepted"
+   [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "not on main — halting"; exit 1; }
    ```
-3. Advance state (requires phase `accepted`):
+2. Confirm with user they've reviewed the module's commit range:
+   ```bash
+   STATE=docs/superpowers/port/state.json
+   START=$(jq -r --arg m "$MODULE" '.modules[] | select(.name==$m) | .developer_start_sha' $STATE)
+   echo "Module $MODULE commits: $START..HEAD"
+   git log --oneline $START..HEAD
+   ```
+3. Record `accepted_sha` and tag:
+   ```bash
+   ACCEPTED_SHA=$(git rev-parse HEAD)
+   jq --arg m "$MODULE" --arg sha "$ACCEPTED_SHA" '
+     .modules |= map(if .name == $m then .accepted_sha = $sha else . end)
+   ' $STATE > $STATE.tmp && mv $STATE.tmp $STATE
+   git add $STATE
+   git commit -m "chore(port): $MODULE module accepted"
+   git tag -a "port-$MODULE-accepted" -m "CryptoLake port: $MODULE module accepted"
+   ```
+4. Advance state (requires phase `accepted`):
    ```bash
    bash $STATE_SH set_phase accepted
    bash $STATE_SH advance_module
-   ```
-4. Commit state update:
-   ```bash
-   git add docs/superpowers/port/state.json
+   git add $STATE
    git commit -m "chore(port): advance to $(bash $STATE_SH get_current_module)"
    ```
-5. Tell user next module name; ask whether to run `/port-module` now.
+5. Tell user next module name and that `port-$MODULE-accepted` tag was created. Ask whether to run `/port-module` now.
 
 ### Else
 
@@ -3054,11 +3075,26 @@ Argument: module name (`common`, `writer`, `collector`, or `cli`).
 ## Steps
 
 1. Read target module from `$1`. Abort if not one of the four.
-2. Confirm with user: "This will clear artifacts and state for $1 but leave code on branch `port/$1` in place. Proceed?"
-3. On confirm:
+2. Read the module's recorded commit range:
    ```bash
-   MODULE=$1
    STATE=docs/superpowers/port/state.json
+   MODULE=$1
+   START=$(jq -r --arg m "$MODULE" '.modules[] | select(.name==$m) | .developer_start_sha // empty' $STATE)
+   ACCEPTED=$(jq -r --arg m "$MODULE" '.modules[] | select(.name==$m) | .accepted_sha // empty' $STATE)
+   echo "Module $MODULE range to revert: ${START:-'(no commits yet)'}..${ACCEPTED:-HEAD}"
+   ```
+3. If a commit range exists, show the commits that would be reverted and ask the user to confirm:
+   ```bash
+   if [[ -n "$START" ]]; then
+     git log --oneline "$START..${ACCEPTED:-HEAD}"
+   fi
+   ```
+   Warning message to user: "This will REVERT the above $MODULE commits on main (creating new revert commits — nothing is rewritten) and clear $MODULE state. The original commits remain in git history. Proceed?"
+4. On confirm, revert and reset state:
+   ```bash
+   if [[ -n "$START" ]]; then
+     git revert --no-edit "$START..${ACCEPTED:-HEAD}"
+   fi
 
    # Reset module state
    jq --arg m "$MODULE" '
@@ -3071,20 +3107,22 @@ Argument: module name (`common`, `writer`, `collector`, or `cli`).
          | .gates = {ported_unit_tests:null, ported_chaos_tests:null, raw_text_byte_parity:null, metric_parity:null, verify_cli:null, static_checks:null, architect_signoff:null}
          | .attempts = {analyst:0, architect:0, developer:0}
          | .escalations = []
+         | del(.developer_start_sha)
+         | del(.accepted_sha)
        else . end
      )
      | .current_module = $m
      | .halt_reason = null
    ' $STATE > $STATE.tmp && mv $STATE.tmp $STATE
 
-   # Remove artifacts (but keep them in git history)
-   git rm -rf "docs/superpowers/port/$MODULE/" || true
+   # Remove artifacts (but keep them in git history — revert already covered that)
+   git rm -rf "docs/superpowers/port/$MODULE/" 2>/dev/null || true
 
    git add $STATE
    git commit -m "chore(port): rollback $MODULE to pending"
    ```
 
-4. Tell user: code on `port/$MODULE` branch is untouched; run `/port-module` to restart.
+5. Tell user: revert commits are on `main`; the `port-$MODULE-accepted` tag (if any) is still present but now points at a reverted state. Run `/port-module` to restart the module.
 ````
 
 - [ ] **Step 2: Commit**
