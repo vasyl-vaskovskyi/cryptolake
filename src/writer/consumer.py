@@ -766,7 +766,11 @@ class WriterConsumer:
             primary_topic = msg_topic[len(self._failover._backup_prefix):]
         # Use offset=-1 for backup records — their offsets are from a different
         # topic and would collide with primary offsets in the same archive file.
-        return add_broker_coordinates(envelope, topic=primary_topic, partition=msg_partition, offset=-1)
+        stamped = add_broker_coordinates(envelope, topic=primary_topic, partition=msg_partition, offset=-1)
+        # Flag origin so the checkpoint writer can preserve the primary stream's
+        # session_id when a flush batch is backup-sourced (chaos test 7).
+        stamped["_source"] = "backup"
+        return stamped
 
     def _should_skip_recovery_dedup(self, envelope: dict, msg) -> bool:
         """Check if a message should be skipped during recovery dedup."""
@@ -1306,12 +1310,22 @@ class WriterConsumer:
                     meta.last_received_at / 1_000_000_000,
                     tz=datetime.timezone.utc,
                 )
+                # When the flush is backup-sourced, preserve the primary stream's
+                # last_collector_session_id if one exists — otherwise the next
+                # primary envelope's recovery check would compare a backup
+                # session id against the primary session id and emit a spurious
+                # restart_gap (chaos test 7 host-reboot race).
+                last_session_id = meta.last_collector_session_id
+                if result.has_backup_source:
+                    existing = self._durable_checkpoints.get((exchange, symbol, stream))
+                    if existing is not None:
+                        last_session_id = existing.last_collector_session_id
                 checkpoints.append(StreamCheckpoint(
                     exchange=exchange,
                     symbol=symbol,
                     stream=stream,
                     last_received_at=received_dt.isoformat(),
-                    last_collector_session_id=meta.last_collector_session_id,
+                    last_collector_session_id=last_session_id,
                 ))
 
         # Save both file states and checkpoints in a single atomic transaction

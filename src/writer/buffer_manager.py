@@ -36,6 +36,11 @@ class FlushResult:
     partition: int
     count: int
     checkpoint_meta: CheckpointMeta | None = None
+    # True when the last envelope in the flush originated from the backup
+    # failover consumer (envelope has `_source == "backup"`). Signals to the
+    # checkpoint writer that the primary-stream `last_collector_session_id`
+    # must not be overwritten with the backup collector's session id.
+    has_backup_source: bool = False
 
 
 class BufferManager:
@@ -109,6 +114,7 @@ class BufferManager:
             self.base_dir, target.exchange, target.symbol,
             target.stream, target.date, target.hour,
         )
+        has_backup_source = last_env.get("_source") == "backup"
         return [FlushResult(
             target=target,
             file_path=file_path,
@@ -117,6 +123,7 @@ class BufferManager:
             partition=partition,
             count=len(messages),
             checkpoint_meta=checkpoint_meta,
+            has_backup_source=has_backup_source,
         )]
 
     def route(self, envelope: dict) -> FileTarget:

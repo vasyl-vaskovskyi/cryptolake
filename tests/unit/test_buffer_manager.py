@@ -59,3 +59,52 @@ class TestBufferManager:
         results = bm.flush_all()
         assert len(results) == 1  # all same target
         assert bm.total_buffered == 0
+
+
+class TestFlushResultBackupSource:
+    """FlushResult must expose whether the flush's last envelope came from a
+    backup source, so the checkpoint writer can avoid poisoning the stream
+    checkpoint's last_collector_session_id with a backup-collector session id
+    during a failover window."""
+
+    def _make_envelope(self, *, source=None, offset=0, session_id="primary-session"):
+        env = {
+            "v": 1, "type": "data", "exchange": "binance", "symbol": "btcusdt",
+            "stream": "trades", "received_at": 1741689600_000_000_000,
+            "exchange_ts": 100, "collector_session_id": session_id, "session_seq": 0,
+            "raw_text": "{}", "raw_sha256": "abc",
+            "_topic": "binance.trades", "_partition": 0, "_offset": offset,
+        }
+        if source is not None:
+            env["_source"] = source
+        return env
+
+    def test_flush_of_primary_only_has_backup_source_false(self):
+        from src.writer.buffer_manager import BufferManager
+
+        bm = BufferManager(base_dir="/data", flush_messages=100, flush_interval_seconds=9999)
+        bm.add(self._make_envelope(offset=0))
+        bm.add(self._make_envelope(offset=1))
+        results = bm.flush_all()
+        assert len(results) == 1
+        assert results[0].has_backup_source is False
+
+    def test_flush_last_envelope_backup_has_backup_source_true(self):
+        from src.writer.buffer_manager import BufferManager
+
+        bm = BufferManager(base_dir="/data", flush_messages=100, flush_interval_seconds=9999)
+        bm.add(self._make_envelope(offset=0))
+        bm.add(self._make_envelope(source="backup", offset=1, session_id="backup-session"))
+        results = bm.flush_all()
+        assert len(results) == 1
+        assert results[0].has_backup_source is True
+
+    def test_flush_last_envelope_primary_overrides_earlier_backup(self):
+        from src.writer.buffer_manager import BufferManager
+
+        bm = BufferManager(base_dir="/data", flush_messages=100, flush_interval_seconds=9999)
+        bm.add(self._make_envelope(source="backup", offset=0, session_id="backup-session"))
+        bm.add(self._make_envelope(offset=1))
+        results = bm.flush_all()
+        assert len(results) == 1
+        assert results[0].has_backup_source is False

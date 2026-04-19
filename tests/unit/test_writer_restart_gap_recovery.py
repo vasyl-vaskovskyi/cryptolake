@@ -559,6 +559,147 @@ class TestCheckpointPersistenceAfterCommit:
         assert consumer._durable_checkpoints[key].last_collector_session_id == "session-A"
 
 
+class TestBackupFlushPreservesCheckpointSession:
+    """A flush whose last envelope came from the backup collector must NOT
+    overwrite the checkpoint's last_collector_session_id with the backup
+    collector's session id — otherwise post-reboot recovery emits a spurious
+    restart_gap comparing backup→primary sessions (chaos test 7)."""
+
+    @pytest.mark.asyncio
+    async def test_backup_flush_preserves_existing_session_id(self):
+        consumer = _make_consumer(async_state=True)
+        consumer._consumer = MagicMock()
+        key = ("binance", "btcusdt", "trades")
+        # Seed an existing primary-session checkpoint.
+        existing = StreamCheckpoint(
+            exchange="binance", symbol="btcusdt", stream="trades",
+            last_received_at="2026-03-18T10:00:00+00:00",
+            last_collector_session_id="primary-session-pre-reboot",
+        )
+        consumer._durable_checkpoints = {key: existing}
+        consumer._recovery_done = set()
+
+        from src.writer.file_rotator import FileTarget
+        from pathlib import Path
+
+        meta = CheckpointMeta(
+            last_received_at=1000000000_000_000_000,
+            last_collector_session_id="BACKUP-session-post-reboot",
+            last_session_seq=10,
+            stream_key=key,
+        )
+        flush_result = FlushResult(
+            target=FileTarget("binance", "btcusdt", "trades", "2026-03-18", 10),
+            file_path=Path("/data/binance/btcusdt/trades/2026-03-18/hour-10.jsonl.zst"),
+            lines=[b'{"test": 1}\n'],
+            high_water_offset=-1,
+            partition=0,
+            count=1,
+            checkpoint_meta=meta,
+            has_backup_source=True,
+        )
+        from src.writer.state_manager import FileState
+        states = [FileState(
+            topic="binance.trades", partition=0, high_water_offset=100,
+            file_path="/data/binance/btcusdt/trades/2026-03-18/hour-10.jsonl.zst",
+            file_byte_size=512,
+        )]
+
+        await consumer._commit_state(states, [flush_result], time.monotonic())
+
+        # Saved checkpoint should preserve the pre-reboot primary session id.
+        saved = consumer.state_manager.save_states_and_checkpoints.call_args[0][1]
+        assert len(saved) == 1
+        assert saved[0].last_collector_session_id == "primary-session-pre-reboot"
+        # But last_received_at DOES advance — progress is still tracked.
+        assert saved[0].last_received_at != existing.last_received_at
+
+    @pytest.mark.asyncio
+    async def test_primary_flush_overwrites_session_id(self):
+        consumer = _make_consumer(async_state=True)
+        consumer._consumer = MagicMock()
+        key = ("binance", "btcusdt", "trades")
+        existing = StreamCheckpoint(
+            exchange="binance", symbol="btcusdt", stream="trades",
+            last_received_at="2026-03-18T10:00:00+00:00",
+            last_collector_session_id="primary-session-old",
+        )
+        consumer._durable_checkpoints = {key: existing}
+        consumer._recovery_done = set()
+
+        from src.writer.file_rotator import FileTarget
+        from pathlib import Path
+
+        meta = CheckpointMeta(
+            last_received_at=1000000000_000_000_000,
+            last_collector_session_id="primary-session-new",
+            last_session_seq=10,
+            stream_key=key,
+        )
+        flush_result = FlushResult(
+            target=FileTarget("binance", "btcusdt", "trades", "2026-03-18", 10),
+            file_path=Path("/data/binance/btcusdt/trades/2026-03-18/hour-10.jsonl.zst"),
+            lines=[b'{"test": 1}\n'],
+            high_water_offset=100,
+            partition=0,
+            count=1,
+            checkpoint_meta=meta,
+            has_backup_source=False,
+        )
+        from src.writer.state_manager import FileState
+        states = [FileState(
+            topic="binance.trades", partition=0, high_water_offset=100,
+            file_path="/data/binance/btcusdt/trades/2026-03-18/hour-10.jsonl.zst",
+            file_byte_size=512,
+        )]
+
+        await consumer._commit_state(states, [flush_result], time.monotonic())
+
+        saved = consumer.state_manager.save_states_and_checkpoints.call_args[0][1]
+        assert saved[0].last_collector_session_id == "primary-session-new"
+
+    @pytest.mark.asyncio
+    async def test_backup_flush_without_existing_checkpoint_uses_session_id(self):
+        """Edge case: backup flush with no existing checkpoint — use backup
+        session_id (nothing to preserve). First-ever run scenario; recovery
+        gap logic handles this safely via the no-checkpoint branch."""
+        consumer = _make_consumer(async_state=True)
+        consumer._consumer = MagicMock()
+        consumer._durable_checkpoints = {}
+        consumer._recovery_done = set()
+
+        from src.writer.file_rotator import FileTarget
+        from pathlib import Path
+
+        meta = CheckpointMeta(
+            last_received_at=1000000000_000_000_000,
+            last_collector_session_id="backup-session",
+            last_session_seq=10,
+            stream_key=("binance", "btcusdt", "trades"),
+        )
+        flush_result = FlushResult(
+            target=FileTarget("binance", "btcusdt", "trades", "2026-03-18", 10),
+            file_path=Path("/data/binance/btcusdt/trades/2026-03-18/hour-10.jsonl.zst"),
+            lines=[b'{"test": 1}\n'],
+            high_water_offset=-1,
+            partition=0,
+            count=1,
+            checkpoint_meta=meta,
+            has_backup_source=True,
+        )
+        from src.writer.state_manager import FileState
+        states = [FileState(
+            topic="binance.trades", partition=0, high_water_offset=100,
+            file_path="/data/binance/btcusdt/trades/2026-03-18/hour-10.jsonl.zst",
+            file_byte_size=512,
+        )]
+
+        await consumer._commit_state(states, [flush_result], time.monotonic())
+
+        saved = consumer.state_manager.save_states_and_checkpoints.call_args[0][1]
+        assert saved[0].last_collector_session_id == "backup-session"
+
+
 class TestRuntimeSessionDetectionPreserved:
     """The existing _check_session_change() should still work for detecting
     session changes during normal (non-recovery) operation."""
