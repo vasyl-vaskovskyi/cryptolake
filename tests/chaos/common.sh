@@ -94,12 +94,47 @@ setup_stack() {
     # Ensure clean state: kill leftovers from a previous test that may have
     # crashed before its teardown completed.
     echo "  Cleaning leftover containers/volumes/networks..."
-    $COMPOSE down -v --remove-orphans 2>/dev/null || true
+    _compose_down_with_timeout 60 $COMPOSE down -v --remove-orphans
     rm -rf "${TEST_DATA_DIR:?}/binance"
     $COMPOSE build --quiet 2>&1
     TEST_DURATION_SECONDS=600 $COMPOSE up -d 2>&1
     wait_healthy
     echo "--- Stack is ready ---"
+}
+
+# Run a command with a hard timeout. Portable: no dependency on coreutils
+# `timeout`/`gtimeout` (neither ships with macOS). If the command doesn't
+# finish within $1 seconds, SIGTERM then SIGKILL it. Exit code reflects the
+# command's own status, or 124 on timeout.
+run_with_timeout() {
+    local timeout_s="$1"; shift
+    "$@" &
+    local cmd_pid=$!
+    ( sleep "$timeout_s"; kill -TERM "$cmd_pid" 2>/dev/null; sleep 5; kill -KILL "$cmd_pid" 2>/dev/null ) &
+    local watchdog_pid=$!
+    wait "$cmd_pid" 2>/dev/null
+    local rc=$?
+    kill "$watchdog_pid" 2>/dev/null
+    wait "$watchdog_pid" 2>/dev/null
+    if (( rc == 143 )) || (( rc == 137 )); then rc=124; fi
+    return $rc
+}
+
+# Wrap `docker compose down` with a hard timeout so a wedged Docker CLI
+# can't block the whole test suite indefinitely (observed: daemon socket
+# hangs after Docker Desktop VM snapshot cycles). Caller passes the full
+# compose-down invocation after the timeout value.
+_compose_down_with_timeout() {
+    local timeout_s="$1"; shift
+    if run_with_timeout "$timeout_s" "$@" 2>&1; then
+        return 0
+    fi
+    local rc=$?
+    if (( rc == 124 )); then
+        echo "  WARNING: docker compose down timed out after ${timeout_s}s — continuing anyway"
+        echo "  (next test's setup_stack will retry the cleanup)"
+    fi
+    return 0
 }
 
 wait_healthy() {
@@ -134,7 +169,7 @@ teardown_stack() {
     if [[ "${_TEARDOWN_DONE:-}" == "true" ]]; then return 0; fi
     _TEARDOWN_DONE=true
     section "Teardown"
-    $COMPOSE down -v --remove-orphans --rmi local 2>&1 || true
+    _compose_down_with_timeout 120 $COMPOSE down -v --remove-orphans --rmi local
     rm -rf "${TEST_DATA_DIR:?}/binance"
     echo "  Cleanup complete"
 }
