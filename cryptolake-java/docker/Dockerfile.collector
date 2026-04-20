@@ -1,0 +1,14 @@
+# cryptolake-java/docker/Dockerfile.collector
+# syntax=docker/dockerfile:1.7
+
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /src
+COPY . /src/
+RUN ./gradlew :collector:installDist --no-daemon
+
+FROM eclipse-temurin:21-jre
+ENV JAVA_OPTS="-XX:+UseZGC -XX:+ZGenerational"
+WORKDIR /app
+COPY --from=build /src/collector/build/install/collector /app/
+EXPOSE 8091
+ENTRYPOINT ["/app/bin/collector"]

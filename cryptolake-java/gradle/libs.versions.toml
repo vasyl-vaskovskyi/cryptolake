@@ -1,0 +1,44 @@
+# cryptolake-java/gradle/libs.versions.toml
+[versions]
+jackson = "2.17.2"
+kafka = "3.8.0"
+zstdJni = "1.5.6-4"
+micrometer = "1.13.4"
+logback = "1.5.8"
+logstashEncoder = "7.4"
+slf4j = "2.0.13"
+postgresql = "42.7.4"
+hikari = "5.1.0"
+picocli = "4.7.6"
+hibernateValidator = "8.0.1.Final"
+junit = "5.11.0"
+assertj = "3.26.3"
+testcontainers = "1.20.1"
+errorProne = "2.31.0"
+nullaway = "0.11.1"
+spotless = "7.0.0.BETA2"
+
+[libraries]
+jackson-databind     = { module = "com.fasterxml.jackson.core:jackson-databind",               version.ref = "jackson" }
+jackson-yaml         = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml",  version.ref = "jackson" }
+kafka-clients        = { module = "org.apache.kafka:kafka-clients",                             version.ref = "kafka"   }
+zstd-jni             = { module = "com.github.luben:zstd-jni",                                  version.ref = "zstdJni" }
+micrometer-prometheus= { module = "io.micrometer:micrometer-registry-prometheus",               version.ref = "micrometer" }
+logback-classic      = { module = "ch.qos.logback:logback-classic",                             version.ref = "logback" }
+logstash-encoder     = { module = "net.logstash.logback:logstash-logback-encoder",              version.ref = "logstashEncoder" }
+slf4j-api            = { module = "org.slf4j:slf4j-api",                                        version.ref = "slf4j"   }
+postgresql           = { module = "org.postgresql:postgresql",                                  version.ref = "postgresql" }
+hikaricp             = { module = "com.zaxxer:HikariCP",                                        version.ref = "hikari"  }
+picocli              = { module = "info.picocli:picocli",                                       version.ref = "picocli" }
+hibernate-validator  = { module = "org.hibernate.validator:hibernate-validator",                version.ref = "hibernateValidator" }
+junit-bom            = { module = "org.junit:junit-bom",                                        version.ref = "junit"   }
+junit-jupiter        = { module = "org.junit.jupiter:junit-jupiter" }
+assertj              = { module = "org.assertj:assertj-core",                                   version.ref = "assertj" }
+testcontainers-bom   = { module = "org.testcontainers:testcontainers-bom",                      version.ref = "testcontainers" }
+testcontainers-kafka = { module = "org.testcontainers:kafka" }
+testcontainers-postgres = { module = "org.testcontainers:postgresql" }
+
+[plugins]
+spotless  = { id = "com.diffplug.spotless",                   version.ref = "spotless" }
+errorProne= { id = "net.ltgt.errorprone",                     version = "4.0.1" }
+nullawayPlug = { id = "net.ltgt.nullaway",                    version = "2.0.0" }

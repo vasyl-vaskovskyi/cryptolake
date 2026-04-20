@@ -1,0 +1,10 @@
+# cryptolake-java/.gitignore
+.gradle/
+build/
+*.class
+.idea/
+*.iml
+parity-fixtures/websocket-frames/
+parity-fixtures/verify/expected.txt
+!parity-fixtures/metrics/
+# (metrics snapshots are small and worth tracking; frames + verify output are large)
