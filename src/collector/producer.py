@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 import structlog
 from confluent_kafka import Producer as KafkaProducer
 
 from src.collector import metrics as collector_metrics
+from src.collector.tap import FrameTap
 from src.common.envelope import create_gap_envelope, serialize_envelope
 
 logger = structlog.get_logger()
@@ -30,6 +32,7 @@ class CryptoLakeProducer:
         default_stream_cap: int = 10_000,
         on_overflow: Callable[[str, str, str], None] | None = None,
         topic_prefix: str = "",
+        tap_root: Path | None = None,
     ):
         self.exchange = exchange
         self.topic_prefix = topic_prefix
@@ -40,6 +43,8 @@ class CryptoLakeProducer:
         self._on_overflow = on_overflow
         self._buffer_counts: dict[str, int] = {}
         self._lock = threading.Lock()
+        self._tap_root = tap_root
+        self._taps: dict[str, FrameTap] = {}
         # Overflow window tracking: {(symbol, stream): {"start_ts": ns, "dropped": count}}
         self._overflow_windows: dict[tuple[str, str], dict] = {}
         self._overflow_seq: int = 0
@@ -68,6 +73,19 @@ class CryptoLakeProducer:
         symbol = envelope["symbol"]
         topic = f"{self.topic_prefix}{self.exchange}.{stream}"
         key = symbol.encode()
+
+        # Fixture-capture tap (no-op when tap_root is None). Captures every
+        # envelope with raw_text verbatim — the source of truth for Java
+        # gate 3 (raw_text / raw_sha256 byte-identity). Gap records have no
+        # raw_text and are skipped.
+        raw_text = envelope.get("raw_text")
+        if self._tap_root is not None and raw_text is not None:
+            tap = self._taps.get(stream)
+            if tap is None:
+                tap = FrameTap(output_dir=self._tap_root / stream, stream=stream)
+                self._taps[stream] = tap
+            tap.write(raw_text.encode(), envelope)
+
         try:
             value = serialize_envelope(envelope)
         except Exception:

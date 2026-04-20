@@ -129,12 +129,20 @@ class WriterConfig(BaseModel):
     gap_filter: GapFilterConfig = Field(default_factory=GapFilterConfig)
 
 
+class CollectorConfig(BaseModel):
+    # Fixture-capture tap output root. When set, every inbound envelope is
+    # persisted verbatim under <tap_output_dir>/<stream>/. Used by
+    # /port-init to build the parity fixture corpus. None disables.
+    tap_output_dir: Path | None = None
+
+
 class CryptoLakeConfig(BaseModel):
     database: DatabaseConfig
     exchanges: ExchangesConfig
     redpanda: RedpandaConfig
     writer: WriterConfig = Field(default_factory=WriterConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    collector: CollectorConfig = Field(default_factory=CollectorConfig)
 
 
 def _apply_env_overrides(data: dict[str, Any], overrides: dict[str, str]) -> dict[str, Any]:
@@ -174,7 +182,7 @@ def load_config(path: Path, env_overrides: dict[str, str] | None = None) -> Cryp
             key: value
             for key, value in os.environ.items()
             if "__" in key
-            and key.split("__", 1)[0].lower() in {"database", "exchanges", "redpanda", "writer", "monitoring"}
+            and key.split("__", 1)[0].lower() in {"database", "exchanges", "redpanda", "writer", "monitoring", "collector"}
         }
         if "HOST_DATA_DIR" in os.environ:
             overrides["HOST_DATA_DIR"] = os.environ["HOST_DATA_DIR"]

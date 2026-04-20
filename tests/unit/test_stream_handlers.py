@@ -213,6 +213,8 @@ class TestProducerOverflow:
         producer.buffer_caps = {"depth": 80_000, "trades": 10_000}
         producer.other_cap = 10_000
         producer.max_buffer = 100_000
+        producer._tap_root = None
+        producer._taps = {}
 
         env = create_data_envelope(
             exchange="binance", symbol="btcusdt", stream="trades",

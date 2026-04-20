@@ -43,6 +43,7 @@ class Collector:
             buffer_caps=producer_cfg.buffer_caps,
             default_stream_cap=producer_cfg.default_stream_cap,
             topic_prefix=os.environ.get("TOPIC_PREFIX", ""),
+            tap_root=self.config.collector.tap_output_dir,
         )
         self.enabled_streams = self.exchange_cfg.get_enabled_streams()
         self.symbols = self.exchange_cfg.symbols
