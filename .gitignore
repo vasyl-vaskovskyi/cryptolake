@@ -16,4 +16,8 @@ htmlcov/
 .ruff_cache/
 /data/
 .worktrees/
-.claude/
+# Ignore most of .claude/ (local settings, worktree metadata) but track the
+# shared skill bundle and slash commands that are part of the repo.
+.claude/*
+!.claude/skills/
+!.claude/commands/
