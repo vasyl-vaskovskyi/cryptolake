@@ -25,6 +25,7 @@
 ### Created
 
 - `.claude/skills/python-to-java-port/SKILL.md` — frontmatter, rule tiers, process
+- `.claude/skills/python-to-java-port/tier5-translation-rules.md` — 68 Python→Java translation rules (copied from `docs/superpowers/port/translation-rules-draft.md`)
 - `.claude/skills/python-to-java-port/prompts/analyst.md`
 - `.claude/skills/python-to-java-port/prompts/architect.md`
 - `.claude/skills/python-to-java-port/prompts/developer.md`
@@ -181,6 +182,16 @@ Module boundaries: halt after each module passes all 7 gates; user runs `/port-a
 20. Python `verify` CLI, run against Java-produced archives, must pass.
 21. Envelope field order in serialized JSON follows Python canonical order (defined once in `EnvelopeCodec`).
 
+## Tier 5 — Translation patterns
+
+68 rules, 13 categories (A–M): Concurrency, JSON codec, Kafka, WebSocket/HTTP, Numerics, Timestamps, Exceptions, Logging, File I/O, Configuration, CLI, Testing, Domain-specific.
+
+Full content: `.claude/skills/python-to-java-port/tier5-translation-rules.md`.
+
+The orchestrator's `assemble_prompt.sh` inlines Tier 5 verbatim into every Analyst, Architect, and Developer role prompt at dispatch time (under the `{{tier5_rules}}` placeholder). Agents do not need to Read the file separately — it arrives in their prompt.
+
+Analysts cite Tier 5 rule IDs in `mapping.md §10 Port risks`. Architects cite Tier 5 rule IDs in `design.md §10 Rule compliance`. Developers cite Tier 5 rule IDs in `completion.md §3 Rule compliance`.
+
 ## Tier 4 — Process rules
 
 22. Agent order per module is fixed: Analyst → Architect → Developer. No out-of-order dispatch.
@@ -229,11 +240,26 @@ wc -l .claude/skills/python-to-java-port/SKILL.md
 
 Expected: frontmatter lines present, file is ≥ 70 lines.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Install tier5 translation-rules file in the skill directory**
+
+Copy the draft into the skill bundle so the orchestrator can inline it:
 
 ```bash
-git add .claude/skills/python-to-java-port/SKILL.md
-git commit -m "feat(port): add SKILL.md with 4 rule tiers"
+cp docs/superpowers/port/translation-rules-draft.md .claude/skills/python-to-java-port/tier5-translation-rules.md
+```
+
+Verify:
+```bash
+wc -l .claude/skills/python-to-java-port/tier5-translation-rules.md
+head -3 .claude/skills/python-to-java-port/tier5-translation-rules.md
+```
+Expected: ~1649 lines; header identifies it as the translation-rules document.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add .claude/skills/python-to-java-port/SKILL.md .claude/skills/python-to-java-port/tier5-translation-rules.md
+git commit -m "feat(port): add SKILL.md with 5 rule tiers including Tier 5 (translation patterns)"
 ```
 
 ---
@@ -454,6 +480,12 @@ Required sections (in order, exact headings):
 6. Recovery prefers replay from Kafka / exchange cursors over inferred reconstruction.
 7. JSON codec must not re-order, re-quote, or re-format `raw_text`.
 
+## Tier 5 — Translation patterns (verbatim, for cross-reference in §10 Port risks)
+
+The 68 Python→Java translation rules below are your cross-reference for §10 Port risks. When you encounter a Python pattern in this module that maps to one of the Tier 5 rules, cite the rule ID (e.g., `A3`, `B4`, `E1`) in §10 so the Architect can refer to it when designing the Java realization. You do NOT apply these rules — you surface them.
+
+{{tier5_rules}}
+
 ## Acceptance
 
 The orchestrator will validate your artifact against `.claude/skills/python-to-java-port/schemas/mapping.schema.md`. Missing sections or empty `## 11.` = rejection. You get 1 retry before escalation.
@@ -570,6 +602,12 @@ Required sections (in order, exact headings):
 19. `raw_text` / `raw_sha256` byte-identity gate via fixture corpus.
 20. Python `verify` CLI passes on Java archives.
 21. Envelope JSON field order follows Python canonical order.
+
+## Tier 5 — Translation patterns (verbatim, authoritative)
+
+The rules below are the project's authoritative Python→Java translation catalog. They override any instinctive translation choice you would otherwise make. When the mapping `§10 Port risks` cites a Tier 5 rule ID, your `design.md §10 Rule compliance` MUST state how that rule is honored in the Java class/method you designed.
+
+{{tier5_rules}}
 
 ## Acceptance
 
@@ -697,6 +735,14 @@ Required sections:
 19. raw_text fixture byte-identity.
 20. verify CLI parity.
 21. Envelope field order.
+
+### Tier 5 — Translation patterns (verbatim, authoritative)
+
+Apply these rules as you write Java code. The Architect's `design.md §10` has already cited the specific Tier 5 rules relevant to this module. Your `completion.md §3 Rule compliance` must cite the `file:line` in your Java code where each Tier 5 rule cited by the design is honored.
+
+If a Tier 5 rule conflicts with the design, do NOT improvise — escalate in `completion.md §4`.
+
+{{tier5_rules}}
 
 ## Acceptance
 
@@ -1477,6 +1523,16 @@ if [[ "$ROLE" == "developer" && "$ATTEMPT" -gt 1 ]]; then
   GATE_FAILURES="$(cat "docs/superpowers/port/$MODULE/.last-gate-failure.txt" 2>/dev/null || echo "(no stored failure)")"
 fi
 
+TIER5_FILE=".claude/skills/python-to-java-port/tier5-translation-rules.md"
+if [[ ! -f "$TIER5_FILE" ]]; then
+  echo "tier5 translation-rules file missing: $TIER5_FILE" >&2
+  exit 1
+fi
+
+# Use a placeholder file for the tier5 substitution so awk doesn't
+# struggle with a ~70KB string argument.
+TIER5_SENTINEL="__TIER5_INJECT_HERE__"
+
 awk -v module="$MODULE" \
     -v attempt="$ATTEMPT" \
     -v failure="$FAILURE" \
@@ -1484,6 +1540,7 @@ awk -v module="$MODULE" \
     -v py_test_files="$PY_TEST_FILES" \
     -v mapping_sha="$MAPPING_SHA" \
     -v gate_failures="$GATE_FAILURES" \
+    -v sentinel="$TIER5_SENTINEL" \
 '
 {
   gsub(/\{\{module\}\}/, module)
@@ -1493,9 +1550,17 @@ awk -v module="$MODULE" \
   gsub(/\{\{python_test_files\}\}/, py_test_files)
   gsub(/\{\{mapping_sha\}\}/, mapping_sha)
   gsub(/\{\{gate_failures\}\}/, gate_failures)
+  gsub(/\{\{tier5_rules\}\}/, sentinel)
   print
 }
-' "$TEMPLATE"
+' "$TEMPLATE" | awk -v sentinel="$TIER5_SENTINEL" -v tier5_file="$TIER5_FILE" '
+$0 == sentinel {
+  while ((getline line < tier5_file) > 0) print line
+  close(tier5_file)
+  next
+}
+{ print }
+'
 ```
 
 - [ ] **Step 2: Smoke-test assembly**
@@ -3227,6 +3292,7 @@ Expected output (minimum):
 .claude/commands/port-rollback.md
 .claude/commands/port-status.md
 .claude/skills/python-to-java-port/SKILL.md
+.claude/skills/python-to-java-port/tier5-translation-rules.md
 .claude/skills/python-to-java-port/prompts/analyst.md
 .claude/skills/python-to-java-port/prompts/architect.md
 .claude/skills/python-to-java-port/prompts/developer.md
@@ -3280,7 +3346,9 @@ After that: /port-module to begin porting the common module.
 
 ## Self-review checklist (run at end of plan execution)
 
-- [ ] All 28 skill rules present in `SKILL.md`
+- [ ] All 28 skill rules present in `SKILL.md` (Tiers 1–4) + Tier 5 pointer
+- [ ] `tier5-translation-rules.md` present in skill bundle (~1649 lines)
+- [ ] `assemble_prompt.sh` substitutes `{{tier5_rules}}` for each role (smoke: produced prompt is > 50 KB)
 - [ ] All 11 mapping/design sections enforced by `validate_artifact.sh`
 - [ ] All 5 completion sections enforced
 - [ ] All 7 gates have their own script in `scripts/gates/`

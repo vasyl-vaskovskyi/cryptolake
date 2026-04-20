@@ -194,6 +194,16 @@ Four tiers. Agents read the skill at start of each run; violations block progres
 20. Python `verify` CLI, run against Java-produced archives, must pass.
 21. Envelope field order in serialized JSON follows Python canonical order (defined once in `EnvelopeCodec`).
 
+**Tier 5 — Translation patterns:**
+
+68 rules across 13 categories (A–M: concurrency, JSON codec, Kafka, WebSocket/HTTP, numerics, timestamps, exceptions, logging, file I/O, configuration, CLI, testing, domain-specific), mined from the Python codebase during Phase 0a. Full catalog lives in `.claude/skills/python-to-java-port/tier5-translation-rules.md`. The orchestrator's `assemble_prompt.sh` inlines Tier 5 verbatim into every role prompt (Analyst, Architect, Developer) at dispatch time via a `{{tier5_rules}}` placeholder.
+
+- Analysts cite Tier 5 rule IDs in `mapping.md §10 Port risks`.
+- Architects cite Tier 5 rule IDs in `design.md §10 Rule compliance`.
+- Developers cite Tier 5 rule IDs in `completion.md §3 Rule compliance`.
+
+This tier is advisory-authoritative: it locks translation decisions once to prevent drift across modules, but an agent may escalate if a rule conflicts with an invariant (Tier 1 always wins).
+
 **Tier 4 — Process rules:**
 
 22. Agent order per module is fixed: **Analyst → Architect → Developer**. No out-of-order dispatch.
