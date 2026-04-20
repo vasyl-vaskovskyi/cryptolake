@@ -78,12 +78,19 @@ EOF
   [[ "$output" == *"## 11."* ]]
 }
 
-@test "mapping: TODO in body fails" {
+@test "mapping: TBD in body fails" {
   write_mapping_good "$TMPDIR/mapping.md"
-  echo "TODO: finish this" >> "$TMPDIR/mapping.md"
+  echo "TBD: finish this" >> "$TMPDIR/mapping.md"
   run bash "$SCRIPT" mapping "$TMPDIR/mapping.md"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"TODO"* ]]
+  [[ "$output" == *"TBD"* ]]
+}
+
+@test "mapping: TODO in body is ALLOWED (analyst may describe Python TODOs)" {
+  write_mapping_good "$TMPDIR/mapping.md"
+  echo "The Python source has a \`# TODO: handle empty case\` comment at producer.py:42" >> "$TMPDIR/mapping.md"
+  run bash "$SCRIPT" mapping "$TMPDIR/mapping.md"
+  [ "$status" -eq 0 ]
 }
 
 @test "mapping: wrong status in frontmatter fails" {

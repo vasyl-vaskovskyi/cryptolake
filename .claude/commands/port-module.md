@@ -106,16 +106,22 @@ Same pattern:
 
 ```bash
 bash .claude/skills/python-to-java-port/scripts/run_gates.sh $MODULE
+RC=$?
 ```
 
-- If exit 0: `bash $STATE_SH set_phase gates` then `set_phase complete`. Halt with "Module <m> complete. Review commits <developer_start_sha>..HEAD and run /port-advance."
-- If exit 2 (gate 7 pending): dispatch Architect read-only to produce signoff file:
+Dispatch by exit code:
+
+- **If `RC == 0`**: `bash $STATE_SH set_phase gates` then `set_phase complete`. Halt with "Module <m> complete. Review commits <developer_start_sha>..HEAD and run /port-advance."
+
+- **If `RC == 2` (gate 7 pending)**: dispatch Architect read-only to produce signoff file:
   - Read `developer_start_sha` from state.json: `START=$(jq -r --arg m "$MODULE" '.modules[] | select(.name==$m) | .developer_start_sha' $STATE)`
   - Prompt the Architect with the module diff (`git diff $START..HEAD -- cryptolake-java/`) and `design.md`, ask for `approved` or `rejected` on first line of output.
   - Write stdout to `docs/superpowers/port/$MODULE/architect-signoff.txt`.
   - Re-run `run_gates.sh`.
-- If exit 1: increment developer attempts. If < 3: re-dispatch Developer with gate failure log attached. If == 3: halt and escalate.
-- Special: if gate 3 failed, halt immediately regardless of attempts. Set halt_reason.
+
+- **If `RC == 3` (gate 3 critical — raw_text byte-identity failure)**: STOP IMMEDIATELY. `run_gates.sh` has already called `state.sh set_halt` with reason `gate3_byte_identity_failed_for_$MODULE`. Do NOT re-dispatch Developer. Do NOT retry. Report the failure to the user verbatim from `docs/superpowers/port/$MODULE/.last-gate-failure.txt` and explain that this is a Tier 1 invariant violation requiring human diagnosis (most likely a capture-path bug, not a coding bug). User's next step is `/port-rollback <module>` after investigation.
+
+- **If `RC == 1` (other gate failure)**: increment developer attempts. If < 3: re-dispatch Developer with gate failure log attached. If == 3: halt and escalate.
 
 ### If PHASE == "gates" or "complete"
 

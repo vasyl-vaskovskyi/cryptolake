@@ -3,7 +3,10 @@
 
 set -euo pipefail
 
-FORBIDDEN_STRINGS=("TBD" "TODO" "???" "FIXME" "XXX")
+# Only true placeholder tokens. TODO/FIXME/XXX are intentionally excluded:
+# the Analyst's job is to SURFACE existing Python TODOs as port risks in
+# mapping.md §10, so those strings legitimately appear in artifact bodies.
+FORBIDDEN_STRINGS=("TBD" "???")
 
 _fail() {
   echo "VALIDATION FAILED: $*" >&2

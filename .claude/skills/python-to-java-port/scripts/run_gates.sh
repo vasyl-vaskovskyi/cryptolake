@@ -14,13 +14,16 @@ mkdir -p "$(dirname "$FAILURE_LOG")"
 run_gate() {
   local n="$1" name="$2" script="$3"
   echo "=== gate $n: $name ==="
-  if output=$(bash "$script" "$MODULE" 2>&1); then
-    echo "$output"
+  # Capture rc explicitly — after an `if ... fi` block, $? reflects the
+  # `if` construct itself (always 0), not the failing command, so gate 7
+  # pending (exit 2) cannot be distinguished from a hard failure that way.
+  local rc=0
+  output=$(bash "$script" "$MODULE" 2>&1) || rc=$?
+  echo "$output"
+  if [[ $rc -eq 0 ]]; then
     bash "$STATE_SH" record_gate_result "$n" pass
     return 0
   fi
-  local rc=$?
-  echo "$output"
   if [[ $rc -eq 2 && "$n" == "7" ]]; then
     bash "$STATE_SH" record_gate_result 7 pending
     return 2
@@ -32,9 +35,11 @@ run_gate() {
 }
 
 FINAL=0
+GATE3_CRITICAL=0
+
 run_gate 1 "unit_tests"         "$GATE_DIR/gate1_unit_tests.sh"         || FINAL=1
 run_gate 2 "chaos_tests"        "$GATE_DIR/gate2_chaos_tests.sh"        || FINAL=1
-run_gate 3 "raw_text_parity"    "$GATE_DIR/gate3_raw_text_parity.sh"    || FINAL=1
+run_gate 3 "raw_text_parity"    "$GATE_DIR/gate3_raw_text_parity.sh"    || { FINAL=1; GATE3_CRITICAL=1; }
 run_gate 4 "metric_parity"      "$GATE_DIR/gate4_metric_parity.sh"      || FINAL=1
 run_gate 5 "verify_cli"         "$GATE_DIR/gate5_verify_cli.sh"         || FINAL=1
 run_gate 6 "static_checks"      "$GATE_DIR/gate6_static_checks.sh"      || FINAL=1
@@ -52,5 +57,15 @@ if [[ $FINAL -eq 0 && $gate7_rc -eq 2 ]]; then
   echo "GATES 1-6 PASS; gate 7 PENDING architect dispatch"
   exit 2
 fi
+
+# Gate 3 (raw_text byte-identity) failure is a critical invariant violation
+# (Tier 1 rule 7). Caller must halt immediately and escalate to the user —
+# never auto-retry. Exit code 3 is the dedicated sentinel.
+if [[ $GATE3_CRITICAL -eq 1 ]]; then
+  bash "$STATE_SH" set_halt "gate3_byte_identity_failed_for_${MODULE}"
+  echo "GATE 3 CRITICAL FAIL; halt set; see $FAILURE_LOG"
+  exit 3
+fi
+
 echo "GATES FAILED; see $FAILURE_LOG"
 exit 1

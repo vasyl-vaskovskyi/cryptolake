@@ -14,7 +14,7 @@ Read-only snapshot of port progress.
    [[ -f $STATE ]] || { echo "no port in progress (state.json missing). Run /port-init"; exit 0; }
    ```
 
-2. Print summary:
+2. Print the state summary:
    ```bash
    jq -r '
      "=== Port status ===",
@@ -25,13 +25,20 @@ Read-only snapshot of port progress.
      "Modules:",
      (.modules[] | "  \(.name): status=\(.status) phase=\(.phase) gates_passed=\(
        [.gates | to_entries[] | select(.value == "pass")] | length
-     )/7 attempts=\(.attempts.analyst)/\(.attempts.architect)/\(.attempts.developer)"),
-     "",
-     "Latest artifacts:",
-     (.modules[] | select(.artifacts.mapping != null) | "  " + .artifacts.mapping),
-     (.modules[] | select(.artifacts.design != null) | "  " + .artifacts.design),
-     (.modules[] | select(.artifacts.completion != null) | "  " + .artifacts.completion)
+     )/7 attempts=\(.attempts.analyst)/\(.attempts.architect)/\(.attempts.developer)")
    ' $STATE
    ```
 
-3. If `halt_reason` is non-null, suggest: `/port-retry` to resume, or `/port-rollback <module>` to restart the current module.
+3. Probe the filesystem for per-module artifacts (state.json doesn't currently track these):
+   ```bash
+   echo ""
+   echo "Artifacts on disk:"
+   for m in common writer collector cli; do
+     for kind in mapping design completion; do
+       p="docs/superpowers/port/$m/${kind}.md"
+       [[ -f "$p" ]] && echo "  $p"
+     done
+   done
+   ```
+
+4. If `halt_reason` is non-null, suggest: `/port-retry` to resume, or `/port-rollback <module>` to restart the current module.

@@ -17,16 +17,37 @@ TIER5_FILE=".claude/skills/python-to-java-port/tier5-translation-rules.md"
 [[ -f "$TIER5_FILE" ]] || { echo "tier5 translation-rules file missing: $TIER5_FILE" >&2; exit 1; }
 
 # Module-scoped file lists.
+# Test-file list is scoped to files whose *only* top-level src.* imports are
+# from src.<module> (optionally also src.exchanges as a shared helper).
+# A test that imports both src.common and src.writer is primarily a writer
+# test; it doesn't belong in the common Analyst's §8. This keeps the
+# Analyst focused instead of cataloguing cross-module tests.
+_scope_tests_for_module() {
+  local target="$1"
+  local other_pattern
+  case "$target" in
+    common)    other_pattern='src\.(writer|collector|cli)' ;;
+    writer)    other_pattern='src\.(common|collector|cli)' ;;
+    collector) other_pattern='src\.(common|writer|cli)' ;;
+    cli)       other_pattern='src\.(common|writer|collector)' ;;
+  esac
+  grep -rl "from src\\.${target}\\b\\|import src\\.${target}\\b" tests 2>/dev/null \
+    | while read -r f; do
+        grep -qE "from $other_pattern|import $other_pattern" "$f" || echo "$f"
+      done \
+    | sort -u | sed 's/^/- /'
+}
+
 PY_FILES=""
 PY_TEST_FILES=""
 case "$MODULE" in
   common|writer|collector)
     PY_FILES="$(find "src/$MODULE" -type f -name '*.py' 2>/dev/null | sort | sed 's/^/- /')"
-    PY_TEST_FILES="$(grep -rl "from src\\.$MODULE\\b\\|import src\\.$MODULE\\b" tests 2>/dev/null | sort -u | sed 's/^/- /' || true)"
+    PY_TEST_FILES="$(_scope_tests_for_module "$MODULE" || true)"
     ;;
   cli)
     PY_FILES="$(find src/cli -type f -name '*.py' 2>/dev/null | sort | sed 's/^/- /')"
-    PY_TEST_FILES="$(grep -rl "from src\\.cli\\b\\|import src\\.cli\\b" tests 2>/dev/null | sort -u | sed 's/^/- /' || true)"
+    PY_TEST_FILES="$(_scope_tests_for_module cli || true)"
     ;;
   *) echo "unknown module: $MODULE" >&2; exit 1 ;;
 esac
