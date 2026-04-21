@@ -29,7 +29,8 @@
         "developer": 0
       },
       "escalations": [],
-      "developer_start_sha": "72be1f5d73ad8ca5f79873e978316e76e4629157"
+      "developer_start_sha": "72be1f5d73ad8ca5f79873e978316e76e4629157",
+      "accepted_sha": "8f4b785d232f0655928fb7667eaa476a9f38e93e"
     },
     {
       "name": "writer",
