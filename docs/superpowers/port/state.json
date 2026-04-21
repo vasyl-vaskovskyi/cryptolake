@@ -2,13 +2,13 @@
   "version": 1,
   "started_at": "2026-04-21T15:05:42Z",
   "current_module": "common",
-  "halt_reason": "checkpoint 0: review common/mapping.md, run /port-advance",
+  "halt_reason": null,
   "modules": [
     {
       "name": "common",
       "status": "in_progress",
-      "phase": "analyst_review",
-      "checkpoint0_done": false,
+      "phase": "analyst",
+      "checkpoint0_done": true,
       "artifacts": {
         "mapping": null,
         "design": null,
