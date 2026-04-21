@@ -28,7 +28,8 @@
         "architect": 0,
         "developer": 0
       },
-      "escalations": []
+      "escalations": [],
+      "developer_start_sha": "72be1f5d73ad8ca5f79873e978316e76e4629157"
     },
     {
       "name": "writer",
