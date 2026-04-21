@@ -1,0 +1,20 @@
+approved
+
+Gate 7 signoff for the `common` module.
+
+Verified:
+- Tier 1 invariants. Rule 1: `DataEnvelope.rawText` is a plain `String` component; `DataEnvelope.create` accepts it verbatim without transformation, and the Javadoc reminds the collector that raw bytes must be captured pre-parse. Rule 2: `DataEnvelope.create` calls `Sha256.hexDigestUtf8(rawText)` exactly once inside the static factory (DataEnvelope.java:82); the record has no setter and no alternate path for recomputation. Rule 7: `EnvelopeCodec.newMapper()` disables `SORT_PROPERTIES_ALPHABETICALLY`, `ORDER_MAP_ENTRIES_BY_KEYS`, `INDENT_OUTPUT`, and `WRITE_DATES_AS_TIMESTAMPS`, with `rawText` typed as `String` — no re-parse, no re-serialize.
+- Tier 5 B1: `@JsonPropertyOrder` is present on both envelope records with the full field list matching design §6.1, and `@JsonInclude(NON_NULL)` is applied to `GapEnvelope` for the optional restart-metadata fields. `BrokerCoordinates` has its own order annotation for `_topic`/`_partition`/`_offset`. `EnvelopeCodecTest#fieldOrderMatchesPython` asserts the ordering via substring-index comparison.
+- Tier 5 E1/E2: `receivedAt`, `exchangeTs`, `sessionSeq`, `gapStartTs`, `gapEndTs`, and `BrokerCoordinates.offset` are all `long`; `ClockSupplier.nowNs()` returns `long` nanoseconds.
+- Tier 5 F1/M7: `SystemIdentity.SESSION_ID_FMT` uses `yyyy-MM-dd'T'HH:mm:ss'Z'` at UTC with no fractional seconds; `Instant.toString()` is never invoked.
+- Tier 5 M6: `GapReasons.VALID` is an unmodifiable `Set<String>` (not an enum), and `GapEnvelope`'s compact constructor enforces it.
+- Tier 2: zero `synchronized` and zero `Thread.sleep` in main sources; no Spring/Guice/CDI/Micronaut/Quarkus on the classpath; every data carrier is a `record`; `HealthServer` uses `Executors.newVirtualThreadPerTaskExecutor()`; `CryptoLakeConfigException extends RuntimeException` and the loader wraps checked exceptions.
+- Tier 3: every test class carries `// ports:` trace comments (16 files inspected); `test_cancel_tasks_*` omissions are documented in design §3.1 and completion §2.
+- Design §2 class catalog: all 8 packages and every listed record/class are present in `src/main/java`, with no unjustified additions.
+- Deviations in completion §2 (Q1 via `<fieldNames><message>event</message></fieldNames>`, Q3 via package-private `envSupplier`, Q4 via `@EnabledOnOs`, Q6 fixture deferral) all follow the design's preferred paths.
+
+Minor observations (follow-ups, non-blocking):
+- `fieldOrderMatchesPython` asserts ordering via `indexOf`, which is strictly correct but would be strengthened once the deferred `parity-fixtures/common/*.golden.json` files are captured and compared byte-for-byte (completion §2 Q6).
+- `HealthServer.DEFAULT_MAPPER` is a private static `ObjectMapper` used only for `/ready` JSON; while Rule 14 is about service-level single ownership (not library internals) and this mapper is trivially small, a future pass could accept the injected mapper for strict uniformity.
+- `health/` and `kafka/` test directories are empty; design §8 listed new tests `HealthServerTest#*` and `TopicNamesTest#forStreamFormat`. These are cosmetic additions (no Python counterparts) and do not block gate 7, but should be added when `common` is next revisited.
+- The Q1 rename renders `version` and `levelValue` as `[ignore]` field names rather than fully suppressing them — works because `LogstashEncoder` treats `[ignore]` specially, but a brief comment citing the encoder behavior would help future maintainers.
