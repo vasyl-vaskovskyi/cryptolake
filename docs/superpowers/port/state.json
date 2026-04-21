@@ -7,7 +7,7 @@
     {
       "name": "common",
       "status": "in_progress",
-      "phase": "analyst",
+      "phase": "architect",
       "checkpoint0_done": true,
       "artifacts": {
         "mapping": null,
