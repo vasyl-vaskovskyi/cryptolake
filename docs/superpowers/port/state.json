@@ -1,13 +1,13 @@
 {
   "version": 1,
   "started_at": "2026-04-21T15:05:42Z",
-  "current_module": "common",
+  "current_module": "writer",
   "halt_reason": null,
   "modules": [
     {
       "name": "common",
       "status": "in_progress",
-      "phase": "complete",
+      "phase": "accepted",
       "checkpoint0_done": true,
       "artifacts": {
         "mapping": null,
@@ -34,7 +34,7 @@
     },
     {
       "name": "writer",
-      "status": "pending",
+      "status": "in_progress",
       "phase": "pending",
       "checkpoint0_done": false,
       "artifacts": {
