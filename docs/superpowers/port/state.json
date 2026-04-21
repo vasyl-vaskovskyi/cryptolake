@@ -20,7 +20,7 @@
         "raw_text_byte_parity": "pass",
         "metric_parity": "pass",
         "verify_cli": "pass",
-        "static_checks": "fail",
+        "static_checks": "pass",
         "architect_signoff": "pending"
       },
       "attempts": {
