@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "started_at": "2026-04-21T15:05:42Z",
+  "current_module": "common",
+  "halt_reason": null,
+  "modules": [
+    {
+      "name": "common",
+      "status": "in_progress",
+      "phase": "pending",
+      "checkpoint0_done": false,
+      "artifacts": {
+        "mapping": null,
+        "design": null,
+        "completion": null
+      },
+      "gates": {
+        "ported_unit_tests": null,
+        "ported_chaos_tests": null,
+        "raw_text_byte_parity": null,
+        "metric_parity": null,
+        "verify_cli": null,
+        "static_checks": null,
+        "architect_signoff": null
+      },
+      "attempts": {
+        "analyst": 0,
+        "architect": 0,
+        "developer": 0
+      },
+      "escalations": []
+    },
+    {
+      "name": "writer",
+      "status": "pending",
+      "phase": "pending",
+      "checkpoint0_done": false,
+      "artifacts": {
+        "mapping": null,
+        "design": null,
+        "completion": null
+      },
+      "gates": {
+        "ported_unit_tests": null,
+        "ported_chaos_tests": null,
+        "raw_text_byte_parity": null,
+        "metric_parity": null,
+        "verify_cli": null,
+        "static_checks": null,
+        "architect_signoff": null
+      },
+      "attempts": {
+        "analyst": 0,
+        "architect": 0,
+        "developer": 0
+      },
+      "escalations": []
+    },
+    {
+      "name": "collector",
+      "status": "pending",
+      "phase": "pending",
+      "checkpoint0_done": false,
+      "artifacts": {
+        "mapping": null,
+        "design": null,
+        "completion": null
+      },
+      "gates": {
+        "ported_unit_tests": null,
+        "ported_chaos_tests": null,
+        "raw_text_byte_parity": null,
+        "metric_parity": null,
+        "verify_cli": null,
+        "static_checks": null,
+        "architect_signoff": null
+      },
+      "attempts": {
+        "analyst": 0,
+        "architect": 0,
+        "developer": 0
+      },
+      "escalations": []
+    },
+    {
+      "name": "cli",
+      "status": "pending",
+      "phase": "pending",
+      "checkpoint0_done": false,
+      "artifacts": {
+        "mapping": null,
+        "design": null,
+        "completion": null
+      },
+      "gates": {
+        "ported_unit_tests": null,
+        "ported_chaos_tests": null,
+        "raw_text_byte_parity": null,
+        "metric_parity": null,
+        "verify_cli": null,
+        "static_checks": null,
+        "architect_signoff": null
+      },
+      "attempts": {
+        "analyst": 0,
+        "architect": 0,
+        "developer": 0
+      },
+      "escalations": []
+    }
+  ]
+}
