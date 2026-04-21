@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CryptoLake common logback configuration.
+  Uses Logstash encoder (Tier 2 §15; Tier 5 H1-H3).
+  The SLF4J "message" field is renamed to "event" to match structlog's convention (design §11 Q1 option b).
+-->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <!-- Emit @timestamp in UTC ISO-8601 with Z suffix (Tier 5 F1) -->
+      <timeZone>UTC</timeZone>
+      <!-- Rename the default "message" field to "event" to match structlog (Q1 option b) -->
+      <fieldNames>
+        <message>event</message>
+        <timestamp>@timestamp</timestamp>
+        <version>[ignore]</version>
+        <levelValue>[ignore]</levelValue>
+      </fieldNames>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>
