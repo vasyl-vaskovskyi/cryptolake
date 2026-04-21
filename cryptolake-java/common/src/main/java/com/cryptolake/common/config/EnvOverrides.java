@@ -20,8 +20,8 @@ final class EnvOverrides {
    * Normalizes the raw override map:
    *
    * <ul>
-   *   <li>If {@code HOST_DATA_DIR} is present and {@code WRITER__BASE_DIR} is not, aliases
-   *       {@code HOST_DATA_DIR} → {@code WRITER__BASE_DIR} (Tier 5 J4 watch-out).
+   *   <li>If {@code HOST_DATA_DIR} is present and {@code WRITER__BASE_DIR} is not, aliases {@code
+   *       HOST_DATA_DIR} → {@code WRITER__BASE_DIR} (Tier 5 J4 watch-out).
    *   <li>Removes {@code HOST_DATA_DIR} from the result.
    * </ul>
    */
@@ -39,8 +39,8 @@ final class EnvOverrides {
    * _apply_env_overrides}).
    *
    * <ul>
-   *   <li>Keys are split on {@code "__"} (case-insensitively lowercased) to navigate/create
-   *       nested map entries.
+   *   <li>Keys are split on {@code "__"} (case-insensitively lowercased) to navigate/create nested
+   *       map entries.
    *   <li>Values containing {@code ","} are split into a {@code List<String>} (comma-separated).
    * </ul>
    */
@@ -66,9 +66,7 @@ final class EnvOverrides {
       Object value;
       if (rawValue.contains(",")) {
         List<String> list =
-            Arrays.stream(rawValue.split(","))
-                .map(String::strip)
-                .collect(Collectors.toList());
+            Arrays.stream(rawValue.split(",")).map(String::strip).collect(Collectors.toList());
         value = list;
       } else {
         value = rawValue;

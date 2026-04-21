@@ -19,8 +19,8 @@ import java.util.Arrays;
  * mapper and pass it everywhere.
  *
  * <p>Broker-coordinates serialization uses Option A from design §6.1: thin wrapper records with
- * {@code @JsonUnwrapped} so the three broker fields appear at the end of the JSON object,
- * matching Python's post-mutation {@code orjson.dumps()} output.
+ * {@code @JsonUnwrapped} so the three broker fields appear at the end of the JSON object, matching
+ * Python's post-mutation {@code orjson.dumps()} output.
  *
  * <p>Thread safety: {@link ObjectMapper} is thread-safe after configuration; this instance is
  * immutable post-construction.
@@ -70,8 +70,8 @@ public final class EnvelopeCodec {
   }
 
   /**
-   * Creates a configured YAML {@link ObjectMapper} using the same feature set (Tier 5 B7). The
-   * same {@code @JsonProperty} annotations work for both YAML config and JSON envelopes.
+   * Creates a configured YAML {@link ObjectMapper} using the same feature set (Tier 5 B7). The same
+   * {@code @JsonProperty} annotations work for both YAML config and JSON envelopes.
    */
   public static ObjectMapper newYamlMapper() {
     ObjectMapper m = new ObjectMapper(new YAMLFactory());
@@ -86,8 +86,8 @@ public final class EnvelopeCodec {
   // ── Serialize ──
 
   /**
-   * Serializes an envelope (or any object) to compact JSON bytes (Tier 5 B2). No trailing newline
-   * — caller appends {@code 0x0A} if needed.
+   * Serializes an envelope (or any object) to compact JSON bytes (Tier 5 B2). No trailing newline —
+   * caller appends {@code 0x0A} if needed.
    */
   public byte[] toJsonBytes(Object envelope) {
     try {
@@ -139,9 +139,9 @@ public final class EnvelopeCodec {
   // ── Broker coordinates ──
 
   /**
-   * Returns a serialization wrapper that appends {@link BrokerCoordinates} fields at the end of
-   * the JSON object, matching Python's post-mutation {@code orjson.dumps()} output (design §6.1
-   * Option A; Tier 2 §12 — records are immutable, no in-place mutation).
+   * Returns a serialization wrapper that appends {@link BrokerCoordinates} fields at the end of the
+   * JSON object, matching Python's post-mutation {@code orjson.dumps()} output (design §6.1 Option
+   * A; Tier 2 §12 — records are immutable, no in-place mutation).
    *
    * <p>Usage: {@code codec.toJsonBytes(codec.withBrokerCoordinates(env, coords))}
    */
@@ -150,8 +150,8 @@ public final class EnvelopeCodec {
   }
 
   /**
-   * Returns a serialization wrapper that appends {@link BrokerCoordinates} fields at the end of
-   * the JSON object (see {@link #withBrokerCoordinates(DataEnvelope, BrokerCoordinates)}).
+   * Returns a serialization wrapper that appends {@link BrokerCoordinates} fields at the end of the
+   * JSON object (see {@link #withBrokerCoordinates(DataEnvelope, BrokerCoordinates)}).
    */
   public static GapWithBroker withBrokerCoordinates(GapEnvelope env, BrokerCoordinates coords) {
     return new GapWithBroker(env, coords);

@@ -24,8 +24,8 @@ public final class JsonlWriter {
   /**
    * Appends {@code record} as a compact JSON line (+ newline) to {@code path}.
    *
-   * <p>Parent directories are created if they do not exist. Uses a single {@link
-   * FileChannel#write} syscall per record to minimise the partial-write window.
+   * <p>Parent directories are created if they do not exist. Uses a single {@link FileChannel#write}
+   * syscall per record to minimise the partial-write window.
    *
    * @throws UncheckedIOException on I/O failure
    */

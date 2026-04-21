@@ -35,8 +35,11 @@ subprojects {
 
     extensions.configure<com.diffplug.gradle.spotless.SpotlessExtension> {
         java {
+            // Spotless 7.0.0.BETA2: removeUnusedImports() internally registers another
+            // google-java-format step which conflicts with the explicit googleJavaFormat()
+            // call below. google-java-format already handles unused-import removal, so
+            // the explicit removeUnusedImports() call is redundant and is omitted.
             googleJavaFormat("1.23.0")
-            removeUnusedImports()
             endWithNewline()
         }
     }

@@ -1,6 +1,7 @@
 // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_data_envelope
 // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_data_envelope_raw_sha256_integrity
-// ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_envelope_received_at_is_nanoseconds
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeCreation::test_envelope_received_at_is_nanoseconds
 package com.cryptolake.common.envelope;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,7 +42,8 @@ class DataEnvelopeTest {
 
   @Test
   void rawSha256IsOverRawTextBytes() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_data_envelope_raw_sha256_integrity
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_data_envelope_raw_sha256_integrity
     String raw = "{\"key\": \"value\", \"num\": 0.00100000}";
     DataEnvelope env =
         DataEnvelope.create("binance", "btcusdt", "trades", raw, 100L, "s", 0L, Clocks.fixed(42L));
@@ -52,7 +54,8 @@ class DataEnvelopeTest {
 
   @Test
   void receivedAtIsNanoseconds() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_envelope_received_at_is_nanoseconds
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_envelope_received_at_is_nanoseconds
     long before = System.currentTimeMillis() * 1_000_000L;
     DataEnvelope env =
         DataEnvelope.create(

@@ -11,8 +11,8 @@ import org.slf4j.LoggerFactory;
  * the entry point for the {@code level} argument historically passed to Python's {@code
  * setup_logging(level)}.
  *
- * <p>Calling {@link #setLevel(String)} without prior class loading is safe — the static
- * initializer has no side effects.
+ * <p>Calling {@link #setLevel(String)} without prior class loading is safe — the static initializer
+ * has no side effects.
  */
 public final class LogInit {
 

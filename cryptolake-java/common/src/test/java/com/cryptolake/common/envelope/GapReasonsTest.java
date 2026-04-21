@@ -1,5 +1,6 @@
 // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_gap_reason_values
-// ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_checkpoint_lost_is_valid_gap_reason
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeCreation::test_checkpoint_lost_is_valid_gap_reason
 package com.cryptolake.common.envelope;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,7 +25,8 @@ class GapReasonsTest {
 
   @Test
   void checkpointLostValid() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_checkpoint_lost_is_valid_gap_reason
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_checkpoint_lost_is_valid_gap_reason
     assertThat(GapReasons.VALID).contains("checkpoint_lost");
   }
 

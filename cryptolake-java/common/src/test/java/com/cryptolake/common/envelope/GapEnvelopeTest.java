@@ -1,9 +1,13 @@
 // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_gap_envelope
 // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_restart_gap_envelope
-// ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_optional_fields_omitted
-// ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_partial_optional_fields
-// ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_non_restart_gap_ignores_extra_fields
-// ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_gap_envelope_with_checkpoint_lost
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_optional_fields_omitted
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_partial_optional_fields
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeCreation::test_non_restart_gap_ignores_extra_fields
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_gap_envelope_with_checkpoint_lost
 // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_gap_invalid_reason_raises
 package com.cryptolake.common.envelope;
 
@@ -83,7 +87,8 @@ class GapEnvelopeTest {
 
   @Test
   void optionalFieldsOmittedWhenNull() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_optional_fields_omitted
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_optional_fields_omitted
     GapEnvelope env =
         GapEnvelope.create(
             "binance",
@@ -107,7 +112,8 @@ class GapEnvelopeTest {
 
   @Test
   void partialOptionalFields() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_partial_optional_fields
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_restart_gap_envelope_partial_optional_fields
     GapEnvelope env =
         GapEnvelope.createWithRestartMetadata(
             "binance",
@@ -137,7 +143,8 @@ class GapEnvelopeTest {
 
   @Test
   void nonRestartGapOmitsMetadata() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_non_restart_gap_ignores_extra_fields
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_non_restart_gap_ignores_extra_fields
     GapEnvelope env =
         GapEnvelope.create(
             "binance",
@@ -162,7 +169,8 @@ class GapEnvelopeTest {
 
   @Test
   void createWithCheckpointLost() {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_gap_envelope_with_checkpoint_lost
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeCreation::test_create_gap_envelope_with_checkpoint_lost
     GapEnvelope env =
         GapEnvelope.create(
             "binance",

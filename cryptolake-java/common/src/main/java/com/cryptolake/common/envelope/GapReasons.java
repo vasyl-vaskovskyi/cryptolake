@@ -6,9 +6,9 @@ import java.util.Set;
  * Vocabulary guard for gap {@code reason} strings.
  *
  * <p>Intentionally a {@code Set<String>}, NOT an enum. Downstream readers (Python {@code verify},
- * {@code consolidate}) must tolerate unknown reasons without crashing, and the set is
- * additive-only for archival compatibility. An enum with {@code @JsonValue} would fail on unknown
- * values during deserialization (Tier 5 M6).
+ * {@code consolidate}) must tolerate unknown reasons without crashing, and the set is additive-only
+ * for archival compatibility. An enum with {@code @JsonValue} would fail on unknown values during
+ * deserialization (Tier 5 M6).
  */
 public final class GapReasons {
 

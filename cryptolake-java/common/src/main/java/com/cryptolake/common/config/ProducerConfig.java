@@ -19,9 +19,7 @@ public record ProducerConfig(
     if (defaultStreamCap == 0) defaultStreamCap = 10_000;
     // Tier 5 J2: default factory when null
     bufferCaps =
-        (bufferCaps == null)
-            ? Map.of("depth", 80_000, "trades", 10_000)
-            : Map.copyOf(bufferCaps);
+        (bufferCaps == null) ? Map.of("depth", 80_000, "trades", 10_000) : Map.copyOf(bufferCaps);
   }
 
   /** Default constructor with all defaults applied. */

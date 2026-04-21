@@ -5,9 +5,9 @@ import java.nio.charset.StandardCharsets;
 /**
  * Shared topic-name and key helpers ensuring collector and writer agree byte-for-byte.
  *
- * <p>Ports the {@code f"{topic_prefix}{exchange}.{stream}"} pattern (Tier 5 M12, M13). Topic key
- * is {@code symbol.getBytes(UTF_8)} — preserves Kafka partition assignment when both Python and
- * Java collectors run concurrently during failover (Tier 5 M13).
+ * <p>Ports the {@code f"{topic_prefix}{exchange}.{stream}"} pattern (Tier 5 M12, M13). Topic key is
+ * {@code symbol.getBytes(UTF_8)} — preserves Kafka partition assignment when both Python and Java
+ * collectors run concurrently during failover (Tier 5 M13).
  *
  * <p>Stateless. Thread-safe.
  */

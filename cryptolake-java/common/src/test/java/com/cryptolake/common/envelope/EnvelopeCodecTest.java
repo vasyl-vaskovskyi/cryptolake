@@ -1,6 +1,9 @@
-// ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_data_envelope_to_bytes
-// ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_gap_envelope_to_bytes
-// ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_deserialize_envelope_round_trip
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_data_envelope_to_bytes
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_gap_envelope_to_bytes
+// ports:
+// tests/unit/test_envelope.py::TestEnvelopeSerialization::test_deserialize_envelope_round_trip
 // ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_add_broker_coordinates
 package com.cryptolake.common.envelope;
 
@@ -26,7 +29,8 @@ class EnvelopeCodecTest {
 
   @Test
   void serializeDataEnvelope() throws Exception {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_data_envelope_to_bytes
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_data_envelope_to_bytes
     DataEnvelope env =
         DataEnvelope.create(
             "binance", "btcusdt", "trades", "{\"test\": 1}", 100L, "s", 0L, Clocks.fixed(42L));
@@ -41,10 +45,19 @@ class EnvelopeCodecTest {
 
   @Test
   void serializeGapEnvelope() throws Exception {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_gap_envelope_to_bytes
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeSerialization::test_serialize_gap_envelope_to_bytes
     GapEnvelope env =
         GapEnvelope.create(
-            "binance", "btcusdt", "depth", "s", 0L, 0L, 1L, "ws_disconnect", "test",
+            "binance",
+            "btcusdt",
+            "depth",
+            "s",
+            0L,
+            0L,
+            1L,
+            "ws_disconnect",
+            "test",
             Clocks.fixed(0L));
 
     byte[] bytes = codec.toJsonBytes(env);
@@ -57,7 +70,8 @@ class EnvelopeCodecTest {
 
   @Test
   void roundTripPreservesFields() throws Exception {
-    // ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_deserialize_envelope_round_trip
+    // ports:
+    // tests/unit/test_envelope.py::TestEnvelopeSerialization::test_deserialize_envelope_round_trip
     DataEnvelope original =
         DataEnvelope.create(
             "binance",
@@ -89,8 +103,7 @@ class EnvelopeCodecTest {
   void withBrokerCoordinatesAppendsFields() throws Exception {
     // ports: tests/unit/test_envelope.py::TestEnvelopeSerialization::test_add_broker_coordinates
     DataEnvelope env =
-        DataEnvelope.create(
-            "binance", "btcusdt", "trades", "{}", 100L, "s", 0L, Clocks.fixed(0L));
+        DataEnvelope.create("binance", "btcusdt", "trades", "{}", 100L, "s", 0L, Clocks.fixed(0L));
 
     BrokerCoordinates coords = new BrokerCoordinates("binance.trades", 0, 42L);
     Object wrapped = EnvelopeCodec.withBrokerCoordinates(env, coords);

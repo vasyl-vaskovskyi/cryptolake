@@ -31,8 +31,8 @@ import java.util.stream.Collectors;
  *   <li>Validate via Hibernate Validator; throw on violations (Tier 5 J3).
  * </ol>
  *
- * <p>Tier 2 §14: mappers and validator are created once at class load as static finals. Tier 5
- * B7: YAML mapper shares the same feature set as the JSON mapper.
+ * <p>Tier 2 §14: mappers and validator are created once at class load as static finals. Tier 5 B7:
+ * YAML mapper shares the same feature set as the JSON mapper.
  *
  * <p>Thread safety: all static + stateless; safe from any thread.
  */

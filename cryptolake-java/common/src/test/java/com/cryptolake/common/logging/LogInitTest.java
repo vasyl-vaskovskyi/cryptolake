@@ -49,9 +49,7 @@ class LogInitTest {
             .filter(e -> "should_be_suppressed".equals(e.getMessage()))
             .count();
     long warnCount =
-        listAppender.list.stream()
-            .filter(e -> "should_appear".equals(e.getMessage()))
-            .count();
+        listAppender.list.stream().filter(e -> "should_appear".equals(e.getMessage())).count();
 
     assertThat(infoCount).isEqualTo(0);
     assertThat(warnCount).isEqualTo(1);

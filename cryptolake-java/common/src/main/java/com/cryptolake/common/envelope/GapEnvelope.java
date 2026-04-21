@@ -9,9 +9,9 @@ import java.util.Map;
 /**
  * Canonical gap envelope record with optional restart-metadata fields.
  *
- * <p>Field order matches Python's {@code create_gap_envelope} dict insertion order (Tier 5 B1;
- * Tier 3 §21). Optional fields are omitted from JSON when {@code null} via {@code
- * @JsonInclude(NON_NULL)} (replaces Python's {@code _SENTINEL} pattern).
+ * <p>Field order matches Python's {@code create_gap_envelope} dict insertion order (Tier 5 B1; Tier
+ * 3 §21). Optional fields are omitted from JSON when {@code null} via
+ * {@code @JsonInclude(NON_NULL)} (replaces Python's {@code _SENTINEL} pattern).
  *
  * <p>Compact constructor validates {@code reason} against {@link GapReasons#VALID} (Tier 2 §16;
  * Tier 5 M6).

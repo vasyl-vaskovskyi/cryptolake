@@ -4,7 +4,8 @@
 // ports: tests/unit/test_config.py::TestConfigLoading::test_config_writer_defaults
 // ports: tests/unit/test_config.py::TestConfigLoading::test_config_retention_minimum_rejected
 // ports: tests/unit/test_config.py::TestConfigLoading::test_config_env_override
-// ports: tests/unit/test_config.py::TestConfigLoading::test_host_data_dir_alias_overrides_writer_base_dir
+// ports:
+// tests/unit/test_config.py::TestConfigLoading::test_host_data_dir_alias_overrides_writer_base_dir
 // ports: tests/unit/test_config.py::TestConfigLoading::test_config_missing_file_raises
 // ports: tests/unit/test_config.py::TestConfigLoading::test_env_override_does_not_bleed_os_environ
 package com.cryptolake.common.config;
@@ -47,8 +48,8 @@ class YamlConfigLoaderTest {
     // ports: tests/unit/test_config.py::TestConfigLoading::test_load_valid_config
     AppConfig config = YamlConfigLoader.load(fixturesDir.resolve("config_valid.yaml"), Map.of());
     assertThat(config.exchanges().binance().enabled()).isTrue();
-    assertThat(config.exchanges().binance().symbols()).containsExactly("btcusdt", "ethusdt",
-        "solusdt");
+    assertThat(config.exchanges().binance().symbols())
+        .containsExactly("btcusdt", "ethusdt", "solusdt");
     assertThat(config.redpanda().retentionHours()).isEqualTo(48);
   }
 
@@ -69,8 +70,8 @@ class YamlConfigLoaderTest {
   void depthSnapshotOverride() {
     // ports: tests/unit/test_config.py::TestConfigLoading::test_config_depth_snapshot_override
     AppConfig config = YamlConfigLoader.load(fixturesDir.resolve("config_valid.yaml"), Map.of());
-    assertThat(config.exchanges().binance().depth().snapshotOverrides()).containsEntry("btcusdt",
-        "1m");
+    assertThat(config.exchanges().binance().depth().snapshotOverrides())
+        .containsEntry("btcusdt", "1m");
     assertThat(config.exchanges().binance().depth().snapshotInterval()).isEqualTo("5m");
   }
 
@@ -118,9 +119,9 @@ class YamlConfigLoaderTest {
 
   @Test
   void hostDataDirAlias() {
-    // ports: tests/unit/test_config.py::TestConfigLoading::test_host_data_dir_alias_overrides_writer_base_dir
-    Map<String, String> overrides =
-        EnvOverrides.normalize(Map.of("HOST_DATA_DIR", "/tmp/archive"));
+    // ports:
+    // tests/unit/test_config.py::TestConfigLoading::test_host_data_dir_alias_overrides_writer_base_dir
+    Map<String, String> overrides = EnvOverrides.normalize(Map.of("HOST_DATA_DIR", "/tmp/archive"));
     AppConfig config = YamlConfigLoader.load(fixturesDir.resolve("config_valid.yaml"), overrides);
     assertThat(config.writer().baseDir()).isEqualTo("/tmp/archive");
   }
@@ -135,7 +136,8 @@ class YamlConfigLoaderTest {
 
   @Test
   void explicitEnvOverrideIsolatesFromSystemEnv() {
-    // ports: tests/unit/test_config.py::TestConfigLoading::test_env_override_does_not_bleed_os_environ
+    // ports:
+    // tests/unit/test_config.py::TestConfigLoading::test_env_override_does_not_bleed_os_environ
     // Inject a fake System.getenv that contains a "leaked" value.
     // When we use the 2-arg load(..., envOverrides) overload, only the explicit overrides apply.
     Map<String, String> fakeEnv = new HashMap<>();

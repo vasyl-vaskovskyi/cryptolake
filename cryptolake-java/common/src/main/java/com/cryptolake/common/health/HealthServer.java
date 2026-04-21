@@ -17,11 +17,11 @@ import org.slf4j.LoggerFactory;
 /**
  * Tiny HTTP server exposing {@code /health}, {@code /ready}, and {@code /metrics} endpoints.
  *
- * <p>Uses JDK built-in {@link HttpServer} (framework-free, Tier 2 §11). Every request is served
- * on a fresh virtual thread via {@code Executors.newVirtualThreadPerTaskExecutor()} (design §3.2).
+ * <p>Uses JDK built-in {@link HttpServer} (framework-free, Tier 2 §11). Every request is served on
+ * a fresh virtual thread via {@code Executors.newVirtualThreadPerTaskExecutor()} (design §3.2).
  *
- * <p>No {@code synchronized} blocks (Tier 2 §9). No {@code Thread.sleep} (Tier 2 §10). Handlers
- * are stateless; all mutable state lives in the injected {@link ReadyCheck}/{@link MetricsSource}
+ * <p>No {@code synchronized} blocks (Tier 2 §9). No {@code Thread.sleep} (Tier 2 §10). Handlers are
+ * stateless; all mutable state lives in the injected {@link ReadyCheck}/{@link MetricsSource}
  * suppliers.
  */
 public final class HealthServer {

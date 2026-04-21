@@ -12,9 +12,9 @@ import java.util.HexFormat;
 /**
  * SHA-256 utilities.
  *
- * <p>Tier 5 I5: {@code hexFile} uses 8192-byte chunks matching Python's {@code
- * hashlib.sha256()} chunked read. {@code HexFormat.of().formatHex} returns lowercase hex,
- * matching {@code hashlib.hexdigest()}.
+ * <p>Tier 5 I5: {@code hexFile} uses 8192-byte chunks matching Python's {@code hashlib.sha256()}
+ * chunked read. {@code HexFormat.of().formatHex} returns lowercase hex, matching {@code
+ * hashlib.hexdigest()}.
  */
 public final class Sha256 {
 
@@ -23,8 +23,8 @@ public final class Sha256 {
   /**
    * Returns lowercase hex SHA-256 of {@code text.getBytes(UTF_8)}.
    *
-   * <p>Tier 1 §2, Tier 5 E2: called from {@code DataEnvelope.create} on {@code rawText} at
-   * capture time.
+   * <p>Tier 1 §2, Tier 5 E2: called from {@code DataEnvelope.create} on {@code rawText} at capture
+   * time.
    */
   public static String hexDigestUtf8(String text) {
     try {

@@ -13,8 +13,8 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * insertion order exactly (Tier 5 B1; Tier 3 §21). The {@code @JsonPropertyOrder} annotation
  * enforces this on Jackson serialization.
  *
- * <p>Immutable record — no setters (Tier 2 §12). {@code rawSha256} is computed once at factory
- * time and stored (Tier 1 §2).
+ * <p>Immutable record — no setters (Tier 2 §12). {@code rawSha256} is computed once at factory time
+ * and stored (Tier 1 §2).
  */
 @JsonPropertyOrder({
   "v",

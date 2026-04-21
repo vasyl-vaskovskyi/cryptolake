@@ -37,7 +37,8 @@ class SystemIdentityTest {
 
   @Test
   void envOverridePrecedence() {
-    // ports: tests/unit/test_system_identity.py::TestGetHostBootId::test_env_override_takes_precedence
+    // ports:
+    // tests/unit/test_system_identity.py::TestGetHostBootId::test_env_override_takes_precedence
     // Use the CRYPTOLAKE_TEST_BOOT_ID env var if set; otherwise set it and verify
     String testBootId = System.getenv("CRYPTOLAKE_TEST_BOOT_ID");
     if (testBootId != null) {
@@ -73,7 +74,8 @@ class SystemIdentityTest {
 
   @Test
   void stripsWhitespace(@TempDir Path tmpDir) throws IOException {
-    // ports: tests/unit/test_system_identity.py::TestGetHostBootId::test_strips_whitespace_from_boot_id
+    // ports:
+    // tests/unit/test_system_identity.py::TestGetHostBootId::test_strips_whitespace_from_boot_id
     Path bootFile = tmpDir.resolve("boot_id");
     Files.writeString(bootFile, "  boot-id-with-spaces  \n");
     SystemIdentity.bootIdPath = bootFile;
@@ -85,7 +87,8 @@ class SystemIdentityTest {
   @Test
   @DisabledOnOs(OS.LINUX)
   void fallbackWhenProcUnavailable() {
-    // ports: tests/unit/test_system_identity.py::TestGetHostBootId::test_fallback_when_proc_unavailable
+    // ports:
+    // tests/unit/test_system_identity.py::TestGetHostBootId::test_fallback_when_proc_unavailable
     // On non-Linux, /proc doesn't exist — fallback should return "unknown"
     SystemIdentity.bootIdPath = Path.of("/proc/sys/kernel/random/boot_id");
     String result = SystemIdentity.getHostBootId();
@@ -94,7 +97,8 @@ class SystemIdentityTest {
 
   @Test
   void fallbackOnPermissionError(@TempDir Path tmpDir) {
-    // ports: tests/unit/test_system_identity.py::TestGetHostBootId::test_fallback_on_permission_error
+    // ports:
+    // tests/unit/test_system_identity.py::TestGetHostBootId::test_fallback_on_permission_error
     // Point to a non-existent path to simulate permission error (simplified — actual
     // permission simulation requires root which isn't available in tests)
     SystemIdentity.bootIdPath = Path.of("/root/unreadable_boot_id_9999");
@@ -113,7 +117,8 @@ class SystemIdentityTest {
 
   @Test
   void envOverrideStrippedOfWhitespace() {
-    // ports: tests/unit/test_system_identity.py::TestGetHostBootId::test_env_override_strips_whitespace
+    // ports:
+    // tests/unit/test_system_identity.py::TestGetHostBootId::test_env_override_strips_whitespace
     // This test relies on the env var CRYPTOLAKE_TEST_BOOT_ID having whitespace.
     // Since we can't set env vars in-process in Java without JNI, we verify the behavior
     // through the strip() contract indirectly.
