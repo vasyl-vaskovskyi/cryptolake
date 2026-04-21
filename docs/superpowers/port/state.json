@@ -56,7 +56,8 @@
         "architect": 0,
         "developer": 0
       },
-      "escalations": []
+      "escalations": [],
+      "developer_start_sha": "019a62cd544b87c016070393d2734c1b96f4a7b7"
     },
     {
       "name": "collector",
