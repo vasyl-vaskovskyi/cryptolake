@@ -5,6 +5,7 @@ import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.writer.StreamKey;
+import com.cryptolake.writer.rotate.FilePaths;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;

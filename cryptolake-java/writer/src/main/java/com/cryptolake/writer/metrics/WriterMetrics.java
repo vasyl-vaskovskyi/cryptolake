@@ -3,8 +3,8 @@ package com.cryptolake.writer.metrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.naming.NamingConvention;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
+import io.micrometer.core.instrument.config.NamingConvention;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
