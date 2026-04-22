@@ -118,13 +118,15 @@ public final class RecordHandler {
       failover.resetSilenceTimer();
     }
 
-    // MDC context for structured logging (Tier 5 H3)
-    try (var ctx = StructuredLogger.mdc(
+    // MDC context for structured logging (Tier 5 H3).
+    // StructuredLogger.mdc returns AutoCloseable (close throws Exception); we manage cleanup
+    // explicitly in a finally block to avoid propagating a checked Exception up the handle() API.
+    AutoCloseable ctx = StructuredLogger.mdc(
         "exchange", env.exchange(),
         "symbol", env.symbol(),
         "stream", env.stream(),
-        "session_id", env.collectorSessionId())) {
-
+        "session_id", env.collectorSessionId());
+    try {
       // Check recovery gap (first envelope for this stream post-restart)
       GapEnvelope recoveryGap = recovery.checkOnFirstEnvelope(env);
       if (recoveryGap != null) {
@@ -151,6 +153,13 @@ public final class RecordHandler {
       Optional<List<com.cryptolake.writer.buffer.FlushResult>> autoFlush =
           buffers.add(env, coords, source);
       // Auto-flush results are handled by the caller (KafkaConsumerLoop) via flushAndCommit
+    } finally {
+      try {
+        ctx.close();
+      } catch (Exception ignored) {
+        // MDC cleanup lambda cannot throw in practice (see StructuredLogger.mdc); swallow so
+        // the declared AutoCloseable.close signature doesn't force throws on handle().
+      }
     }
   }
 }

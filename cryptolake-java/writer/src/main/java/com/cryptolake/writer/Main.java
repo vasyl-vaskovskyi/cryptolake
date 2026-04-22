@@ -29,6 +29,7 @@ import com.cryptolake.writer.health.WriterReadyCheck;
 import com.cryptolake.writer.io.DurableAppender;
 import com.cryptolake.writer.io.ZstdFrameCompressor;
 import com.cryptolake.writer.metrics.WriterMetrics;
+import com.cryptolake.writer.consumer.RecoveryResult;
 import com.cryptolake.writer.recovery.LastEnvelopeReader;
 import com.cryptolake.writer.recovery.SealedFileIndex;
 import com.cryptolake.writer.rotate.FileRotator;
@@ -87,7 +88,12 @@ public final class Main {
    * @param args optional config file path (defaults to {@code CRYPTOLAKE_CONFIG} env var)
    */
   public static void main(String[] args) {
-    LogInit.apply(); // Must be first (Tier 2 §15)
+    // Tier 2 §15: programmatic log-level override (logback.xml is declarative).
+    // Common's LogInit exposes setLevel(String); honour LOG_LEVEL env when present.
+    String logLevel = System.getenv("LOG_LEVEL");
+    if (logLevel != null && !logLevel.isEmpty()) {
+      LogInit.setLevel(logLevel);
+    }
 
     // ── Config path ──────────────────────────────────────────────────────────────────────────
     String configPath = args.length > 0
@@ -245,7 +251,9 @@ public final class Main {
 
     // ── Health server ─────────────────────────────────────────────────────────────────────────
     WriterReadyCheck readyCheck = new WriterReadyCheck(consumerLoop, Path.of(baseDir));
-    int healthPort = config.monitoring() != null ? config.monitoring().healthPort() : 8080;
+    // Common's MonitoringConfig exposes prometheusPort() only; reuse that for the combined
+    // health+metrics HTTP server (design §2.1 — single HTTP endpoint for /ready and /metrics).
+    int healthPort = config.monitoring() != null ? config.monitoring().prometheusPort() : 8080;
     HealthServer healthServer = new HealthServer(healthPort, readyCheck, metricsSource);
     healthServer.start();
 
@@ -314,9 +322,11 @@ public final class Main {
     var binance = config.exchanges().binance();
     if (!binance.enabled()) return topics;
 
+    // Tier 1 §3: never subscribe to streams with enabled=false. BinanceExchangeConfig's
+    // getEnabledStreams() already filters by the StreamsConfig boolean flags.
     List<String> streams = binance.writerStreamsOverride() != null
         ? binance.writerStreamsOverride()
-        : binance.streams().enabledStreams();
+        : binance.getEnabledStreams();
 
     for (String sym : binance.symbols()) {
       for (String stream : streams) {
@@ -340,9 +350,16 @@ public final class Main {
     return p;
   }
 
+  /**
+   * Returns the JDBC URL for the PostgreSQL state store.
+   *
+   * <p>Common's {@link com.cryptolake.common.config.DatabaseConfig} exposes only {@code url()}
+   * (single-field parity with Python's {@code DatabaseConfig}). The URL itself carries user /
+   * password via query parameters per the PostgreSQL JDBC driver convention
+   * ({@code jdbc:postgresql://host/db?user=X&password=Y}), so HikariCP receives everything it
+   * needs without the writer parsing components out of the URL.
+   */
   private static String buildJdbcUrl(AppConfig config) {
-    var db = config.database();
-    return "jdbc:postgresql://" + db.host() + ":" + db.port() + "/" + db.name()
-        + "?user=" + db.user() + "&password=" + db.password();
+    return config.database().url();
   }
 }
