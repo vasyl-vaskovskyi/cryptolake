@@ -11,10 +11,13 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Owns all 24 Micrometer meters for the writer service (design §9).
  *
- * <p>Applies {@link NamingConvention#identity} to the registry so metric names are emitted
- * verbatim (Tier 5 H4 watch-out): counters named {@code foo_total} do NOT get the extra
- * {@code _total} suffix that Micrometer's default {@code PrometheusNamingConvention} would append,
- * which would result in {@code foo_total_total}.
+ * <p><b>Counter naming — Tier 5 H4:</b> under Micrometer 1.13 / Prometheus client 1.x, the
+ * Prometheus metadata validator rejects metric names that end in {@code _total} (it adds the
+ * suffix automatically at scrape time). To keep scrape output parity with Python
+ * ({@code writer_messages_consumed_total}), counters here are registered WITHOUT the
+ * {@code _total} suffix; the suffix appears in the exposition via {@link
+ * io.micrometer.prometheusmetrics.PrometheusMeterRegistry#scrape()}. We still apply
+ * {@link NamingConvention#identity} so no other Micrometer-side transformation is applied.
  *
  * <p>Gauges use supplier-backed {@link MetricHolders} — strongly referenced by this class so they
  * are never GC'd and never return {@code NaN} (Tier 5 H6 watch-out).
@@ -70,7 +73,7 @@ public final class WriterMetrics {
 
   /** Metric #1: total messages consumed from Kafka (design §9). */
   public Counter messagesConsumed(String exchange, String symbol, String stream) {
-    return Counter.builder("writer_messages_consumed_total")
+    return Counter.builder("writer_messages_consumed")
         .description("Messages read from Redpanda")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream)
         .register(registry);
@@ -78,7 +81,7 @@ public final class WriterMetrics {
 
   /** Metric #2: messages skipped (below recovery high-water offset). */
   public Counter messagesSkipped(String exchange, String symbol, String stream) {
-    return Counter.builder("writer_messages_skipped_total")
+    return Counter.builder("writer_messages_skipped")
         .description("Messages skipped due to recovery high-water")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream)
         .register(registry);
@@ -86,7 +89,7 @@ public final class WriterMetrics {
 
   /** Metric #4: files rotated (sealed). */
   public Counter filesRotated(String exchange, String symbol, String stream) {
-    return Counter.builder("writer_files_rotated_total")
+    return Counter.builder("writer_files_rotated")
         .description("Number of archive files rotated")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream)
         .register(registry);
@@ -94,7 +97,7 @@ public final class WriterMetrics {
 
   /** Metric #5: bytes written to disk. */
   public Counter bytesWritten(String exchange, String symbol, String stream) {
-    return Counter.builder("writer_bytes_written_total")
+    return Counter.builder("writer_bytes_written")
         .description("Compressed bytes written to disk")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream)
         .register(registry);
@@ -102,7 +105,7 @@ public final class WriterMetrics {
 
   /** Metric #9: session gaps detected. */
   public Counter sessionGapsDetected(String exchange, String symbol, String stream) {
-    return Counter.builder("writer_session_gaps_detected_total")
+    return Counter.builder("writer_session_gaps_detected")
         .description("Session change gaps detected")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream)
         .register(registry);
@@ -110,7 +113,7 @@ public final class WriterMetrics {
 
   /** Metric #11: write errors (IOException during file write). */
   public Counter writeErrors(String exchange, String symbol, String stream) {
-    return Counter.builder("writer_write_errors_total")
+    return Counter.builder("writer_write_errors")
         .description("File write errors")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream)
         .register(registry);
@@ -118,7 +121,7 @@ public final class WriterMetrics {
 
   /** Metric #14: gap records written to archive. */
   public Counter gapRecordsWritten(String exchange, String symbol, String stream, String reason) {
-    return Counter.builder("writer_gap_records_written_total")
+    return Counter.builder("writer_gap_records_written")
         .description("Gap envelope records written to archive")
         .tags("exchange", exchange, "symbol", symbol, "stream", stream, "reason", reason)
         .register(registry);
@@ -128,42 +131,42 @@ public final class WriterMetrics {
 
   /** Metric #12: PG commit failures. */
   public Counter pgCommitFailures() {
-    return Counter.builder("writer_pg_commit_failures_total")
+    return Counter.builder("writer_pg_commit_failures")
         .description("PostgreSQL checkpoint failures")
         .register(registry);
   }
 
   /** Metric #13: Kafka commit failures. */
   public Counter kafkaCommitFailures() {
-    return Counter.builder("writer_kafka_commit_failures_total")
+    return Counter.builder("writer_kafka_commit_failures")
         .description("Kafka offset commit failures")
         .register(registry);
   }
 
   /** Metric #18: total failover activations. */
   public Counter failoverTotal() {
-    return Counter.builder("writer_failover_total")
+    return Counter.builder("writer_failover")
         .description("Total backup-consumer activations")
         .register(registry);
   }
 
   /** Metric #20: records consumed from backup topic during failover. */
   public Counter failoverRecordsTotal() {
-    return Counter.builder("writer_failover_records_total")
+    return Counter.builder("writer_failover_records")
         .description("Records consumed from backup topic during failover")
         .register(registry);
   }
 
   /** Metric #21: total switchback events (backup → primary). */
   public Counter switchbackTotal() {
-    return Counter.builder("writer_switchback_total")
+    return Counter.builder("writer_switchback")
         .description("Total switchback events (backup to primary)")
         .register(registry);
   }
 
   /** Metric #22: gap envelopes suppressed by coverage filter. */
   public Counter gapEnvelopesSuppressed(String source, String reason) {
-    return Counter.builder("writer_gap_envelopes_suppressed_total")
+    return Counter.builder("writer_gap_envelopes_suppressed")
         .description("Gap envelopes suppressed by coverage filter")
         .tags("source", source, "reason", reason)
         .register(registry);
@@ -171,7 +174,7 @@ public final class WriterMetrics {
 
   /** Metric #23: gap envelopes coalesced. */
   public Counter gapCoalesced(String source) {
-    return Counter.builder("writer_gap_coalesced_total")
+    return Counter.builder("writer_gap_coalesced")
         .description("Gap envelopes coalesced in coverage filter")
         .tags("source", source)
         .register(registry);
