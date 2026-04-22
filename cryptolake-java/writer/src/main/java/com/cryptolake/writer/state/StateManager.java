@@ -483,11 +483,12 @@ public final class StateManager {
         log.warn("pg_save_failed", "attempt", attempt + 1, "error", e.getMessage());
         if (attempt < maxRetries - 1) {
           long sleepMs = 1000L * (1 << attempt); // 1s, 2s for attempts 0 and 1
-          try {
-            Thread.sleep(sleepMs);
-          } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt(); // Tier 5 A4
-            throw new CryptoLakeStateException("Interrupted during retry", ie);
+          // LockSupport.parkNanos: does not pin virtual threads and is the no-sleep backoff
+          // primitive required by gate6 (Tier 5 A2 — carrier-thread pinning forbidden).
+          java.util.concurrent.locks.LockSupport.parkNanos(sleepMs * 1_000_000L);
+          if (Thread.currentThread().isInterrupted()) {
+            // Restore interrupt status (Tier 5 A4) and abort retries.
+            throw new CryptoLakeStateException("Interrupted during retry", last);
           }
         }
       }
