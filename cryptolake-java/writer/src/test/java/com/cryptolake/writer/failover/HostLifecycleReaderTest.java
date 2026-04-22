@@ -36,11 +36,12 @@ class HostLifecycleReaderTest {
   void load_eventsInWindow_returned() throws IOException {
     Path ledger = tmp.resolve("events.jsonl");
     // Event at 2024-01-15T14:00:00Z
-    Files.writeString(ledger,
+    Files.writeString(
+        ledger,
         "{\"type\":\"component_die\",\"component\":\"writer\",\"clean_exit\":false,\"timestamp\":\"2024-01-15T14:00:00Z\"}\n");
 
-    HostLifecycleEvidence evidence = HostLifecycleReader.load(ledger,
-        "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
+    HostLifecycleEvidence evidence =
+        HostLifecycleReader.load(ledger, "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
 
     assertThat(evidence.hasComponentDie("writer")).isTrue();
   }
@@ -49,11 +50,12 @@ class HostLifecycleReaderTest {
   @Test
   void load_eventsBeforeWindow_excluded() throws IOException {
     Path ledger = tmp.resolve("events.jsonl");
-    Files.writeString(ledger,
+    Files.writeString(
+        ledger,
         "{\"type\":\"component_die\",\"component\":\"writer\",\"timestamp\":\"2024-01-15T10:00:00Z\"}\n");
 
-    HostLifecycleEvidence evidence = HostLifecycleReader.load(ledger,
-        "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
+    HostLifecycleEvidence evidence =
+        HostLifecycleReader.load(ledger, "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
 
     assertThat(evidence.hasComponentDie("writer")).isFalse();
   }
@@ -62,11 +64,12 @@ class HostLifecycleReaderTest {
   @Test
   void load_eventsAfterWindow_excluded() throws IOException {
     Path ledger = tmp.resolve("events.jsonl");
-    Files.writeString(ledger,
+    Files.writeString(
+        ledger,
         "{\"type\":\"component_die\",\"component\":\"writer\",\"timestamp\":\"2024-01-15T16:00:00Z\"}\n");
 
-    HostLifecycleEvidence evidence = HostLifecycleReader.load(ledger,
-        "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
+    HostLifecycleEvidence evidence =
+        HostLifecycleReader.load(ledger, "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
 
     assertThat(evidence.hasComponentDie("writer")).isFalse();
   }
@@ -75,8 +78,8 @@ class HostLifecycleReaderTest {
   @Test
   void load_nullWindowBounds_noFiltering() throws IOException {
     Path ledger = tmp.resolve("events.jsonl");
-    Files.writeString(ledger,
-        "{\"type\":\"maintenance_intent\",\"timestamp\":\"2024-01-15T14:00:00Z\"}\n");
+    Files.writeString(
+        ledger, "{\"type\":\"maintenance_intent\",\"timestamp\":\"2024-01-15T14:00:00Z\"}\n");
 
     HostLifecycleEvidence evidence = HostLifecycleReader.load(ledger, null, null, mapper);
 
@@ -124,11 +127,10 @@ class HostLifecycleReaderTest {
   @Test
   void load_eventWithoutTimestamp_passesThrough() throws IOException {
     Path ledger = tmp.resolve("events.jsonl");
-    Files.writeString(ledger,
-        "{\"type\":\"maintenance_intent\"}\n"); // no timestamp field
+    Files.writeString(ledger, "{\"type\":\"maintenance_intent\"}\n"); // no timestamp field
 
-    HostLifecycleEvidence evidence = HostLifecycleReader.load(ledger,
-        "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
+    HostLifecycleEvidence evidence =
+        HostLifecycleReader.load(ledger, "2024-01-15T13:00:00Z", "2024-01-15T15:00:00Z", mapper);
 
     assertThat(evidence.hasMaintenanceIntent()).isTrue();
   }

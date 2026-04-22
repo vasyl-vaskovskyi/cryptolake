@@ -34,8 +34,8 @@ public final class HostLifecycleReader {
   private HostLifecycleReader() {}
 
   /**
-   * Loads host lifecycle evidence from the ledger file, filtering events to the window
-   * {@code [windowStartIso, windowEndIso)}.
+   * Loads host lifecycle evidence from the ledger file, filtering events to the window {@code
+   * [windowStartIso, windowEndIso)}.
    *
    * <p>Ports {@code load_host_evidence(ledger_path, window_start_iso, window_end_iso)}.
    *

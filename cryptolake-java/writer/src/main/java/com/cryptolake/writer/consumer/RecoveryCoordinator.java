@@ -41,32 +41,27 @@ public final class RecoveryCoordinator {
   private final SealedFileIndex sealedIndex;
   private final LastEnvelopeReader envelopeReader;
   private final HostLifecycleEvidence hostEvidence;
-  private final RestartGapClassifier classifier; // unused directly — static utility, passed for testability
+  private final RestartGapClassifier
+      classifier; // unused directly — static utility, passed for testability
   private final GapEmitter gaps;
   private final WriterMetrics metrics;
   private final ClockSupplier clock;
   private final String currentBootId;
   private final String currentInstanceId;
 
-  /**
-   * Streams for which recovery is complete (seek applied + gap optionally emitted).
-   */
+  /** Streams for which recovery is complete (seek applied + gap optionally emitted). */
   private final Set<StreamKey> recoveryDone = new HashSet<>();
 
-  /**
-   * Streams that have had their restart gap emitted.
-   */
+  /** Streams that have had their restart gap emitted. */
   private final Set<StreamKey> recoveryGapEmitted = new HashSet<>();
 
   /**
-   * Pending Kafka seeks: populated during {@link #runOnStartup()}, drained by
-   * {@link PartitionAssignmentListener}.
+   * Pending Kafka seeks: populated during {@link #runOnStartup()}, drained by {@link
+   * PartitionAssignmentListener}.
    */
   private final Map<TopicPartition, Long> pendingSeeks = new HashMap<>();
 
-  /**
-   * Durable checkpoints loaded from PG (live view — updated by OffsetCommitCoordinator).
-   */
+  /** Durable checkpoints loaded from PG (live view — updated by OffsetCommitCoordinator). */
   private final Map<StreamKey, StreamCheckpoint> durableCheckpoints = new HashMap<>();
 
   /**
@@ -101,8 +96,8 @@ public final class RecoveryCoordinator {
   /**
    * Runs once at startup. Loads PG state, computes pending seeks, populates durable checkpoints.
    *
-   * <p>Ports Python's {@code WriterConsumer.start()} recovery section and
-   * {@code _check_recovery_gap} on startup.
+   * <p>Ports Python's {@code WriterConsumer.start()} recovery section and {@code
+   * _check_recovery_gap} on startup.
    *
    * @return {@link RecoveryResult} with pending seeks and durable checkpoints
    */
@@ -117,37 +112,51 @@ public final class RecoveryCoordinator {
 
     // Scan and reconcile files (truncate oversized, delete uncommitted — Tier 5 I3, I7)
     SealedFileIndex.ScanResult scanResult = sealedIndex.scanAndReconcile(pgFileStates);
-    log.info("startup_recovery_scan",
-        "sealed", scanResult.sealed().size(),
-        "deleted_uncommitted", scanResult.deletedUncommitted().size(),
-        "truncated", scanResult.truncated().size());
+    log.info(
+        "startup_recovery_scan",
+        "sealed",
+        scanResult.sealed().size(),
+        "deleted_uncommitted",
+        scanResult.deletedUncommitted().size(),
+        "truncated",
+        scanResult.truncated().size());
 
     // Compute pending seeks from checkpoints (Tier 1 §6 — replay over reconstruction)
     for (Map.Entry<TopicPartition, List<com.cryptolake.writer.state.FileStateRecord>> entry :
         pgFileStates.entrySet()) {
       TopicPartition tp = entry.getKey();
-      long maxHighWater = entry.getValue().stream()
-          .mapToLong(com.cryptolake.writer.state.FileStateRecord::highWaterOffset)
-          .max()
-          .orElse(-1L);
+      long maxHighWater =
+          entry.getValue().stream()
+              .mapToLong(com.cryptolake.writer.state.FileStateRecord::highWaterOffset)
+              .max()
+              .orElse(-1L);
       if (maxHighWater >= 0) {
         long seekTo = maxHighWater + 1;
         pendingSeeks.put(tp, seekTo);
-        log.info("recovery_seek_planned",
-            "topic", tp.topic(),
-            "partition", tp.partition(),
-            "seek_to", seekTo);
+        log.info(
+            "recovery_seek_planned",
+            "topic",
+            tp.topic(),
+            "partition",
+            tp.partition(),
+            "seek_to",
+            seekTo);
       }
     }
 
     // Load maintenance intent for restart gap classification
     Optional<MaintenanceIntent> intent = stateManager.loadActiveMaintenanceIntent();
 
-    log.info("recovery_state_loaded",
-        "checkpoints", durableCheckpoints.size(),
-        "pending_seeks", pendingSeeks.size(),
-        "current_boot_id", currentBootId,
-        "current_instance_id", currentInstanceId);
+    log.info(
+        "recovery_state_loaded",
+        "checkpoints",
+        durableCheckpoints.size(),
+        "pending_seeks",
+        pendingSeeks.size(),
+        "current_boot_id",
+        currentBootId,
+        "current_instance_id",
+        currentInstanceId);
 
     return new RecoveryResult(Map.copyOf(pendingSeeks), Map.copyOf(durableCheckpoints));
   }
@@ -172,8 +181,14 @@ public final class RecoveryCoordinator {
     StreamCheckpoint checkpoint = durableCheckpoints.get(key);
     if (checkpoint == null) {
       // No checkpoint for this stream — this is a fresh start; no gap to emit
-      log.info("recovery_no_checkpoint",
-          "exchange", env.exchange(), "symbol", env.symbol(), "stream", env.stream());
+      log.info(
+          "recovery_no_checkpoint",
+          "exchange",
+          env.exchange(),
+          "symbol",
+          env.symbol(),
+          "stream",
+          env.stream());
       return null;
     }
 
@@ -191,21 +206,23 @@ public final class RecoveryCoordinator {
     com.cryptolake.writer.state.ComponentRuntimeState collectorState = compStates.get("collector");
     com.cryptolake.writer.state.ComponentRuntimeState writerState = compStates.get("writer");
 
-    boolean collectorCleanShutdown = collectorState != null && collectorState.cleanShutdownAt() != null;
+    boolean collectorCleanShutdown =
+        collectorState != null && collectorState.cleanShutdownAt() != null;
     boolean systemCleanShutdown = writerState != null && writerState.cleanShutdownAt() != null;
     String previousBootId = writerState != null ? writerState.hostBootId() : null;
     String previousSessionId = checkpoint.lastCollectorSessionId();
 
-    RestartGapClassifier.Classification classification = RestartGapClassifier.classify(
-        previousBootId,
-        currentBootId,
-        previousSessionId,
-        env.collectorSessionId(),
-        collectorCleanShutdown,
-        systemCleanShutdown,
-        intent.orElse(null),
-        hostEvidence,
-        clock);
+    RestartGapClassifier.Classification classification =
+        RestartGapClassifier.classify(
+            previousBootId,
+            currentBootId,
+            previousSessionId,
+            env.collectorSessionId(),
+            collectorCleanShutdown,
+            systemCleanShutdown,
+            intent.orElse(null),
+            hostEvidence,
+            clock);
 
     // Build evidence for GapEnvelope — Q1 preferred: evidence is List<String> passed as
     // Map<String,Object> with key "evidence_list" (design §11 Q1 preferred, using Object field)
@@ -216,38 +233,47 @@ public final class RecoveryCoordinator {
     // Parse the checkpoint's last_received_at for gap_start_ts
     long gapStartTs;
     try {
-      gapStartTs = java.time.OffsetDateTime.parse(checkpoint.lastReceivedAt()).toInstant()
-          .toEpochMilli() * 1_000_000L; // Convert ms to ns for gap_start_ts
+      gapStartTs =
+          java.time.OffsetDateTime.parse(checkpoint.lastReceivedAt()).toInstant().toEpochMilli()
+              * 1_000_000L; // Convert ms to ns for gap_start_ts
     } catch (Exception e) {
       gapStartTs = clock.nowNs() - 1_000_000_000L; // 1 second ago as fallback
     }
 
-    GapEnvelope gapEnv = GapEnvelope.createWithRestartMetadata(
-        env.exchange(),
-        env.symbol(),
-        env.stream(),
-        env.collectorSessionId(),
-        -1L, // writer-injected (Tier 5 M10)
-        gapStartTs,
-        env.receivedAt(),
-        "restart_gap",
-        "writer restart detected",
-        clock,
-        classification.component(),
-        classification.cause(),
-        classification.planned(),
-        classification.classifier(),
-        evidenceMap,
-        classification.maintenanceId());
+    GapEnvelope gapEnv =
+        GapEnvelope.createWithRestartMetadata(
+            env.exchange(),
+            env.symbol(),
+            env.stream(),
+            env.collectorSessionId(),
+            -1L, // writer-injected (Tier 5 M10)
+            gapStartTs,
+            env.receivedAt(),
+            "restart_gap",
+            "writer restart detected",
+            clock,
+            classification.component(),
+            classification.cause(),
+            classification.planned(),
+            classification.classifier(),
+            evidenceMap,
+            classification.maintenanceId());
 
     metrics.sessionGapsDetected(env.exchange(), env.symbol(), env.stream()).increment();
-    log.info("recovery_gap_emitted",
-        "exchange", env.exchange(),
-        "symbol", env.symbol(),
-        "stream", env.stream(),
-        "component", classification.component(),
-        "cause", classification.cause(),
-        "planned", classification.planned());
+    log.info(
+        "recovery_gap_emitted",
+        "exchange",
+        env.exchange(),
+        "symbol",
+        env.symbol(),
+        "stream",
+        env.stream(),
+        "component",
+        classification.component(),
+        "cause",
+        classification.cause(),
+        "planned",
+        classification.planned());
 
     return gapEnv;
   }

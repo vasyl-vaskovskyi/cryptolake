@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
-import com.cryptolake.common.util.Clocks;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -18,8 +17,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Unit tests for {@link GapEmitter}.
  *
- * <p>Ports: Python's {@code test_gap_emitter.py} — verifies the triad contract (Tier 1 §5):
- * metric increment, structured log, and buffered-for-archive in one method call. Also verifies
+ * <p>Ports: Python's {@code test_gap_emitter.py} — verifies the triad contract (Tier 1 §5): metric
+ * increment, structured log, and buffered-for-archive in one method call. Also verifies
  * coverage-filter suppression behaviour (design §2.8).
  */
 class GapEmitterTest {
@@ -45,9 +44,24 @@ class GapEmitterTest {
 
   private GapEnvelope makeGap(String reason) {
     return new GapEnvelope(
-        1, "gap", "binance", "btcusdt", "trades",
-        fakeClock.get(), "col_sess", -1L,
-        100L, 200L, reason, "test", null, null, null, null, null, null);
+        1,
+        "gap",
+        "binance",
+        "btcusdt",
+        "trades",
+        fakeClock.get(),
+        "col_sess",
+        -1L,
+        100L,
+        200L,
+        reason,
+        "test",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
   }
 
   // Tier 1 §5 — metric incremented on emit
@@ -65,8 +79,19 @@ class GapEmitterTest {
   @Test
   void emit_singleSource_acceptedAndBuffered() {
     // register a primary data event so coverage isn't enabled (needs both sources)
-    DataEnvelope env = new DataEnvelope(1, "data", "binance", "btcusdt", "trades",
-        fakeClock.get(), fakeClock.get(), "col_sess", 1L, "{}", "abc");
+    DataEnvelope env =
+        new DataEnvelope(
+            1,
+            "data",
+            "binance",
+            "btcusdt",
+            "trades",
+            fakeClock.get(),
+            fakeClock.get(),
+            "col_sess",
+            1L,
+            "{}",
+            "abc");
     coverage.handleData("primary", env);
 
     GapEnvelope gap = makeGap("ws_disconnect");
@@ -81,10 +106,32 @@ class GapEmitterTest {
   @Test
   void emitUnfiltered_alwaysBuffered() {
     // Force coverage filter into "both sources seen" state (should normally suppress)
-    DataEnvelope primary = new DataEnvelope(1, "data", "binance", "btcusdt", "trades",
-        fakeClock.get(), fakeClock.get(), "col_sess", 1L, "{}", "abc");
-    DataEnvelope backup = new DataEnvelope(1, "data", "binance", "btcusdt", "trades",
-        fakeClock.get() + 1, fakeClock.get() + 1, "col_sess", 2L, "{}", "abd");
+    DataEnvelope primary =
+        new DataEnvelope(
+            1,
+            "data",
+            "binance",
+            "btcusdt",
+            "trades",
+            fakeClock.get(),
+            fakeClock.get(),
+            "col_sess",
+            1L,
+            "{}",
+            "abc");
+    DataEnvelope backup =
+        new DataEnvelope(
+            1,
+            "data",
+            "binance",
+            "btcusdt",
+            "trades",
+            fakeClock.get() + 1,
+            fakeClock.get() + 1,
+            "col_sess",
+            2L,
+            "{}",
+            "abd");
     coverage.handleData("primary", primary);
     coverage.handleData("backup", backup);
 
@@ -99,9 +146,30 @@ class GapEmitterTest {
   @Test
   void emit_perReasonLabel_separatelyCounted() {
     emitter.emit(makeGap("ws_disconnect"), "primary", "binance.trades", 0, 1L);
-    emitter.emit(new GapEnvelope(1, "gap", "binance", "btcusdt", "trades",
-        fakeClock.get(), "col_sess", -1L, 100L, 200L, "session_seq_skip", "test",
-        null, null, null, null, null, null), "primary", "binance.trades", 0, 2L);
+    emitter.emit(
+        new GapEnvelope(
+            1,
+            "gap",
+            "binance",
+            "btcusdt",
+            "trades",
+            fakeClock.get(),
+            "col_sess",
+            -1L,
+            100L,
+            200L,
+            "session_seq_skip",
+            "test",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null),
+        "primary",
+        "binance.trades",
+        0,
+        2L);
 
     String scrape = registry.scrape();
     assertThat(scrape).contains("reason=\"ws_disconnect\"");

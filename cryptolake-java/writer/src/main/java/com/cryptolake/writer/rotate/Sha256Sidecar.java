@@ -8,9 +8,9 @@ import java.nio.file.Path;
 /**
  * Writes a SHA-256 sidecar file for a sealed archive.
  *
- * <p>Sidecar format: {@code "<hex>  <filename>\n"} (two spaces — matches {@code sha256sum(1)}
- * output — Tier 5 I5, I6). Written directly to the sidecar path (no temp+rename — Tier 5 I6
- * rationale: the recovery path tolerates missing sidecars).
+ * <p>Sidecar format: {@code "<hex> <filename>\n"} (two spaces — matches {@code sha256sum(1)} output
+ * — Tier 5 I5, I6). Written directly to the sidecar path (no temp+rename — Tier 5 I6 rationale: the
+ * recovery path tolerates missing sidecars).
  *
  * <p>Ports Python's {@code file_rotator.py:write_sha256_sidecar} (design §4.5).
  *
@@ -24,7 +24,7 @@ public final class Sha256Sidecar {
    * Computes the SHA-256 digest of {@code dataPath} and writes the sidecar file at {@code
    * sidecarPath}.
    *
-   * <p>Format: {@code "{hex}  {filename}\n"} (two spaces, matching {@code sha256sum(1)} output).
+   * <p>Format: {@code "{hex} {filename}\n"} (two spaces, matching {@code sha256sum(1)} output).
    *
    * @param dataPath sealed archive file to hash
    * @param sidecarPath destination for the sidecar; use {@link FilePaths#sidecarPath(Path)}

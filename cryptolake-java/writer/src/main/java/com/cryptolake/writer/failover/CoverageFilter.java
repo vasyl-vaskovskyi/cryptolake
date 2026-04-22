@@ -19,9 +19,9 @@ import org.slf4j.LoggerFactory;
  * source but the other source is still receiving data (coverage), the gap is parked for a grace
  * period before deciding whether to archive or suppress it.
  *
- * <p>Coalescing: when an incoming gap shares {@code gap_start_ts} with a pending entry, the
- * pending record is REPLACED with a new {@code GapEnvelope} whose {@code gap_end_ts} is the
- * {@code max()} — records are immutable so a new record is constructed (Tier 2 §12).
+ * <p>Coalescing: when an incoming gap shares {@code gap_start_ts} with a pending entry, the pending
+ * record is REPLACED with a new {@code GapEnvelope} whose {@code gap_end_ts} is the {@code max()} —
+ * records are immutable so a new record is constructed (Tier 2 §12).
  *
  * <p>Thread safety: consume-loop thread only (T1). No synchronization (Tier 5 A5).
  */
@@ -38,8 +38,8 @@ public final class CoverageFilter {
   private boolean filterEnabled = false;
 
   /**
-   * Per-source last-data timestamp (ns) for coverage detection.
-   * Key: "primary" or "backup"; value: nanosecond timestamp.
+   * Per-source last-data timestamp (ns) for coverage detection. Key: "primary" or "backup"; value:
+   * nanosecond timestamp.
    */
   private final Map<String, Long> lastDataTs = new HashMap<>();
 
@@ -75,9 +75,8 @@ public final class CoverageFilter {
   }
 
   /**
-   * Handles a gap from a source. If the other source covers the gap, parks it for the grace
-   * period. Returns {@code true} if the gap should be archived now; {@code false} if parked or
-   * suppressed.
+   * Handles a gap from a source. If the other source covers the gap, parks it for the grace period.
+   * Returns {@code true} if the gap should be archived now; {@code false} if parked or suppressed.
    *
    * <p>Ports {@code CoverageFilter.handle_gap(source, gap)}.
    */
@@ -88,18 +87,20 @@ public final class CoverageFilter {
 
     String otherSource = "primary".equals(source) ? "backup" : "primary";
     Long otherLastTs = lastDataTs.get(otherSource);
-    boolean otherCovers = otherLastTs != null
-        && (clock.nowNs() - otherLastTs) < (long) (gracePeriodSeconds * 1_000_000_000L);
+    boolean otherCovers =
+        otherLastTs != null
+            && (clock.nowNs() - otherLastTs) < (long) (gracePeriodSeconds * 1_000_000_000L);
 
-    String gapKey = gap.exchange() + "|" + gap.symbol() + "|" + gap.stream()
-        + "|" + gap.gapStartTs();
+    String gapKey =
+        gap.exchange() + "|" + gap.symbol() + "|" + gap.stream() + "|" + gap.gapStartTs();
 
     PendingGap existing = pendingGaps.get(gapKey);
     if (existing != null) {
       // Coalesce: replace with new envelope having max gap_end_ts (Tier 2 §12 — records immutable)
       if (gap.gapEndTs() > existing.gap().gapEndTs()) {
         GapEnvelope coalesced = coalesceGap(existing.gap(), gap);
-        pendingGaps.put(gapKey, new PendingGap(coalesced, existing.source(), existing.firstSeenNs()));
+        pendingGaps.put(
+            gapKey, new PendingGap(coalesced, existing.source(), existing.firstSeenNs()));
         metrics.gapCoalesced(source).increment();
         log.debug("gap_coalesced", "key", gapKey, "source", source);
       }

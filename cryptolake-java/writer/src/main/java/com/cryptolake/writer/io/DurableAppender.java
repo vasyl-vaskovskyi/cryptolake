@@ -22,8 +22,8 @@ import java.nio.file.StandardOpenOption;
 public final class DurableAppender {
 
   /**
-   * Appends {@code payload} to {@code path}, creating the file if it does not exist, then
-   * fsyncs data + metadata via {@link FileChannel#force(boolean) force(true)}.
+   * Appends {@code payload} to {@code path}, creating the file if it does not exist, then fsyncs
+   * data + metadata via {@link FileChannel#force(boolean) force(true)}.
    *
    * <p>On {@link IOException} during write: truncates to pre-write position and fsyncs again, then
    * rethrows (Tier 5 I4). The caller (OffsetCommitCoordinator) catches this exception.

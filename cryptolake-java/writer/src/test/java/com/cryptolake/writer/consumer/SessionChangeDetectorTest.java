@@ -6,7 +6,6 @@ import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.common.util.Clocks;
 import com.cryptolake.writer.failover.CoverageFilter;
-import com.cryptolake.writer.gap.GapEmitter;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
@@ -34,9 +33,20 @@ class SessionChangeDetectorTest {
     detector = new SessionChangeDetector(null, coverage, metrics, Clocks.systemNanoClock());
   }
 
-  private DataEnvelope makeEnv(String exchange, String symbol, String stream, String sessionId, long seq) {
-    return new DataEnvelope(1, "data", exchange, symbol, stream,
-        System.nanoTime(), System.nanoTime(), sessionId, seq, "{}", "abc");
+  private DataEnvelope makeEnv(
+      String exchange, String symbol, String stream, String sessionId, long seq) {
+    return new DataEnvelope(
+        1,
+        "data",
+        exchange,
+        symbol,
+        stream,
+        System.nanoTime(),
+        System.nanoTime(),
+        sessionId,
+        seq,
+        "{}",
+        "abc");
   }
 
   // ports: design §2.2 — first envelope for stream → no gap

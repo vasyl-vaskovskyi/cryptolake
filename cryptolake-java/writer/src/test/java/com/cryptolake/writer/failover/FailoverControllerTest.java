@@ -2,7 +2,6 @@ package com.cryptolake.writer.failover;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptolake.common.util.Clocks;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
@@ -32,14 +31,17 @@ class FailoverControllerTest {
     fakeClock = new AtomicLong(1_000_000_000_000L);
     coverage = new CoverageFilter(5.0, 10.0, metrics, fakeClock::get);
     // Use factory that throws since we do NOT call activate() in most tests
-    controller = new FailoverController(
-        () -> { throw new IllegalStateException("no backup consumer in unit test"); },
-        List.of("binance.trades"),
-        "backup.",
-        Duration.ofSeconds(5),
-        coverage,
-        metrics,
-        fakeClock::get);
+    controller =
+        new FailoverController(
+            () -> {
+              throw new IllegalStateException("no backup consumer in unit test");
+            },
+            List.of("binance.trades"),
+            "backup.",
+            Duration.ofSeconds(5),
+            coverage,
+            metrics,
+            fakeClock::get);
   }
 
   // ports: design §4.6 — not active at startup
@@ -115,9 +117,9 @@ class FailoverControllerTest {
   // ports: design §4.6 — checkSwitchbackFilter returns false when not in switchback
   @Test
   void checkSwitchbackFilter_notInSwitchback_false() {
-    var env = new com.cryptolake.common.envelope.DataEnvelope(
-        1, "data", "binance", "btcusdt", "trades",
-        1L, 1L, "col_sess", 1L, "{}", "abc");
+    var env =
+        new com.cryptolake.common.envelope.DataEnvelope(
+            1, "data", "binance", "btcusdt", "trades", 1L, 1L, "col_sess", 1L, "{}", "abc");
 
     assertThat(controller.checkSwitchbackFilter(env)).isFalse();
   }

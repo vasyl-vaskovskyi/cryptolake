@@ -16,8 +16,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>On assignment: applies pending seeks from {@link RecoveryCoordinator#pendingSeeks()} via
  * {@link KafkaConsumer#seek(TopicPartition, long)} INSIDE the listener (not by mutating the
- * collection arg — Tier 5 C4). Also updates the volatile {@code assignedPartitions} set for
- * {@link KafkaConsumerLoop#isConnected()}.
+ * collection arg — Tier 5 C4). Also updates the volatile {@code assignedPartitions} set for {@link
+ * KafkaConsumerLoop#isConnected()}.
  *
  * <p>On revoke: calls {@link OffsetCommitCoordinator#commitBeforeRevoke(Collection)} SYNCHRONOUSLY
  * (blocking the poll thread). This is safer than submitting to an executor (design §3.2 footnote;
@@ -60,10 +60,14 @@ public final class PartitionAssignmentListener implements ConsumerRebalanceListe
       if (seekTo != null) {
         consumer.seek(tp, seekTo); // Tier 5 C4 — seek inside listener
         recovery.clearPendingSeek(tp);
-        log.info("recovery_seek_applied",
-            "topic", tp.topic(),
-            "partition", tp.partition(),
-            "offset", seekTo);
+        log.info(
+            "recovery_seek_applied",
+            "topic",
+            tp.topic(),
+            "partition",
+            tp.partition(),
+            "offset",
+            seekTo);
       }
     }
     assignedSink.addAll(partitions);
@@ -73,9 +77,8 @@ public final class PartitionAssignmentListener implements ConsumerRebalanceListe
   /**
    * Called when partitions are revoked. Flushes+commits synchronously before losing ownership.
    *
-   * <p>Ports Python's {@code _on_revoke} flush + commit (Tier 5 C4; design §3.2 — synchronous,
-   * not submitted to executor). Throwing from this listener aborts poll — use a blocking call
-   * instead.
+   * <p>Ports Python's {@code _on_revoke} flush + commit (Tier 5 C4; design §3.2 — synchronous, not
+   * submitted to executor). Throwing from this listener aborts poll — use a blocking call instead.
    */
   @Override
   public void onPartitionsRevoked(Collection<TopicPartition> partitions) {

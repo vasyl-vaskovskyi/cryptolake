@@ -26,15 +26,15 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Ports Python's {@code buffer_manager.py:BufferManager} (design §2.3; design §4.3).
  *
- * <p>Thread safety: consume-loop thread only (T1). No synchronization, no {@code
- * ConcurrentHashMap} (Tier 5 A5). All state is owned by T1.
+ * <p>Thread safety: consume-loop thread only (T1). No synchronization, no {@code ConcurrentHashMap}
+ * (Tier 5 A5). All state is owned by T1.
  *
- * <p>Serialization: uses {@link EnvelopeCodec#toJsonBytes(Object)} +
- * {@link EnvelopeCodec#appendNewline(byte[])} for compact JSON lines without re-indent (Tier 5 B2).
+ * <p>Serialization: uses {@link EnvelopeCodec#toJsonBytes(Object)} + {@link
+ * EnvelopeCodec#appendNewline(byte[])} for compact JSON lines without re-indent (Tier 5 B2).
  *
- * <p>Coordinates: Python mutates envelope dict in place; Java records are immutable. We use
- * {@link EnvelopeCodec#withBrokerCoordinates(DataEnvelope, BrokerCoordinates)} wrapper so
- * coordinates appear as last three fields (design §6.1 Option A).
+ * <p>Coordinates: Python mutates envelope dict in place; Java records are immutable. We use {@link
+ * EnvelopeCodec#withBrokerCoordinates(DataEnvelope, BrokerCoordinates)} wrapper so coordinates
+ * appear as last three fields (design §6.1 Option A).
  */
 public final class BufferManager {
 
@@ -145,8 +145,7 @@ public final class BufferManager {
    * @param source "primary" or "backup"
    * @return flush results if threshold reached, otherwise empty
    */
-  public Optional<List<FlushResult>> add(
-      GapEnvelope env, BrokerCoordinates coords, String source) {
+  public Optional<List<FlushResult>> add(GapEnvelope env, BrokerCoordinates coords, String source) {
     // Route gap envelopes by their exchange/symbol/stream and receivedAt timestamp
     long ns = env.receivedAt();
     Instant inst = Instant.ofEpochSecond(ns / 1_000_000_000L, ns % 1_000_000_000L);
@@ -155,15 +154,10 @@ public final class BufferManager {
     String date = DateTimeFormatter.ISO_LOCAL_DATE.format(zdt);
     FileTarget target =
         new FileTarget(
-            env.exchange(),
-            env.symbol().toLowerCase(Locale.ROOT),
-            env.stream(),
-            date,
-            hour);
+            env.exchange(), env.symbol().toLowerCase(Locale.ROOT), env.stream(), date, hour);
 
     byte[] line =
-        codec.appendNewline(
-            codec.toJsonBytes(EnvelopeCodec.withBrokerCoordinates(env, coords)));
+        codec.appendNewline(codec.toJsonBytes(EnvelopeCodec.withBrokerCoordinates(env, coords)));
     buffers.computeIfAbsent(target, k -> new ArrayList<>()).add(line);
     sources.put(target, source);
     partitions.put(target, coords.partition());
@@ -225,8 +219,8 @@ public final class BufferManager {
   }
 
   /**
-   * Returns {@code true} if the flush interval has elapsed since the last flush (Tier 5 F4 —
-   * uses {@code System.nanoTime()}, not wall clock).
+   * Returns {@code true} if the flush interval has elapsed since the last flush (Tier 5 F4 — uses
+   * {@code System.nanoTime()}, not wall clock).
    */
   public boolean shouldFlushByInterval() {
     long elapsedNs = System.nanoTime() - lastFlushNanos;
@@ -257,10 +251,12 @@ public final class BufferManager {
     sources.remove(target);
 
     Path filePath = buildPath(target, null);
-    return new FlushResult(target, filePath, lines, highWater, partition, lines.size(), cpMeta, hasBackupSource);
+    return new FlushResult(
+        target, filePath, lines, highWater, partition, lines.size(), cpMeta, hasBackupSource);
   }
 
   private Path buildPath(FileTarget t, Integer lateSeq) {
-    return FilePaths.buildFilePath(baseDir, t.exchange(), t.symbol(), t.stream(), t.date(), t.hour(), lateSeq);
+    return FilePaths.buildFilePath(
+        baseDir, t.exchange(), t.symbol(), t.stream(), t.date(), t.hour(), lateSeq);
   }
 }

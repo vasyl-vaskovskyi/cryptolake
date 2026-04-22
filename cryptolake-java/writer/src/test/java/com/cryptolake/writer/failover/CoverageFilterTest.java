@@ -4,13 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import com.cryptolake.writer.metrics.WriterMetrics;
 
 /**
  * Unit tests for {@link CoverageFilter}.
@@ -33,13 +33,41 @@ class CoverageFilterTest {
   }
 
   private DataEnvelope makeData(String exchange, String symbol, String stream) {
-    return new DataEnvelope(1, "data", exchange, symbol, stream,
-        fakeClock.get(), fakeClock.get(), "col_sess", 1L, "{}", "abc");
+    return new DataEnvelope(
+        1,
+        "data",
+        exchange,
+        symbol,
+        stream,
+        fakeClock.get(),
+        fakeClock.get(),
+        "col_sess",
+        1L,
+        "{}",
+        "abc");
   }
 
-  private GapEnvelope makeGap(String exchange, String symbol, String stream, long startTs, long endTs) {
-    return new GapEnvelope(1, "gap", exchange, symbol, stream,
-        fakeClock.get(), "col_sess", -1L, startTs, endTs, "ws_disconnect", "test", null, null, null, null, null, null);
+  private GapEnvelope makeGap(
+      String exchange, String symbol, String stream, long startTs, long endTs) {
+    return new GapEnvelope(
+        1,
+        "gap",
+        exchange,
+        symbol,
+        stream,
+        fakeClock.get(),
+        "col_sess",
+        -1L,
+        startTs,
+        endTs,
+        "ws_disconnect",
+        "test",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
   }
 
   // ports: design §4.6 — filter disabled when only one source seen
@@ -103,7 +131,8 @@ class CoverageFilterTest {
     filter.handleData("backup", makeData("binance", "btcusdt", "trades"));
 
     GapEnvelope gap1 = makeGap("binance", "btcusdt", "trades", 100L, 200L);
-    GapEnvelope gap2 = makeGap("binance", "btcusdt", "trades", 100L, 300L); // same start, higher end
+    GapEnvelope gap2 =
+        makeGap("binance", "btcusdt", "trades", 100L, 300L); // same start, higher end
 
     filter.handleGap("primary", gap1);
     filter.handleGap("primary", gap2);

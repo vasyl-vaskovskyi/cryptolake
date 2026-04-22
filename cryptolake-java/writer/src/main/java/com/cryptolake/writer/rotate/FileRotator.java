@@ -21,8 +21,7 @@ import org.slf4j.LoggerFactory;
  * Seals an active {@code hour-H.jsonl.zst} file: flush → write → sha256 sidecar.
  *
  * <p>Ports Python's {@code WriterConsumer._rotate_file} (design §2.4). File rotation happens on
- * hour boundary — driven by {@link
- * com.cryptolake.writer.consumer.HourRotationScheduler}.
+ * hour boundary — driven by {@link com.cryptolake.writer.consumer.HourRotationScheduler}.
  *
  * <p>Thread safety: consume-loop thread only (T1).
  */
@@ -64,22 +63,38 @@ public final class FileRotator {
   public SealResult seal(FileTarget target) {
     // Determine if this is a late-arrival (file already exists from a previous hour that should
     // have been rotated but wasn't — e.g., restart scenario).
-    Path hourPath = FilePaths.buildFilePath(
-        baseDir, target.exchange(), target.symbol(), target.stream(), target.date(), target.hour(), null);
+    Path hourPath =
+        FilePaths.buildFilePath(
+            baseDir,
+            target.exchange(),
+            target.symbol(),
+            target.stream(),
+            target.date(),
+            target.hour(),
+            null);
     Path dataPath;
     if (java.nio.file.Files.exists(hourPath)) {
       // Late arrival: already sealed or being sealed; generate late sequence name (Tier 5 M15)
       int seq = lateSeq.nextSeq(hourPath);
-      dataPath = FilePaths.buildFilePath(
-          baseDir, target.exchange(), target.symbol(), target.stream(), target.date(), target.hour(), seq);
+      dataPath =
+          FilePaths.buildFilePath(
+              baseDir,
+              target.exchange(),
+              target.symbol(),
+              target.stream(),
+              target.date(),
+              target.hour(),
+              seq);
     } else {
       dataPath = hourPath;
       lateSeq.markSealed(hourPath);
     }
 
     // Flush remaining buffer for this target
-    List<FlushResult> results = buffers.flushKey(
-        new com.cryptolake.writer.StreamKey(target.exchange(), target.symbol(), target.stream()));
+    List<FlushResult> results =
+        buffers.flushKey(
+            new com.cryptolake.writer.StreamKey(
+                target.exchange(), target.symbol(), target.stream()));
 
     // Write all results to disk
     for (FlushResult r : results) {
@@ -111,14 +126,22 @@ public final class FileRotator {
     }
     metrics.filesRotated(target.exchange(), target.symbol(), target.stream()).increment();
 
-    log.info("file_rotated",
-        "exchange", target.exchange(),
-        "symbol", target.symbol(),
-        "stream", target.stream(),
-        "date", target.date(),
-        "hour", target.hour(),
-        "path", dataPath.toString(),
-        "byte_size", byteSize);
+    log.info(
+        "file_rotated",
+        "exchange",
+        target.exchange(),
+        "symbol",
+        target.symbol(),
+        "stream",
+        target.stream(),
+        "date",
+        target.date(),
+        "hour",
+        target.hour(),
+        "path",
+        dataPath.toString(),
+        "byte_size",
+        byteSize);
 
     return new SealResult(dataPath, sidecarPath, byteSize);
   }

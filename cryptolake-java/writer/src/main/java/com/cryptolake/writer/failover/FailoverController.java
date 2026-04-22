@@ -16,8 +16,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Manages the failover lifecycle: primary silence detection → backup activation → switchback.
  *
- * <p>Ports Python's {@code FailoverManager} (design §2.7; design §4.6). Owns the BACKUP
- * {@link KafkaConsumer} lifecycle (created lazily on activate; closed on deactivate).
+ * <p>Ports Python's {@code FailoverManager} (design §2.7; design §4.6). Owns the BACKUP {@link
+ * KafkaConsumer} lifecycle (created lazily on activate; closed on deactivate).
  *
  * <p>Thread safety: consume-loop thread only (T1). {@code _isActive} is {@code volatile} so the
  * Ready thread reads a coherent value for {@code isConnected()} checks (design §3.3).
@@ -74,9 +74,7 @@ public final class FailoverController {
     this.lastPrimaryRecordNs = clock.nowNs();
   }
 
-  /**
-   * Returns {@code true} if the silence timeout has elapsed since the last primary record.
-   */
+  /** Returns {@code true} if the silence timeout has elapsed since the last primary record. */
   public boolean shouldActivate() {
     if (isActive || lastPrimaryRecordNs < 0) return false;
     long silentNs = clock.nowNs() - lastPrimaryRecordNs;
@@ -85,9 +83,7 @@ public final class FailoverController {
 
   // ── Activation / deactivation ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Activates backup consumer. Creates the consumer lazily and subscribes to backup topics.
-   */
+  /** Activates backup consumer. Creates the consumer lazily and subscribes to backup topics. */
   public void activate() {
     if (isActive) return;
     log.info("failover_activated", "backup_prefix", backupPrefix);
@@ -97,14 +93,11 @@ public final class FailoverController {
     metrics.failoverTotal().increment();
 
     backupConsumer = backupFactory.get();
-    List<String> backupTopics =
-        primaryTopics.stream().map(t -> backupPrefix + t).toList();
+    List<String> backupTopics = primaryTopics.stream().map(t -> backupPrefix + t).toList();
     backupConsumer.subscribe(backupTopics);
   }
 
-  /**
-   * Deactivates backup consumer. Records failover duration.
-   */
+  /** Deactivates backup consumer. Records failover duration. */
   public void deactivate() {
     if (!isActive) return;
     long durationNs = clock.nowNs() - activationStartNs;
@@ -125,9 +118,7 @@ public final class FailoverController {
 
   // ── Record tracking ───────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Tracks a data envelope from primary for switchback filter.
-   */
+  /** Tracks a data envelope from primary for switchback filter. */
   public void trackRecord(DataEnvelope env) {
     // No natural key tracking here; that's done by NaturalKeyExtractor in RecordHandler
   }
@@ -145,26 +136,20 @@ public final class FailoverController {
     return primaryKey > 0;
   }
 
-  /**
-   * Initiates the switchback (backup → primary) transition.
-   */
+  /** Initiates the switchback (backup → primary) transition. */
   public void beginSwitchback() {
     switchbackInProgress = true;
     log.info("switchback_initiated");
   }
 
-  /**
-   * Returns {@code true} if the switchback filter should drop this backup envelope.
-   */
+  /** Returns {@code true} if the switchback filter should drop this backup envelope. */
   public boolean checkSwitchbackFilter(DataEnvelope env) {
     return shouldFilter(env);
   }
 
   // ── Backup polling ────────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Polls the backup consumer if active. Returns empty if not active.
-   */
+  /** Polls the backup consumer if active. Returns empty if not active. */
   public ConsumerRecords<byte[], byte[]> pollBackup(Duration timeout) {
     if (!isActive || backupConsumer == null) {
       return ConsumerRecords.empty();
@@ -172,9 +157,7 @@ public final class FailoverController {
     return backupConsumer.poll(timeout);
   }
 
-  /**
-   * Closes the backup consumer (called on deactivate or shutdown).
-   */
+  /** Closes the backup consumer (called on deactivate or shutdown). */
   public void cleanup() {
     if (backupConsumer != null) {
       try {

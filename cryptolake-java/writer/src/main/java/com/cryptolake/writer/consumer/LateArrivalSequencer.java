@@ -15,8 +15,8 @@ import java.util.Map;
 public final class LateArrivalSequencer {
 
   /**
-   * Map from base hour path (e.g., {@code .../hour-14.jsonl.zst}) to the next late sequence
-   * number (starts at 1 after the base file is sealed).
+   * Map from base hour path (e.g., {@code .../hour-14.jsonl.zst}) to the next late sequence number
+   * (starts at 1 after the base file is sealed).
    */
   private final Map<Path, Integer> seq = new HashMap<>();
 

@@ -18,8 +18,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Startup scan of {@code baseDir} for {@code .jsonl.zst} files; pairs each with its {@code
- * .sha256} sidecar; identifies "sealed" vs "uncommitted (missing sidecar)".
+ * Startup scan of {@code baseDir} for {@code .jsonl.zst} files; pairs each with its {@code .sha256}
+ * sidecar; identifies "sealed" vs "uncommitted (missing sidecar)".
  *
  * <p>Ports Python's {@code WriterConsumer._discover_sealed_files} and truncation logic (design
  * §2.10; Tier 5 I7).
@@ -47,6 +47,7 @@ public final class SealedFileIndex {
    * Scans the base directory and reconciles against PG state.
    *
    * <p>For each {@code .jsonl.zst} file found:
+   *
    * <ul>
    *   <li>If a corresponding {@code .sha256} sidecar exists → "sealed" (committed to archive).
    *   <li>If no sidecar → "uncommitted"; delete the file (not yet safe to commit from).
@@ -109,7 +110,11 @@ public final class SealedFileIndex {
                       }
                     } catch (IOException e) {
                       log.warn(
-                          "truncate_check_failed", "path", zstPath.toString(), "error", e.getMessage());
+                          "truncate_check_failed",
+                          "path",
+                          zstPath.toString(),
+                          "error",
+                          e.getMessage());
                     }
                   }
                 } else {

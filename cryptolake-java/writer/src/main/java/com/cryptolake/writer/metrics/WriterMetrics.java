@@ -12,12 +12,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * Owns all 24 Micrometer meters for the writer service (design §9).
  *
  * <p><b>Counter naming — Tier 5 H4:</b> under Micrometer 1.13 / Prometheus client 1.x, the
- * Prometheus metadata validator rejects metric names that end in {@code _total} (it adds the
- * suffix automatically at scrape time). To keep scrape output parity with Python
- * ({@code writer_messages_consumed_total}), counters here are registered WITHOUT the
- * {@code _total} suffix; the suffix appears in the exposition via {@link
- * io.micrometer.prometheusmetrics.PrometheusMeterRegistry#scrape()}. We still apply
- * {@link NamingConvention#identity} so no other Micrometer-side transformation is applied.
+ * Prometheus metadata validator rejects metric names that end in {@code _total} (it adds the suffix
+ * automatically at scrape time). To keep scrape output parity with Python ({@code
+ * writer_messages_consumed_total}), counters here are registered WITHOUT the {@code _total} suffix;
+ * the suffix appears in the exposition via {@link
+ * io.micrometer.prometheusmetrics.PrometheusMeterRegistry#scrape()}. We still apply {@link
+ * NamingConvention#identity} so no other Micrometer-side transformation is applied.
  *
  * <p>Gauges use supplier-backed {@link MetricHolders} — strongly referenced by this class so they
  * are never GC'd and never return {@code NaN} (Tier 5 H6 watch-out).
@@ -46,7 +46,8 @@ public final class WriterMetrics {
   public WriterMetrics(PrometheusMeterRegistry registry) {
     this.registry = registry;
     this.holders = new MetricHolders();
-    // Tier 5 H4: identity convention prevents _total_total suffix on counters already ending in _total
+    // Tier 5 H4: identity convention prevents _total_total suffix on counters already ending in
+    // _total
     registry.config().namingConvention(NamingConvention.identity);
 
     // Register no-label gauges once (keyed holders already default to 0)
@@ -292,9 +293,7 @@ public final class WriterMetrics {
         .register(registry);
   }
 
-  /**
-   * Metric #19: failover episode duration histogram in seconds (Tier 5 H5).
-   */
+  /** Metric #19: failover episode duration histogram in seconds (Tier 5 H5). */
   public DistributionSummary failoverDurationSeconds() {
     return DistributionSummary.builder("writer_failover_duration_seconds")
         .description("Duration of failover episode in seconds")

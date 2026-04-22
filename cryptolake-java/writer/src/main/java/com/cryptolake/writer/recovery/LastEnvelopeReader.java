@@ -6,7 +6,6 @@ import com.github.luben.zstd.ZstdInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,8 +16,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Reads the last data envelope from a sealed {@code .jsonl.zst} file.
  *
- * <p>Ports Python's {@code WriterConsumer._get_last_envelope_from_sealed_file} (design §2.10;
- * Tier 5 I2).
+ * <p>Ports Python's {@code WriterConsumer._get_last_envelope_from_sealed_file} (design §2.10; Tier
+ * 5 I2).
  *
  * <p>Uses streaming decompression ({@link ZstdInputStream}) to avoid loading multi-GB files into
  * memory. Scans all lines and returns the last one that deserializes as a {@link DataEnvelope}
@@ -51,8 +50,7 @@ public final class LastEnvelopeReader {
     DataEnvelope last = null;
     try (var fis = Files.newInputStream(zstFile);
         var zstdIn = new ZstdInputStream(fis);
-        var reader =
-            new BufferedReader(new InputStreamReader(zstdIn, StandardCharsets.UTF_8))) {
+        var reader = new BufferedReader(new InputStreamReader(zstdIn, StandardCharsets.UTF_8))) {
       String line;
       while ((line = reader.readLine()) != null) {
         String trimmed = line.strip();
@@ -68,7 +66,8 @@ public final class LastEnvelopeReader {
         }
       }
     } catch (IOException e) {
-      log.warn("last_envelope_reader_io_error", "path", zstFile.toString(), "error", e.getMessage());
+      log.warn(
+          "last_envelope_reader_io_error", "path", zstFile.toString(), "error", e.getMessage());
       return Optional.empty();
     }
     return Optional.ofNullable(last);

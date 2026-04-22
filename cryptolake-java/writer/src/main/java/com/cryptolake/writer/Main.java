@@ -18,18 +18,17 @@ import com.cryptolake.writer.consumer.LateArrivalSequencer;
 import com.cryptolake.writer.consumer.OffsetCommitCoordinator;
 import com.cryptolake.writer.consumer.RecordHandler;
 import com.cryptolake.writer.consumer.RecoveryCoordinator;
+import com.cryptolake.writer.consumer.RecoveryResult;
 import com.cryptolake.writer.consumer.SessionChangeDetector;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.failover.FailoverController;
 import com.cryptolake.writer.failover.HostLifecycleEvidence;
 import com.cryptolake.writer.failover.HostLifecycleReader;
-import com.cryptolake.writer.failover.RestartGapClassifier;
 import com.cryptolake.writer.gap.GapEmitter;
 import com.cryptolake.writer.health.WriterReadyCheck;
 import com.cryptolake.writer.io.DurableAppender;
 import com.cryptolake.writer.io.ZstdFrameCompressor;
 import com.cryptolake.writer.metrics.WriterMetrics;
-import com.cryptolake.writer.consumer.RecoveryResult;
 import com.cryptolake.writer.recovery.LastEnvelopeReader;
 import com.cryptolake.writer.recovery.SealedFileIndex;
 import com.cryptolake.writer.rotate.FileRotator;
@@ -59,17 +58,17 @@ import org.slf4j.LoggerFactory;
 /**
  * Writer service entry point. Wires all components and starts the consume loop.
  *
- * <p>Wiring order (design §2.1): {@code LogInit.apply()} → {@code YamlConfigLoader.load()} →
- * {@code EnvelopeCodec.newMapper()} → {@code StateManager.connect()} → {@code
- * HostLifecycleReader.load()} → {@code WriterMetrics} → {@code ZstdFrameCompressor} → {@code
- * BufferManager} → {@code CoverageFilter} → {@code FailoverController} → {@code FileRotator} →
- * {@code OffsetCommitCoordinator} → {@code RecoveryCoordinator} → {@code SessionChangeDetector}
- * → {@code DepthRecoveryGapFilter} → {@code GapEmitter} → {@code RecordHandler} → {@code
- * KafkaConsumerLoop} → {@code HealthServer} → SIGTERM hook → start.
+ * <p>Wiring order (design §2.1): {@code LogInit.apply()} → {@code YamlConfigLoader.load()} → {@code
+ * EnvelopeCodec.newMapper()} → {@code StateManager.connect()} → {@code HostLifecycleReader.load()}
+ * → {@code WriterMetrics} → {@code ZstdFrameCompressor} → {@code BufferManager} → {@code
+ * CoverageFilter} → {@code FailoverController} → {@code FileRotator} → {@code
+ * OffsetCommitCoordinator} → {@code RecoveryCoordinator} → {@code SessionChangeDetector} → {@code
+ * DepthRecoveryGapFilter} → {@code GapEmitter} → {@code RecordHandler} → {@code KafkaConsumerLoop}
+ * → {@code HealthServer} → SIGTERM hook → start.
  *
- * <p>Thread model: one virtual-thread executor for T1 (consume loop); health server runs on its
- * own JDK httpserver executor; SIGTERM hook on a platform thread (JVM requirement). No other
- * threads (design §3.1).
+ * <p>Thread model: one virtual-thread executor for T1 (consume loop); health server runs on its own
+ * JDK httpserver executor; SIGTERM hook on a platform thread (JVM requirement). No other threads
+ * (design §3.1).
  *
  * <p>Thread safety: Main wires in a single thread; no synchronization needed here.
  */
@@ -96,9 +95,10 @@ public final class Main {
     }
 
     // ── Config path ──────────────────────────────────────────────────────────────────────────
-    String configPath = args.length > 0
-        ? args[0]
-        : System.getenv().getOrDefault("CRYPTOLAKE_CONFIG", "config.yaml");
+    String configPath =
+        args.length > 0
+            ? args[0]
+            : System.getenv().getOrDefault("CRYPTOLAKE_CONFIG", "config.yaml");
 
     AppConfig config;
     try {
@@ -124,7 +124,8 @@ public final class Main {
     // ── Metrics ─────────────────────────────────────────────────────────────────────────────
     PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
     WriterMetrics metrics = new WriterMetrics(registry);
-    MetricsSource metricsSource = () -> registry.scrape().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    MetricsSource metricsSource =
+        () -> registry.scrape().getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
     // ── PostgreSQL / HikariCP ────────────────────────────────────────────────────────────────
     HikariConfig hikariCfg = new HikariConfig();
@@ -144,15 +145,15 @@ public final class Main {
     }
 
     // Register component runtime state
-    ComponentRuntimeState runtimeState = new ComponentRuntimeState(
-        "writer", instanceId, currentBootId, startedAt, startedAt, null, false, null);
+    ComponentRuntimeState runtimeState =
+        new ComponentRuntimeState(
+            "writer", instanceId, currentBootId, startedAt, startedAt, null, false, null);
     stateManager.upsertComponentRuntime(runtimeState);
 
     // ── Host lifecycle evidence ──────────────────────────────────────────────────────────────
     String ledgerPathEnv = System.getenv("LIFECYCLE_LEDGER_PATH");
-    Path ledgerPath = ledgerPathEnv != null
-        ? Path.of(ledgerPathEnv)
-        : HostLifecycleReader.DEFAULT_LEDGER_PATH;
+    Path ledgerPath =
+        ledgerPathEnv != null ? Path.of(ledgerPathEnv) : HostLifecycleReader.DEFAULT_LEDGER_PATH;
     HostLifecycleEvidence hostEvidence =
         HostLifecycleReader.load(ledgerPath, null, startedAt, mapper);
 
@@ -163,18 +164,17 @@ public final class Main {
     SealedFileIndex sealedIndex = new SealedFileIndex(Path.of(baseDir));
 
     // ── Buffer + codec ───────────────────────────────────────────────────────────────────────
-    BufferManager buffers = new BufferManager(
-        baseDir,
-        writerConfig.flushMessages(),
-        writerConfig.flushIntervalSeconds(),
-        codec);
+    BufferManager buffers =
+        new BufferManager(
+            baseDir, writerConfig.flushMessages(), writerConfig.flushIntervalSeconds(), codec);
 
     // ── Coverage filter ──────────────────────────────────────────────────────────────────────
-    CoverageFilter coverage = new CoverageFilter(
-        writerConfig.gapFilter().gracePeriodSeconds(),
-        writerConfig.gapFilter().snapshotMissGraceSeconds(),
-        metrics,
-        Clocks.systemNanoClock());
+    CoverageFilter coverage =
+        new CoverageFilter(
+            writerConfig.gapFilter().gracePeriodSeconds(),
+            writerConfig.gapFilter().snapshotMissGraceSeconds(),
+            metrics,
+            Clocks.systemNanoClock());
 
     // ── Build enabled topics (Tier 1 §3 — disabled streams excluded) ─────────────────────────
     List<String> enabledTopics = buildEnabledTopics(config);
@@ -187,17 +187,21 @@ public final class Main {
     // ── Kafka consumer ────────────────────────────────────────────────────────────────────────
     Properties consumerProps = buildConsumerProps(config);
     KafkaConsumer<byte[], byte[]> primaryConsumer =
-        new KafkaConsumer<>(consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        new KafkaConsumer<>(
+            consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
 
     // ── Failover controller ──────────────────────────────────────────────────────────────────
-    FailoverController failover = new FailoverController(
-        () -> new KafkaConsumer<>(consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer()),
-        enabledTopics,
-        BACKUP_PREFIX,
-        Duration.ofSeconds(5),
-        coverage,
-        metrics,
-        Clocks.systemNanoClock());
+    FailoverController failover =
+        new FailoverController(
+            () ->
+                new KafkaConsumer<>(
+                    consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer()),
+            enabledTopics,
+            BACKUP_PREFIX,
+            Duration.ofSeconds(5),
+            coverage,
+            metrics,
+            Clocks.systemNanoClock());
 
     // ── File rotation ─────────────────────────────────────────────────────────────────────────
     LastEnvelopeReader envelopeReader = new LastEnvelopeReader(codec);
@@ -209,9 +213,15 @@ public final class Main {
     GapEmitter gapEmitter; // declared here, constructed below
 
     // ── OffsetCommitCoordinator ───────────────────────────────────────────────────────────────
-    OffsetCommitCoordinator committer = new OffsetCommitCoordinator(
-        primaryConsumer, appender, compressor, stateManager, sealedIndex, metrics,
-        Clocks.systemNanoClock());
+    OffsetCommitCoordinator committer =
+        new OffsetCommitCoordinator(
+            primaryConsumer,
+            appender,
+            compressor,
+            stateManager,
+            sealedIndex,
+            metrics,
+            Clocks.systemNanoClock());
 
     // ── GapEmitter (now we have coverage and buffers) ─────────────────────────────────────────
     gapEmitter = new GapEmitter(buffers, metrics, null, coverage);
@@ -220,34 +230,62 @@ public final class Main {
     FileRotator rotator = new FileRotator(appender, compressor, lateSeq, buffers, metrics, baseDir);
 
     // ── HourRotationScheduler ────────────────────────────────────────────────────────────────
-    HourRotationScheduler hourScheduler = new HourRotationScheduler(rotator, buffers, committer, metrics);
+    HourRotationScheduler hourScheduler =
+        new HourRotationScheduler(rotator, buffers, committer, metrics);
 
     // ── RecoveryCoordinator ───────────────────────────────────────────────────────────────────
-    RecoveryCoordinator recovery = new RecoveryCoordinator(
-        stateManager, sealedIndex, envelopeReader, hostEvidence,
-        null, // RestartGapClassifier is a static utility
-        gapEmitter, metrics, Clocks.systemNanoClock(),
-        currentBootId, instanceId);
+    RecoveryCoordinator recovery =
+        new RecoveryCoordinator(
+            stateManager,
+            sealedIndex,
+            envelopeReader,
+            hostEvidence,
+            null, // RestartGapClassifier is a static utility
+            gapEmitter,
+            metrics,
+            Clocks.systemNanoClock(),
+            currentBootId,
+            instanceId);
 
     RecoveryResult recoveryResult = recovery.runOnStartup();
     committer.seedDurableCheckpoints(recoveryResult.checkpoints());
 
     // ── SessionChangeDetector ─────────────────────────────────────────────────────────────────
-    SessionChangeDetector sessionDetector = new SessionChangeDetector(
-        gapEmitter, coverage, metrics, Clocks.systemNanoClock());
+    SessionChangeDetector sessionDetector =
+        new SessionChangeDetector(gapEmitter, coverage, metrics, Clocks.systemNanoClock());
 
     // ── DepthRecoveryGapFilter ────────────────────────────────────────────────────────────────
-    DepthRecoveryGapFilter depthFilter = new DepthRecoveryGapFilter(gapEmitter, Clocks.systemNanoClock());
+    DepthRecoveryGapFilter depthFilter =
+        new DepthRecoveryGapFilter(gapEmitter, Clocks.systemNanoClock());
 
     // ── RecordHandler ─────────────────────────────────────────────────────────────────────────
-    RecordHandler recordHandler = new RecordHandler(
-        codec, sessionDetector, depthFilter, coverage, failover, recovery,
-        buffers, gapEmitter, metrics, BACKUP_PREFIX);
+    RecordHandler recordHandler =
+        new RecordHandler(
+            codec,
+            sessionDetector,
+            depthFilter,
+            coverage,
+            failover,
+            recovery,
+            buffers,
+            gapEmitter,
+            metrics,
+            BACKUP_PREFIX);
 
     // ── KafkaConsumerLoop ─────────────────────────────────────────────────────────────────────
-    KafkaConsumerLoop consumerLoop = new KafkaConsumerLoop(
-        primaryConsumer, enabledTopics, recordHandler, failover, committer, recovery,
-        hourScheduler, buffers, coverage, gapEmitter, metrics);
+    KafkaConsumerLoop consumerLoop =
+        new KafkaConsumerLoop(
+            primaryConsumer,
+            enabledTopics,
+            recordHandler,
+            failover,
+            committer,
+            recovery,
+            hourScheduler,
+            buffers,
+            coverage,
+            gapEmitter,
+            metrics);
 
     // ── Health server ─────────────────────────────────────────────────────────────────────────
     WriterReadyCheck readyCheck = new WriterReadyCheck(consumerLoop, Path.of(baseDir));
@@ -265,43 +303,54 @@ public final class Main {
     CountDownLatch shutdownLatch = new CountDownLatch(1);
 
     // ── SIGTERM hook (T3 — platform thread per JVM requirement) ─────────────────────────────
-    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-      log.info("shutdown_hook_triggered");
-      consumerLoop.requestShutdown();
-      try {
-        shutdownLatch.await(java.util.concurrent.TimeUnit.SECONDS.toMillis(35),
-            java.util.concurrent.TimeUnit.MILLISECONDS);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-      try {
-        healthServer.stop();
-      } catch (Exception ignored) {
-        // best-effort shutdown; never block main shutdown path
-      }
-      try {
-        stateManager.markComponentCleanShutdown("writer", instanceId);
-        stateManager.close();
-      } catch (Exception ignored) {
-        // best-effort shutdown; never block main shutdown path
-      }
-    }));
+    Runtime.getRuntime()
+        .addShutdownHook(
+            new Thread(
+                () -> {
+                  log.info("shutdown_hook_triggered");
+                  consumerLoop.requestShutdown();
+                  try {
+                    shutdownLatch.await(
+                        java.util.concurrent.TimeUnit.SECONDS.toMillis(35),
+                        java.util.concurrent.TimeUnit.MILLISECONDS);
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                  }
+                  try {
+                    healthServer.stop();
+                  } catch (Exception ignored) {
+                    // best-effort shutdown; never block main shutdown path
+                  }
+                  try {
+                    stateManager.markComponentCleanShutdown("writer", instanceId);
+                    stateManager.close();
+                  } catch (Exception ignored) {
+                    // best-effort shutdown; never block main shutdown path
+                  }
+                }));
 
     // ── Start consume loop on virtual thread (Tier 5 A2; design §3.1 T1) ────────────────────
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      var future = executor.submit(() -> {
-        try {
-          consumerLoop.run();
-        } finally {
-          shutdownLatch.countDown();
-        }
-      });
+      var future =
+          executor.submit(
+              () -> {
+                try {
+                  consumerLoop.run();
+                } finally {
+                  shutdownLatch.countDown();
+                }
+              });
 
-      log.info("writer_started",
-          "instance_id", instanceId,
-          "boot_id", currentBootId,
-          "base_dir", baseDir,
-          "topics", enabledTopics.size());
+      log.info(
+          "writer_started",
+          "instance_id",
+          instanceId,
+          "boot_id",
+          currentBootId,
+          "base_dir",
+          baseDir,
+          "topics",
+          enabledTopics.size());
 
       // Block until the consume loop terminates
       try {
@@ -324,9 +373,10 @@ public final class Main {
 
     // Tier 1 §3: never subscribe to streams with enabled=false. BinanceExchangeConfig's
     // getEnabledStreams() already filters by the StreamsConfig boolean flags.
-    List<String> streams = binance.writerStreamsOverride() != null
-        ? binance.writerStreamsOverride()
-        : binance.getEnabledStreams();
+    List<String> streams =
+        binance.writerStreamsOverride() != null
+            ? binance.writerStreamsOverride()
+            : binance.getEnabledStreams();
 
     for (String sym : binance.symbols()) {
       for (String stream : streams) {
@@ -341,8 +391,7 @@ public final class Main {
 
   private static Properties buildConsumerProps(AppConfig config) {
     Properties p = new Properties();
-    p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
-        String.join(",", config.redpanda().brokers()));
+    p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, String.join(",", config.redpanda().brokers()));
     p.put(ConsumerConfig.GROUP_ID_CONFIG, "cryptolake-writer");
     p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false"); // manual commit (Tier 1 §4)
     p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
@@ -355,9 +404,9 @@ public final class Main {
    *
    * <p>Common's {@link com.cryptolake.common.config.DatabaseConfig} exposes only {@code url()}
    * (single-field parity with Python's {@code DatabaseConfig}). The URL itself carries user /
-   * password via query parameters per the PostgreSQL JDBC driver convention
-   * ({@code jdbc:postgresql://host/db?user=X&password=Y}), so HikariCP receives everything it
-   * needs without the writer parsing components out of the URL.
+   * password via query parameters per the PostgreSQL JDBC driver convention ({@code
+   * jdbc:postgresql://host/db?user=X&password=Y}), so HikariCP receives everything it needs without
+   * the writer parsing components out of the URL.
    */
   private static String buildJdbcUrl(AppConfig config) {
     return config.database().url();

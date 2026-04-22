@@ -20,12 +20,9 @@ class RestartGapClassifierTest {
   // ports: design §4.8 — boot ID change → host reboot (unplanned)
   @Test
   void classify_bootIdChanged_noIntent_hostReboot() {
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-A", "boot-B",
-        "sess-1", "sess-2",
-        false, false,
-        null, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-A", "boot-B", "sess-1", "sess-2", false, false, null, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("host");
     assertThat(c.cause()).isEqualTo("host_reboot");
@@ -38,15 +35,19 @@ class RestartGapClassifierTest {
   @Test
   void classify_bootIdChanged_withValidIntent_plannedHostShutdown() {
     // Create a maintenance intent that expires far in the future
-    MaintenanceIntent intent = new MaintenanceIntent("m-001", "host", "operator",
-        "rolling-restart", "2024-01-15T14:00:00Z", "2099-12-31T23:59:59Z", null);
+    MaintenanceIntent intent =
+        new MaintenanceIntent(
+            "m-001",
+            "host",
+            "operator",
+            "rolling-restart",
+            "2024-01-15T14:00:00Z",
+            "2099-12-31T23:59:59Z",
+            null);
 
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-A", "boot-B",
-        "sess-1", "sess-2",
-        false, false,
-        intent, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-A", "boot-B", "sess-1", "sess-2", false, false, intent, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("host");
     assertThat(c.cause()).isEqualTo("operator_shutdown");
@@ -57,12 +58,9 @@ class RestartGapClassifierTest {
   // ports: design §4.8 — same boot, collector clean exit → collector operator shutdown
   @Test
   void classify_sameBootId_collectorCleanExit_noIntent_collectorShutdown() {
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-same", "boot-same",
-        "sess-1", "sess-2",
-        true, false,
-        null, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-same", "boot-same", "sess-1", "sess-2", true, false, null, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("collector");
     assertThat(c.cause()).isEqualTo("operator_shutdown");
@@ -73,12 +71,9 @@ class RestartGapClassifierTest {
   // ports: design §4.8 — same boot, no clean exit, session changed → unclean collector exit
   @Test
   void classify_sameBootId_sessionChanged_noCleanExit_uncleanExit() {
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-same", "boot-same",
-        "sess-1", "sess-2",
-        false, false,
-        null, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-same", "boot-same", "sess-1", "sess-2", false, false, null, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("collector");
     assertThat(c.cause()).isEqualTo("unclean_exit");
@@ -88,15 +83,19 @@ class RestartGapClassifierTest {
   // ports: design §4.8 — writer clean exit, valid intent → planned writer shutdown
   @Test
   void classify_writerCleanExit_validIntent_plannedWriterShutdown() {
-    MaintenanceIntent intent = new MaintenanceIntent("m-002", "host", "operator",
-        "writer-restart", "2024-01-15T14:00:00Z", "2099-12-31T23:59:59Z", null);
+    MaintenanceIntent intent =
+        new MaintenanceIntent(
+            "m-002",
+            "host",
+            "operator",
+            "writer-restart",
+            "2024-01-15T14:00:00Z",
+            "2099-12-31T23:59:59Z",
+            null);
 
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-same", "boot-same",
-        "sess-1", "sess-1",
-        false, true,
-        intent, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-same", "boot-same", "sess-1", "sess-1", false, true, intent, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("writer");
     assertThat(c.cause()).isEqualTo("operator_shutdown");
@@ -106,12 +105,9 @@ class RestartGapClassifierTest {
   // ports: design §4.8 — no signals → unknown
   @Test
   void classify_noSignals_unknown() {
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-same", "boot-same",
-        "sess-1", "sess-1",
-        false, false,
-        null, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-same", "boot-same", "sess-1", "sess-1", false, false, null, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("unknown");
     assertThat(c.cause()).isEqualTo("unknown");
@@ -131,12 +127,17 @@ class RestartGapClassifierTest {
 
     HostLifecycleEvidence evidence = new HostLifecycleEvidence(java.util.List.of(dieEvent));
 
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-same", "boot-same",
-        "sess-1", "sess-1",
-        false, false,
-        null, evidence,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-same",
+            "boot-same",
+            "sess-1",
+            "sess-1",
+            false,
+            false,
+            null,
+            evidence,
+            FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("redpanda");
     assertThat(c.cause()).isEqualTo("unclean_exit");
@@ -154,12 +155,17 @@ class RestartGapClassifierTest {
 
     HostLifecycleEvidence evidence = new HostLifecycleEvidence(java.util.List.of(dieEvent));
 
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-same", "boot-same",
-        "sess-1", "sess-1",
-        true, false, // collector clean exit
-        null, evidence,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-same",
+            "boot-same",
+            "sess-1",
+            "sess-1",
+            true,
+            false, // collector clean exit
+            null,
+            evidence,
+            FIXED_CLOCK);
 
     // Clean die should not override the collector clean exit classification
     assertThat(c.component()).isNotEqualTo("writer").isEqualTo("collector");
@@ -169,15 +175,19 @@ class RestartGapClassifierTest {
   @Test
   void classify_expiredIntent_treatedAsNoIntent() {
     // Intent expired in the past (epoch 1 second is definitely before NOW_NS)
-    MaintenanceIntent expiredIntent = new MaintenanceIntent("m-003", "host", "operator",
-        "old-maint", "1970-01-01T00:00:00Z", "1970-01-01T00:00:01Z", null);
+    MaintenanceIntent expiredIntent =
+        new MaintenanceIntent(
+            "m-003",
+            "host",
+            "operator",
+            "old-maint",
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:01Z",
+            null);
 
-    RestartGapClassifier.Classification c = RestartGapClassifier.classify(
-        "boot-A", "boot-B",
-        "sess-1", "sess-2",
-        false, false,
-        expiredIntent, null,
-        FIXED_CLOCK);
+    RestartGapClassifier.Classification c =
+        RestartGapClassifier.classify(
+            "boot-A", "boot-B", "sess-1", "sess-2", false, false, expiredIntent, null, FIXED_CLOCK);
 
     assertThat(c.component()).isEqualTo("host");
     assertThat(c.cause()).isEqualTo("host_reboot");

@@ -19,8 +19,8 @@ public final class FilePaths {
   /**
    * Builds the canonical archive file path.
    *
-   * <p>Pattern: {@code {baseDir}/{exchange}/{symbol}/{stream}/{date}/hour-{hour}.jsonl.zst}
-   * or {@code hour-{hour}.late-{lateSeq}.jsonl.zst} when {@code lateSeq != null} (Tier 5 M15).
+   * <p>Pattern: {@code {baseDir}/{exchange}/{symbol}/{stream}/{date}/hour-{hour}.jsonl.zst} or
+   * {@code hour-{hour}.late-{lateSeq}.jsonl.zst} when {@code lateSeq != null} (Tier 5 M15).
    *
    * @param baseDir base archive directory
    * @param exchange exchange name (e.g. {@code "binance"})
@@ -49,15 +49,11 @@ public final class FilePaths {
   /**
    * Builds the backfill file path.
    *
-   * <p>Pattern: {@code {baseDir}/backfill/{exchange}/{symbol}/{stream}/{date}/hour-{hour}.jsonl.zst}
+   * <p>Pattern: {@code
+   * {baseDir}/backfill/{exchange}/{symbol}/{stream}/{date}/hour-{hour}.jsonl.zst}
    */
   public static Path buildBackfillFilePath(
-      String baseDir,
-      String exchange,
-      String symbol,
-      String stream,
-      String date,
-      int hour) {
+      String baseDir, String exchange, String symbol, String stream, String date, int hour) {
     String sym = symbol.toLowerCase(Locale.ROOT);
     String filename = "hour-" + hour + ".jsonl.zst";
     return Path.of(baseDir, "backfill", exchange, sym, stream, date, filename);

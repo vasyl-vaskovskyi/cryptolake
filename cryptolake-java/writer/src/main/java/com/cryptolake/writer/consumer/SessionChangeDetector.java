@@ -19,8 +19,8 @@ import org.slf4j.LoggerFactory;
  * <p>Ports Python's {@code WriterConsumer._check_session_change} (design §2.2; design §4.2).
  * Maintains a {@code Map<StreamKey, SessionMark>} with the last-seen session ID per stream.
  *
- * <p>Thread safety: consume-loop thread only (T1). State dict owned by this class; no locking
- * (Tier 5 A5).
+ * <p>Thread safety: consume-loop thread only (T1). State dict owned by this class; no locking (Tier
+ * 5 A5).
  */
 public final class SessionChangeDetector {
 
@@ -68,27 +68,38 @@ public final class SessionChangeDetector {
     }
 
     // Session change detected — emit gap
-    log.info("session_change_detected",
-        "exchange", env.exchange(),
-        "symbol", env.symbol(),
-        "stream", env.stream(),
-        "prev_session", prev.sessionId(),
-        "new_session", env.collectorSessionId(),
-        "source", source);
+    log.info(
+        "session_change_detected",
+        "exchange",
+        env.exchange(),
+        "symbol",
+        env.symbol(),
+        "stream",
+        env.stream(),
+        "prev_session",
+        prev.sessionId(),
+        "new_session",
+        env.collectorSessionId(),
+        "source",
+        source);
 
     metrics.sessionGapsDetected(env.exchange(), env.symbol(), env.stream()).increment();
 
-    GapEnvelope gap = GapEnvelope.create(
-        env.exchange(),
-        env.symbol(),
-        env.stream(),
-        env.collectorSessionId(),
-        -1L, // writer-injected sentinel (Tier 5 M10)
-        prev.receivedAtNs(),
-        env.receivedAt(),
-        "collector_restart",
-        "collector_session_id changed from " + prev.sessionId() + " to " + env.collectorSessionId(),
-        clock);
+    GapEnvelope gap =
+        GapEnvelope.create(
+            env.exchange(),
+            env.symbol(),
+            env.stream(),
+            env.collectorSessionId(),
+            -1L, // writer-injected sentinel (Tier 5 M10)
+            prev.receivedAtNs(),
+            env.receivedAt(),
+            "collector_restart",
+            "collector_session_id changed from "
+                + prev.sessionId()
+                + " to "
+                + env.collectorSessionId(),
+            clock);
 
     return Optional.of(gap);
   }

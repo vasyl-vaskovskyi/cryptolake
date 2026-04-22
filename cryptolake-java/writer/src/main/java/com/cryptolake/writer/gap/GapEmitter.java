@@ -18,8 +18,8 @@ import com.cryptolake.writer.metrics.WriterMetrics;
  * </ol>
  *
  * <p>Callers NEVER write a gap envelope directly to the buffer — only via this class. This is a
- * static-analysis-enforceable invariant: grep for {@code GapEnvelope.create} outside
- * {@link GapEmitter} → forbidden.
+ * static-analysis-enforceable invariant: grep for {@code GapEnvelope.create} outside {@link
+ * GapEmitter} → forbidden.
  *
  * <p>Ports Python's combination of {@code _emit_gap} + gap-triad logic from {@code consumer.py}
  * (design §2.8; mapping §5 Rule 5).
@@ -35,7 +35,10 @@ public final class GapEmitter {
   private final CoverageFilter coverage;
 
   public GapEmitter(
-      BufferManager buffers, WriterMetrics metrics, StructuredLogger ignoredLog, CoverageFilter coverage) {
+      BufferManager buffers,
+      WriterMetrics metrics,
+      StructuredLogger ignoredLog,
+      CoverageFilter coverage) {
     this.buffers = buffers;
     this.metrics = metrics;
     this.coverage = coverage;
@@ -57,17 +60,28 @@ public final class GapEmitter {
     metrics.gapRecordsWritten(gap.exchange(), gap.symbol(), gap.stream(), gap.reason()).increment();
 
     // (2) Log structured event (Tier 1 §5 action 2; Tier 5 H2)
-    log.info("gap_emitted",
-        "exchange", gap.exchange(),
-        "symbol", gap.symbol(),
-        "stream", gap.stream(),
-        "reason", gap.reason(),
-        "gap_start_ts", gap.gapStartTs(),
-        "gap_end_ts", gap.gapEndTs(),
-        "source", source,
-        "topic", topic,
-        "partition", partition,
-        "offset", offset);
+    log.info(
+        "gap_emitted",
+        "exchange",
+        gap.exchange(),
+        "symbol",
+        gap.symbol(),
+        "stream",
+        gap.stream(),
+        "reason",
+        gap.reason(),
+        "gap_start_ts",
+        gap.gapStartTs(),
+        "gap_end_ts",
+        gap.gapEndTs(),
+        "source",
+        source,
+        "topic",
+        topic,
+        "partition",
+        partition,
+        "offset",
+        offset);
 
     // (3) Route through coverage filter (Tier 1 §5 action 3)
     BrokerCoordinates coords = new BrokerCoordinates(topic, partition, offset);
@@ -96,12 +110,18 @@ public final class GapEmitter {
     metrics.gapRecordsWritten(gap.exchange(), gap.symbol(), gap.stream(), gap.reason()).increment();
 
     // (2) Log
-    log.info("gap_emitted_unfiltered",
-        "exchange", gap.exchange(),
-        "symbol", gap.symbol(),
-        "stream", gap.stream(),
-        "reason", gap.reason(),
-        "source", source);
+    log.info(
+        "gap_emitted_unfiltered",
+        "exchange",
+        gap.exchange(),
+        "symbol",
+        gap.symbol(),
+        "stream",
+        gap.stream(),
+        "reason",
+        gap.reason(),
+        "source",
+        source);
 
     // (3) Buffer directly (bypass coverage filter)
     BrokerCoordinates coords = new BrokerCoordinates(topic, partition, -1L); // synthetic offset

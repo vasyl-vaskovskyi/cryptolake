@@ -47,8 +47,9 @@ class FileRotatorTest {
 
     // Buffer one envelope so seal actually writes bytes
     long tsNs = 1705329600_000_000_000L; // 2024-01-15 14:00:00 UTC
-    DataEnvelope env = new DataEnvelope(1, "data", "binance", "btcusdt", "trades",
-        tsNs, tsNs, "col_sess", 1L, "{}", "abc");
+    DataEnvelope env =
+        new DataEnvelope(
+            1, "data", "binance", "btcusdt", "trades", tsNs, tsNs, "col_sess", 1L, "{}", "abc");
     buffers.add(env, new BrokerCoordinates("binance.trades", 0, 100L), "primary");
 
     FileRotator rotator = buildRotator(tmp, buffers);
@@ -76,8 +77,9 @@ class FileRotatorTest {
 
     // Buffer a new envelope that would land in hour 14
     long tsNs = 1705329600_000_000_000L;
-    DataEnvelope env = new DataEnvelope(1, "data", "binance", "btcusdt", "trades",
-        tsNs, tsNs, "col_sess", 1L, "{}", "abc");
+    DataEnvelope env =
+        new DataEnvelope(
+            1, "data", "binance", "btcusdt", "trades", tsNs, tsNs, "col_sess", 1L, "{}", "abc");
     buffers.add(env, new BrokerCoordinates("binance.trades", 0, 100L), "primary");
 
     FileRotator rotator = buildRotator(tmp, buffers);
@@ -85,7 +87,8 @@ class FileRotatorTest {
     SealResult result = rotator.seal(target);
 
     // Late path: hour-14.late-1.jsonl.zst
-    assertThat(result.dataPath().getFileName().toString()).matches("hour-14\\.late-\\d+\\.jsonl\\.zst");
+    assertThat(result.dataPath().getFileName().toString())
+        .matches("hour-14\\.late-\\d+\\.jsonl\\.zst");
     assertThat(result.dataPath()).exists();
   }
 
@@ -96,15 +99,21 @@ class FileRotatorTest {
     BufferManager buffers = new BufferManager(tmp.toString(), 100, 60, codec);
 
     long tsNs = 1705329600_000_000_000L;
-    DataEnvelope env = new DataEnvelope(1, "data", "binance", "btcusdt", "trades",
-        tsNs, tsNs, "col_sess", 1L, "{}", "abc");
+    DataEnvelope env =
+        new DataEnvelope(
+            1, "data", "binance", "btcusdt", "trades", tsNs, tsNs, "col_sess", 1L, "{}", "abc");
     buffers.add(env, new BrokerCoordinates("binance.trades", 0, 100L), "primary");
 
     PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
     WriterMetrics metrics = new WriterMetrics(registry);
-    FileRotator rotator = new FileRotator(
-        new DurableAppender(), new ZstdFrameCompressor(3),
-        new LateArrivalSequencer(), buffers, metrics, tmp.toString());
+    FileRotator rotator =
+        new FileRotator(
+            new DurableAppender(),
+            new ZstdFrameCompressor(3),
+            new LateArrivalSequencer(),
+            buffers,
+            metrics,
+            tmp.toString());
 
     rotator.seal(new FileTarget("binance", "btcusdt", "trades", "2024-01-15", 14));
 

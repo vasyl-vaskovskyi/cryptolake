@@ -18,9 +18,9 @@ import org.slf4j.LoggerFactory;
  * <p>When depth recovery is pending, incoming depth diff envelopes are inspected for a matching
  * {@code u} update ID. When found, the pending gap is closed and emitted.
  *
- * <p><b>In-memory state loss on crash is acceptable</b> (design §11 Q2 preferred): the next
- * restart re-emits a {@code recovery_depth_anchor} gap from {@link RecoveryCoordinator} if depth
- * state is missing. Do not persist this state to PG without escalation.
+ * <p><b>In-memory state loss on crash is acceptable</b> (design §11 Q2 preferred): the next restart
+ * re-emits a {@code recovery_depth_anchor} gap from {@link RecoveryCoordinator} if depth state is
+ * missing. Do not persist this state to PG without escalation.
  *
  * <p>Thread safety: consume-loop thread only (T1). No synchronization (Tier 5 A5).
  */
@@ -32,8 +32,8 @@ public final class DepthRecoveryGapFilter {
   private final ClockSupplier clock;
 
   /**
-   * Per-{@code (exchange,symbol)} pending depth state.
-   * In-memory only — re-emitted on restart (design §11 Q2).
+   * Per-{@code (exchange,symbol)} pending depth state. In-memory only — re-emitted on restart
+   * (design §11 Q2).
    */
   private final Map<ExSym, DepthPendingState> pending = new HashMap<>();
 
@@ -43,8 +43,8 @@ public final class DepthRecoveryGapFilter {
   }
 
   /**
-   * Called for every depth diff envelope. If depth recovery is pending for this
-   * {@code (exchange, symbol)}, checks whether this diff closes the recovery window.
+   * Called for every depth diff envelope. If depth recovery is pending for this {@code (exchange,
+   * symbol)}, checks whether this diff closes the recovery window.
    *
    * <p>Ports {@code WriterConsumer._maybe_close_depth_recovery_gap}.
    *
@@ -67,23 +67,29 @@ public final class DepthRecoveryGapFilter {
     // (matching Python's logic where first diff after snapshot = anchor close)
     pending.remove(key);
 
-    log.info("depth_recovery_gap_closed",
-        "exchange", env.exchange(),
-        "symbol", env.symbol(),
-        "candidate_lid", state.candidateLid(),
-        "envelope_ts", env.exchangeTs());
-
-    GapEnvelope gap = GapEnvelope.create(
+    log.info(
+        "depth_recovery_gap_closed",
+        "exchange",
         env.exchange(),
+        "symbol",
         env.symbol(),
-        "depth",
-        env.collectorSessionId(),
-        -1L, // writer-injected (Tier 5 M10)
-        state.firstDiffTs(),
-        env.receivedAt(),
-        "recovery_depth_anchor",
-        "depth recovery window closed at u=" + state.candidateLid(),
-        clock);
+        "candidate_lid",
+        state.candidateLid(),
+        "envelope_ts",
+        env.exchangeTs());
+
+    GapEnvelope gap =
+        GapEnvelope.create(
+            env.exchange(),
+            env.symbol(),
+            "depth",
+            env.collectorSessionId(),
+            -1L, // writer-injected (Tier 5 M10)
+            state.firstDiffTs(),
+            env.receivedAt(),
+            "recovery_depth_anchor",
+            "depth recovery window closed at u=" + state.candidateLid(),
+            clock);
 
     return Optional.of(gap);
   }
@@ -101,11 +107,16 @@ public final class DepthRecoveryGapFilter {
    */
   public void registerPending(
       String exchange, String symbol, long firstDiffTs, long candidateLid, long candidateTs) {
-    pending.put(new ExSym(exchange, symbol), new DepthPendingState(firstDiffTs, candidateLid, candidateTs));
-    log.info("depth_recovery_pending_registered",
-        "exchange", exchange,
-        "symbol", symbol,
-        "candidate_lid", candidateLid);
+    pending.put(
+        new ExSym(exchange, symbol), new DepthPendingState(firstDiffTs, candidateLid, candidateTs));
+    log.info(
+        "depth_recovery_pending_registered",
+        "exchange",
+        exchange,
+        "symbol",
+        symbol,
+        "candidate_lid",
+        candidateLid);
   }
 
   /** Returns {@code true} if there is a pending depth recovery state for the given key. */

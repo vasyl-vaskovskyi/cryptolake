@@ -3,8 +3,8 @@ package com.cryptolake.writer.buffer;
 /**
  * Routing key for archive files: {@code (exchange, symbol, stream, date, hour)}.
  *
- * <p>Ports Python's {@code FileTarget} dataclass (design §6.2; Tier 5 M14). Record
- * auto-implements {@code equals/hashCode} on components, matching Python tuple identity.
+ * <p>Ports Python's {@code FileTarget} dataclass (design §6.2; Tier 5 M14). Record auto-implements
+ * {@code equals/hashCode} on components, matching Python tuple identity.
  *
  * <p>{@code date} stays a {@code String} — do NOT "improve" to {@code LocalDate} (Tier 5 M14
  * watch-out). {@code hour} is an {@code int} in range {@code [0, 23]}.

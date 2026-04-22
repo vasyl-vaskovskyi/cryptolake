@@ -1,5 +1,7 @@
 package com.cryptolake.writer.consumer;
 
+import com.cryptolake.common.util.ClockSupplier;
+import com.cryptolake.writer.StreamKey;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.buffer.CheckpointMeta;
 import com.cryptolake.writer.buffer.FlushResult;
@@ -11,8 +13,6 @@ import com.cryptolake.writer.state.CryptoLakeStateException;
 import com.cryptolake.writer.state.FileStateRecord;
 import com.cryptolake.writer.state.StateManager;
 import com.cryptolake.writer.state.StreamCheckpoint;
-import com.cryptolake.writer.StreamKey;
-import com.cryptolake.common.util.ClockSupplier;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
@@ -20,10 +20,10 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,16 +34,17 @@ import org.slf4j.LoggerFactory;
  * writer may call any commit API (commitSync, commitAsync). Unit test {@code
  * OffsetCommitCoordinatorOrderingTest} asserts the exact ordering via spies.
  *
- * <p>Linear ordering enforced in {@link #flushAndCommit(BufferManager)} (ports Python's
- * {@code WriterConsumer._commit_state} + {@code _write_and_save}):
+ * <p>Linear ordering enforced in {@link #flushAndCommit(BufferManager)} (ports Python's {@code
+ * WriterConsumer._commit_state} + {@code _write_and_save}):
+ *
  * <ol>
  *   <li>{@code buffers.flushAll()} → {@code List<FlushResult>} (in-memory extraction)
  *   <li>For each result: {@code compressor.compressFrame(lines)} → {@code
- *       appender.appendAndFsync(path, bytes)} (includes {@link java.nio.channels.FileChannel#force(boolean)
- *       force(true)}) — Tier 5 I3
+ *       appender.appendAndFsync(path, bytes)} (includes {@link
+ *       java.nio.channels.FileChannel#force(boolean) force(true)}) — Tier 5 I3
  *   <li>Build {@code FileStateRecord} list + {@code StreamCheckpoint} list
- *   <li>{@code stateManager.saveStatesAndCheckpoints(...)} — ONE PG transaction, retry 3×; on
- *       final failure: increment metric + throw (NO Kafka commit)
+ *   <li>{@code stateManager.saveStatesAndCheckpoints(...)} — ONE PG transaction, retry 3×; on final
+ *       failure: increment metric + throw (NO Kafka commit)
  *   <li>Only on PG success: {@code consumer.commitSync(offsets)} — explicit offsets, uses {@code
  *       commitSync} not {@code commitAsync} (Tier 5 C8; architect mandate)
  *   <li>Update in-memory {@code _durable_checkpoints} cache
@@ -65,8 +66,8 @@ public final class OffsetCommitCoordinator {
   private final ClockSupplier clock;
 
   /**
-   * Mutable cache of durable checkpoints — updated after every successful PG+Kafka commit.
-   * Owned by T1; shared (read-only) with RecoveryCoordinator via the method view.
+   * Mutable cache of durable checkpoints — updated after every successful PG+Kafka commit. Owned by
+   * T1; shared (read-only) with RecoveryCoordinator via the method view.
    */
   private final Map<StreamKey, StreamCheckpoint> durableCheckpoints = new HashMap<>();
 
@@ -92,9 +93,9 @@ public final class OffsetCommitCoordinator {
   /**
    * Flushes all buffers, writes each result to disk (fsync), saves PG state, then commitSync.
    *
-   * <p>Returns total records flushed. Throws on PG failure BEFORE any commit (Tier 5 C8
-   * watch-out). On IOException, wraps and rethrows; caller increments write_errors metric and
-   * emits write_error gap.
+   * <p>Returns total records flushed. Throws on PG failure BEFORE any commit (Tier 5 C8 watch-out).
+   * On IOException, wraps and rethrows; caller increments write_errors metric and emits write_error
+   * gap.
    *
    * <p>THIS IS THE ONLY PLACE WHERE {@code consumer.commitSync} IS CALLED (Tier 1 §4).
    *
@@ -125,7 +126,9 @@ public final class OffsetCommitCoordinator {
         appender.appendAndFsync(r.filePath(), compressed); // force(true) inside (Tier 5 I3)
       } catch (IOException e) {
         // Increment write_errors metric here; caller may emit write_error gap
-        metrics.writeErrors(r.target().exchange(), r.target().symbol(), r.target().stream()).increment();
+        metrics
+            .writeErrors(r.target().exchange(), r.target().symbol(), r.target().stream())
+            .increment();
         throw new UncheckedIOException("File write failed for " + r.filePath(), e);
       }
 
@@ -138,36 +141,46 @@ public final class OffsetCommitCoordinator {
 
       // Step 3: Build state records
       if (r.highWaterOffset() >= 0) { // only real (non-synthetic) records have offsets
-        TopicPartition tp = new TopicPartition(
-            r.target().exchange() + "." + r.target().stream(), r.partition());
+        TopicPartition tp =
+            new TopicPartition(r.target().exchange() + "." + r.target().stream(), r.partition());
         // Use the topic name from the file path context; in practice the target encodes it
         // via exchange.stream naming convention (matching TopicNames pattern)
-        states.add(new FileStateRecord(
-            tp.topic(), tp.partition(), r.highWaterOffset(), r.filePath().toString(), fileSizeAfter));
+        states.add(
+            new FileStateRecord(
+                tp.topic(),
+                tp.partition(),
+                r.highWaterOffset(),
+                r.filePath().toString(),
+                fileSizeAfter));
         offsets.put(tp, new OffsetAndMetadata(r.highWaterOffset() + 1));
       }
 
       // Build stream checkpoint
       CheckpointMeta cp = r.checkpointMeta();
       if (cp != null) {
-        checkpoints.add(new StreamCheckpoint(
-            cp.streamKey().exchange(),
-            cp.streamKey().symbol(),
-            cp.streamKey().stream(),
-            java.time.Instant.ofEpochSecond(
-                cp.lastReceivedAt() / 1_000_000_000L,
-                cp.lastReceivedAt() % 1_000_000_000L).toString(), // ISO-8601 (Tier 5 F1)
-            cp.lastCollectorSessionId(),
-            null)); // lastGapReason updated when gap is emitted
+        checkpoints.add(
+            new StreamCheckpoint(
+                cp.streamKey().exchange(),
+                cp.streamKey().symbol(),
+                cp.streamKey().stream(),
+                java.time.Instant.ofEpochSecond(
+                        cp.lastReceivedAt() / 1_000_000_000L, cp.lastReceivedAt() % 1_000_000_000L)
+                    .toString(), // ISO-8601 (Tier 5 F1)
+                cp.lastCollectorSessionId(),
+                null)); // lastGapReason updated when gap is emitted
       }
 
       // Update metrics
-      metrics.bytesWritten(r.target().exchange(), r.target().symbol(), r.target().stream())
+      metrics
+          .bytesWritten(r.target().exchange(), r.target().symbol(), r.target().stream())
           .increment(compressed.length);
       if (compressed.length > 0) {
         int uncompressed = r.lines().stream().mapToInt(b -> b.length).sum();
         if (uncompressed > 0) {
-          metrics.setCompressionRatio(r.target().exchange(), r.target().symbol(), r.target().stream(),
+          metrics.setCompressionRatio(
+              r.target().exchange(),
+              r.target().symbol(),
+              r.target().stream(),
               (double) uncompressed / compressed.length);
         }
       }
@@ -205,14 +218,20 @@ public final class OffsetCommitCoordinator {
     // Record flush duration histogram per stream (first result only for simplicity)
     if (!results.isEmpty()) {
       FlushResult first = results.get(0);
-      metrics.flushDurationMs(first.target().exchange(), first.target().symbol(), first.target().stream())
+      metrics
+          .flushDurationMs(
+              first.target().exchange(), first.target().symbol(), first.target().stream())
           .record(flushMs);
     }
 
-    log.info("flush_and_commit_complete",
-        "records", totalCount,
-        "flush_ms", flushMs,
-        "partitions", offsets.size());
+    log.info(
+        "flush_and_commit_complete",
+        "records",
+        totalCount,
+        "flush_ms",
+        flushMs,
+        "partitions",
+        offsets.size());
 
     return totalCount;
   }
@@ -237,26 +256,38 @@ public final class OffsetCommitCoordinator {
       long fileByteSize = 0;
       for (java.nio.file.Path sp : sealedFiles) {
         if (sp.toString().contains(r.target().stream())) {
-          try { fileByteSize = java.nio.file.Files.size(sp); } catch (IOException e) { /* skip */ }
+          try {
+            fileByteSize = java.nio.file.Files.size(sp);
+          } catch (IOException e) {
+            /* skip */
+          }
           break;
         }
       }
 
-      TopicPartition tp = new TopicPartition(
-          r.target().exchange() + "." + r.target().stream(), r.partition());
-      states.add(new FileStateRecord(
-          tp.topic(), tp.partition(), r.highWaterOffset(),
-          r.filePath().toString(), fileByteSize));
+      TopicPartition tp =
+          new TopicPartition(r.target().exchange() + "." + r.target().stream(), r.partition());
+      states.add(
+          new FileStateRecord(
+              tp.topic(),
+              tp.partition(),
+              r.highWaterOffset(),
+              r.filePath().toString(),
+              fileByteSize));
       offsets.put(tp, new OffsetAndMetadata(r.highWaterOffset() + 1));
 
       CheckpointMeta cp = r.checkpointMeta();
       if (cp != null) {
-        checkpoints.add(new StreamCheckpoint(
-            cp.streamKey().exchange(), cp.streamKey().symbol(), cp.streamKey().stream(),
-            java.time.Instant.ofEpochSecond(
-                cp.lastReceivedAt() / 1_000_000_000L,
-                cp.lastReceivedAt() % 1_000_000_000L).toString(),
-            cp.lastCollectorSessionId(), null));
+        checkpoints.add(
+            new StreamCheckpoint(
+                cp.streamKey().exchange(),
+                cp.streamKey().symbol(),
+                cp.streamKey().stream(),
+                java.time.Instant.ofEpochSecond(
+                        cp.lastReceivedAt() / 1_000_000_000L, cp.lastReceivedAt() % 1_000_000_000L)
+                    .toString(),
+                cp.lastCollectorSessionId(),
+                null));
       }
     }
 

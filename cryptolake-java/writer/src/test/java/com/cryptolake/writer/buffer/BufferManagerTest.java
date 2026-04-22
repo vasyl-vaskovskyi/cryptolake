@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptolake.common.envelope.BrokerCoordinates;
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
-import com.cryptolake.common.util.Clocks;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,15 +30,25 @@ class BufferManagerTest {
 
   private DataEnvelope makeEnvelope(String exchange, String symbol, String stream, long tsNs) {
     return new DataEnvelope(
-        1, "data", exchange, symbol, stream, tsNs, tsNs, "collector_2024-01-15T14:00:00Z", 1L,
-        "{}", "abc123");
+        1,
+        "data",
+        exchange,
+        symbol,
+        stream,
+        tsNs,
+        tsNs,
+        "collector_2024-01-15T14:00:00Z",
+        1L,
+        "{}",
+        "abc123");
   }
 
   // ports: Tier 5 M1 — symbol lowercased in route()
   @Test
   void route_uppercaseSymbol_lowercasedInTarget() {
-    DataEnvelope env = makeEnvelope("binance", "BTCUSDT", "trades",
-        1705329600_000_000_000L); // 2024-01-15 14:00:00 UTC
+    DataEnvelope env =
+        makeEnvelope(
+            "binance", "BTCUSDT", "trades", 1705329600_000_000_000L); // 2024-01-15 14:00:00 UTC
     FileTarget target = manager.route(env);
 
     assertThat(target.symbol()).isEqualTo("btcusdt");
@@ -119,10 +128,14 @@ class BufferManagerTest {
   void flushAll_returnsResultsForAllBuffers() {
     long tsNs = 1705329600_000_000_000L;
 
-    manager.add(makeEnvelope("binance", "btcusdt", "trades", tsNs),
-        new BrokerCoordinates("binance.trades", 0, 1L), "primary");
-    manager.add(makeEnvelope("binance", "ethusdt", "trades", tsNs),
-        new BrokerCoordinates("binance.trades", 1, 1L), "primary");
+    manager.add(
+        makeEnvelope("binance", "btcusdt", "trades", tsNs),
+        new BrokerCoordinates("binance.trades", 0, 1L),
+        "primary");
+    manager.add(
+        makeEnvelope("binance", "ethusdt", "trades", tsNs),
+        new BrokerCoordinates("binance.trades", 1, 1L),
+        "primary");
 
     List<FlushResult> results = manager.flushAll();
 
@@ -134,10 +147,14 @@ class BufferManagerTest {
   void flushKey_flushesOnlyMatchingStream() {
     long tsNs = 1705329600_000_000_000L;
 
-    manager.add(makeEnvelope("binance", "btcusdt", "trades", tsNs),
-        new BrokerCoordinates("binance.trades", 0, 1L), "primary");
-    manager.add(makeEnvelope("binance", "btcusdt", "depth", tsNs),
-        new BrokerCoordinates("binance.depth", 0, 1L), "primary");
+    manager.add(
+        makeEnvelope("binance", "btcusdt", "trades", tsNs),
+        new BrokerCoordinates("binance.trades", 0, 1L),
+        "primary");
+    manager.add(
+        makeEnvelope("binance", "btcusdt", "depth", tsNs),
+        new BrokerCoordinates("binance.depth", 0, 1L),
+        "primary");
 
     List<FlushResult> results =
         manager.flushKey(new com.cryptolake.writer.StreamKey("binance", "btcusdt", "trades"));
@@ -150,8 +167,10 @@ class BufferManagerTest {
   @Test
   void add_lineBytes_endsWithNewline() {
     long tsNs = 1705329600_000_000_000L;
-    manager.add(makeEnvelope("binance", "btcusdt", "trades", tsNs),
-        new BrokerCoordinates("binance.trades", 0, 1L), "primary");
+    manager.add(
+        makeEnvelope("binance", "btcusdt", "trades", tsNs),
+        new BrokerCoordinates("binance.trades", 0, 1L),
+        "primary");
 
     List<FlushResult> results = manager.flushAll();
     byte[] line = results.get(0).lines().get(0);

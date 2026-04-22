@@ -12,10 +12,10 @@ import org.junit.jupiter.api.Test;
  * with a docstring linking back to its Python origin.
  *
  * <p>The real implementation will drive Testcontainers Kafka + PostgreSQL with targeted failure
- * injection (kill -9 via docker-java, network partitions via {@code tc netem}, volume fills).
- * For now every scenario is {@code @Disabled} because the Testcontainers stack + the parity
- * fixtures under {@code docs/superpowers/port/writer/fixtures/} are blocked by the
- * {@code /port-init --skip-fixtures} decision that scoped this module.
+ * injection (kill -9 via docker-java, network partitions via {@code tc netem}, volume fills). For
+ * now every scenario is {@code @Disabled} because the Testcontainers stack + the parity fixtures
+ * under {@code docs/superpowers/port/writer/fixtures/} are blocked by the {@code /port-init
+ * --skip-fixtures} decision that scoped this module.
  *
  * <p>Activation: opt in via {@code ./gradlew :writer:chaosTest} once the suite is wired. The
  * default {@code test} task excludes {@code chaos}-tagged methods (design §8.3).

@@ -5,7 +5,6 @@ import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.common.logging.StructuredLogger;
-import com.cryptolake.writer.StreamKey;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.failover.FailoverController;
@@ -19,8 +18,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
  * Per-record logic: deserialize, session-change detection, depth-anchor check, coverage filter,
  * buffer add, failover tracking.
  *
- * <p>Ports Python's {@code WriterConsumer._handle_gap_detection},
- * {@code _handle_rotation_and_buffer}, {@code _deserialize_and_stamp} (design §2.2; design §4.2).
+ * <p>Ports Python's {@code WriterConsumer._handle_gap_detection}, {@code
+ * _handle_rotation_and_buffer}, {@code _deserialize_and_stamp} (design §2.2; design §4.2).
  *
  * <p>Returns one of: {accepted, gap-emitted, skipped}.
  *
@@ -68,8 +67,8 @@ public final class RecordHandler {
   /**
    * Processes a single Kafka record: deserialize, detect gaps, route to buffer.
    *
-   * <p>On deserialization failure: emits a {@code deserialization_error} gap and returns (Tier 5
-   * G4 — never rethrows; a single malformed record must not kill the consumer loop).
+   * <p>On deserialization failure: emits a {@code deserialization_error} gap and returns (Tier 5 G4
+   * — never rethrows; a single malformed record must not kill the consumer loop).
    *
    * @param rec the Kafka consumer record
    * @param fromBackup {@code true} if this record came from the backup topic
@@ -81,20 +80,25 @@ public final class RecordHandler {
     String source = fromBackup ? "backup" : "primary";
 
     // Determine the primary topic name (strip backup prefix if needed — Tier 5 C7)
-    String primaryTopic = topic.startsWith(backupPrefix)
-        ? topic.substring(backupPrefix.length())
-        : topic;
+    String primaryTopic =
+        topic.startsWith(backupPrefix) ? topic.substring(backupPrefix.length()) : topic;
 
     // Deserialize (Tier 5 G4: catch + deserialization_error gap on failure)
     DataEnvelope env;
     try {
       env = codec.readData(rec.value());
     } catch (Exception e) {
-      log.error("corrupt_message_skipped", e,
-          "topic", topic,
-          "partition", partition,
-          "offset", offset,
-          "error", e.getMessage());
+      log.error(
+          "corrupt_message_skipped",
+          e,
+          "topic",
+          topic,
+          "partition",
+          partition,
+          "offset",
+          offset,
+          "error",
+          e.getMessage());
       // Emit deserialization_error gap with synthetic coords (Tier 5 G4)
       // Use a placeholder gap — we don't know the stream, so use topic as proxy
       // In practice this should be rare; just log and move on
@@ -121,11 +125,12 @@ public final class RecordHandler {
     // MDC context for structured logging (Tier 5 H3).
     // StructuredLogger.mdc returns AutoCloseable (close throws Exception); we manage cleanup
     // explicitly in a finally block to avoid propagating a checked Exception up the handle() API.
-    AutoCloseable ctx = StructuredLogger.mdc(
-        "exchange", env.exchange(),
-        "symbol", env.symbol(),
-        "stream", env.stream(),
-        "session_id", env.collectorSessionId());
+    AutoCloseable ctx =
+        StructuredLogger.mdc(
+            "exchange", env.exchange(),
+            "symbol", env.symbol(),
+            "stream", env.stream(),
+            "session_id", env.collectorSessionId());
     try {
       // Check recovery gap (first envelope for this stream post-restart)
       GapEnvelope recoveryGap = recovery.checkOnFirstEnvelope(env);

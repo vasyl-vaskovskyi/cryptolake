@@ -3,8 +3,8 @@ package com.cryptolake.writer.state;
 /**
  * PG-persisted runtime state for a component instance (collector, writer, etc.).
  *
- * <p>Ports Python's {@code ComponentRuntimeState} (design §6.7). PG table
- * {@code component_runtime_state}, PK {@code (component, instance_id)}.
+ * <p>Ports Python's {@code ComponentRuntimeState} (design §6.7). PG table {@code
+ * component_runtime_state}, PK {@code (component, instance_id)}.
  *
  * <p>All timestamp fields are ISO-8601 strings for identity with Python's {@code
  * datetime.isoformat()} (Tier 5 F1). {@code cleanShutdownAt} and {@code maintenanceId} are

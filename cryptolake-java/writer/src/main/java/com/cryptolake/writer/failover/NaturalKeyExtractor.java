@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
  * E1, M3).
  *
  * <p>Key extraction:
+ *
  * <ul>
  *   <li>Trades → {@code raw.get("a").asLong()} (aggregate trade ID — Tier 5 E1)
  *   <li>Depth → {@code raw.get("u").asLong()} (last update ID)

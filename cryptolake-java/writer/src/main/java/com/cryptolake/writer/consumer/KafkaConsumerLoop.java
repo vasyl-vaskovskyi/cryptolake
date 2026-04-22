@@ -27,8 +27,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Ports Python's {@code WriterConsumer.consume_loop()} (design §2.2; design §4.2).
  *
- * <p>Thread safety: SINGLE virtual thread owns this class (T1 — design §3.1). The only shared
- * state visible to other threads is:
+ * <p>Thread safety: SINGLE virtual thread owns this class (T1 — design §3.1). The only shared state
+ * visible to other threads is:
+ *
  * <ul>
  *   <li>{@code stopRequested} — {@code volatile boolean} set by SIGTERM hook (T3)
  *   <li>{@code assignedPartitions} — swapped atomically (volatile reference) for Ready check (T2)
@@ -57,7 +58,8 @@ public final class KafkaConsumerLoop implements Runnable {
 
   /**
    * Volatile set of currently assigned partitions. Written by T1 (listener), read by T2 (health).
-   * Uses an unmodifiable copy swap pattern — no race (single writer; T2 reads reference atomically).
+   * Uses an unmodifiable copy swap pattern — no race (single writer; T2 reads reference
+   * atomically).
    */
   private volatile Set<TopicPartition> assignedPartitions = Set.of();
 
@@ -155,17 +157,15 @@ public final class KafkaConsumerLoop implements Runnable {
     shutdownSequence();
   }
 
-  /**
-   * Signals the consume loop to stop. Called from the SIGTERM handler (T3 — volatile write).
-   */
+  /** Signals the consume loop to stop. Called from the SIGTERM handler (T3 — volatile write). */
   public void requestShutdown() {
     this.stopRequested = true;
     log.info("consume_loop_shutdown_requested");
   }
 
   /**
-   * Returns {@code true} if at least one partition is currently assigned (used by
-   * {@link com.cryptolake.writer.health.WriterReadyCheck}).
+   * Returns {@code true} if at least one partition is currently assigned (used by {@link
+   * com.cryptolake.writer.health.WriterReadyCheck}).
    */
   public boolean isConnected() {
     return !assignedPartitions.isEmpty();

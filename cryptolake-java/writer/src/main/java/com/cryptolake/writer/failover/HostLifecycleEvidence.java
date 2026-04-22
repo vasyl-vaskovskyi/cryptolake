@@ -11,19 +11,22 @@ import java.util.Optional;
 /**
  * Indexed accessors over host lifecycle events loaded from the JSONL ledger.
  *
- * <p>Ports Python's {@code HostLifecycleEvidence} class (design §2.7). Immutable after
- * construction (internal maps made unmodifiable).
+ * <p>Ports Python's {@code HostLifecycleEvidence} class (design §2.7). Immutable after construction
+ * (internal maps made unmodifiable).
  *
- * <p>Events are indexed by component and event type for O(1) lookup. Thread safety: immutable
- * after construction.
+ * <p>Events are indexed by component and event type for O(1) lookup. Thread safety: immutable after
+ * construction.
  */
 public final class HostLifecycleEvidence {
 
   private final List<JsonNode> events;
+
   /** Map from component name to the die events for that component. */
   private final Map<String, List<JsonNode>> dieEvents;
+
   /** Map from component name to stop events. */
   private final Map<String, Boolean> hasStop;
+
   /** Whether there is at least one maintenance_intent event. */
   private final boolean hasMaintenanceIntentEvent;
 
@@ -63,7 +66,10 @@ public final class HostLifecycleEvidence {
     this.hasMaintenanceIntentEvent = hasIntent;
   }
 
-  /** Returns {@code true} if there is at least one {@code component_die} event for the given component. */
+  /**
+   * Returns {@code true} if there is at least one {@code component_die} event for the given
+   * component.
+   */
   public boolean hasComponentDie(String component) {
     return dieEvents.containsKey(component) && !dieEvents.get(component).isEmpty();
   }
@@ -72,8 +78,9 @@ public final class HostLifecycleEvidence {
    * Returns the clean-exit flag for the most recent {@code component_die} event for the given
    * component, or {@code Optional.empty()} if no die event exists.
    *
-   * <p>Ports Python's {@code HostLifecycleEvidence.component_clean_exit()} → {@code Optional<Boolean>}.
-   * The Java translation maps Python's {@code bool | None} to {@code Optional<Boolean>}.
+   * <p>Ports Python's {@code HostLifecycleEvidence.component_clean_exit()} → {@code
+   * Optional<Boolean>}. The Java translation maps Python's {@code bool | None} to {@code
+   * Optional<Boolean>}.
    */
   public Optional<Boolean> componentCleanExit(String component) {
     List<JsonNode> dies = dieEvents.get(component);

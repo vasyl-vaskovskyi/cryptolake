@@ -21,7 +21,8 @@ import java.util.List;
 public final class RestartGapClassifier {
 
   private static final String CLASSIFIER_VERSION = "writer_recovery_v1";
-  private static final List<String> PROMOTABLE_COMPONENTS = List.of("redpanda", "postgres", "writer");
+  private static final List<String> PROMOTABLE_COMPONENTS =
+      List.of("redpanda", "postgres", "writer");
 
   private RestartGapClassifier() {}
 
@@ -31,12 +32,12 @@ public final class RestartGapClassifier {
    * <p>Serialized into {@code GapEnvelope} optional restart-metadata fields (design §6.9).
    */
   public record Classification(
-      String component,         // host | system | collector | writer | redpanda | postgres
-      String cause,             // operator_shutdown | host_reboot | unclean_exit | unknown
+      String component, // host | system | collector | writer | redpanda | postgres
+      String cause, // operator_shutdown | host_reboot | unclean_exit | unknown
       boolean planned,
-      String classifier,        // "writer_recovery_v1"
-      List<String> evidence,    // ordered list of string evidence tokens
-      String maintenanceId) {}  // nullable
+      String classifier, // "writer_recovery_v1"
+      List<String> evidence, // ordered list of string evidence tokens
+      String maintenanceId) {} // nullable
 
   /**
    * Classifies a writer restart gap.
@@ -162,7 +163,8 @@ public final class RestartGapClassifier {
       }
     }
 
-    return new Classification(component, cause, planned, CLASSIFIER_VERSION, List.copyOf(evidence), maintenanceId);
+    return new Classification(
+        component, cause, planned, CLASSIFIER_VERSION, List.copyOf(evidence), maintenanceId);
   }
 
   /**
@@ -176,8 +178,8 @@ public final class RestartGapClassifier {
     if (intent.expiresAt() == null) return true; // no expiry = always valid
     Instant expiresAt = HostLifecycleReader.parseIsoOrNull(intent.expiresAt());
     if (expiresAt == null) return false;
-    Instant now = Instant.ofEpochSecond(
-        clock.nowNs() / 1_000_000_000L, clock.nowNs() % 1_000_000_000L);
+    Instant now =
+        Instant.ofEpochSecond(clock.nowNs() / 1_000_000_000L, clock.nowNs() % 1_000_000_000L);
     return now.isBefore(expiresAt);
   }
 }

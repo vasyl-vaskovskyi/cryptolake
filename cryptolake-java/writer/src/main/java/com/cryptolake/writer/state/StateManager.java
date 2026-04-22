@@ -1,7 +1,7 @@
 package com.cryptolake.writer.state;
 
-import com.cryptolake.writer.StreamKey;
 import com.cryptolake.common.util.ClockSupplier;
+import com.cryptolake.writer.StreamKey;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -26,12 +26,11 @@ import org.slf4j.LoggerFactory;
  * <p>Ports Python's {@code state_manager.py:StateManager}. Uses JDBC + HikariCP (blocking on
  * virtual thread — fine per design §3.2 and Tier 5 A2). Pool size 2 per design §11 Q4 preferred.
  *
- * <p>Every public method acquires its own connection and releases it (connections from Hikari pool —
- * thread-safe, each caller gets its own). No connection shared across threads (Tier 2 §9).
+ * <p>Every public method acquires its own connection and releases it (connections from Hikari pool
+ * — thread-safe, each caller gets its own). No connection shared across threads (Tier 2 §9).
  *
  * <p>All timestamps stored and retrieved as ISO-8601 strings (Tier 5 F1). Parsed via {@link
- * OffsetDateTime#parse} to tolerate both {@code Z} and {@code +00:00} suffixes from PG (Tier 5
- * F2).
+ * OffsetDateTime#parse} to tolerate both {@code Z} and {@code +00:00} suffixes from PG (Tier 5 F2).
  *
  * <p>Retry policy: {@link #saveStatesAndCheckpoints} retries 3× with exponential backoff (0, 2, 4
  * seconds) — inline, no framework (Tier 5 G3). On final failure: throws {@link
@@ -134,7 +133,8 @@ public final class StateManager {
    * <p>Ports {@code StateManager.load_all_states()}.
    */
   public Map<TopicPartition, List<FileStateRecord>> loadAllFileStates() {
-    String sql = "SELECT topic, partition, high_water_offset, file_path, file_byte_size FROM writer_file_state";
+    String sql =
+        "SELECT topic, partition, high_water_offset, file_path, file_byte_size FROM writer_file_state";
     Map<TopicPartition, List<FileStateRecord>> result = new HashMap<>();
     try (Connection conn = ds.getConnection();
         PreparedStatement ps = conn.prepareStatement(sql);
@@ -176,7 +176,10 @@ public final class StateManager {
         String lastSessionId = rs.getString("last_collector_session_id");
         String lastGapReason = rs.getString("last_gap_reason");
         StreamKey key = new StreamKey(exchange, symbol, stream);
-        result.put(key, new StreamCheckpoint(exchange, symbol, stream, lastReceivedAt, lastSessionId, lastGapReason));
+        result.put(
+            key,
+            new StreamCheckpoint(
+                exchange, symbol, stream, lastReceivedAt, lastSessionId, lastGapReason));
       }
     } catch (SQLException e) {
       throw new CryptoLakeStateException("Failed to load stream checkpoints", e);
@@ -217,7 +220,8 @@ public final class StateManager {
    *
    * <p>Ports {@code StateManager.load_component_state_by_instance()}.
    */
-  public Optional<ComponentRuntimeState> loadComponentStateByInstance(String component, String instanceId) {
+  public Optional<ComponentRuntimeState> loadComponentStateByInstance(
+      String component, String instanceId) {
     String sql =
         """
         SELECT component, instance_id, host_boot_id, started_at, last_heartbeat_at,
@@ -240,7 +244,8 @@ public final class StateManager {
   }
 
   /**
-   * Loads the active maintenance intent from PG (one with non-null consumed_at = null, not expired).
+   * Loads the active maintenance intent from PG (one with non-null consumed_at = null, not
+   * expired).
    *
    * <p>Ports {@code StateManager.load_active_maintenance_intent()}.
    */
@@ -262,7 +267,9 @@ public final class StateManager {
         String createdAt = toIsoString(rs.getObject("created_at", OffsetDateTime.class));
         String expiresAt = toIsoString(rs.getObject("expires_at", OffsetDateTime.class));
         String consumedAt = toIsoString(rs.getObject("consumed_at", OffsetDateTime.class));
-        return Optional.of(new MaintenanceIntent(maintenanceId, scope, plannedBy, reason, createdAt, expiresAt, consumedAt));
+        return Optional.of(
+            new MaintenanceIntent(
+                maintenanceId, scope, plannedBy, reason, createdAt, expiresAt, consumedAt));
       }
     } catch (SQLException e) {
       throw new CryptoLakeStateException("Failed to load maintenance intent", e);
@@ -273,8 +280,8 @@ public final class StateManager {
   // ── Write operations ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Atomically upserts file states and stream checkpoints in a single PG transaction. Retried up
-   * to 3× with exponential backoff (0, 2, 4 seconds) — inline, no framework (Tier 5 G3).
+   * Atomically upserts file states and stream checkpoints in a single PG transaction. Retried up to
+   * 3× with exponential backoff (0, 2, 4 seconds) — inline, no framework (Tier 5 G3).
    *
    * <p>On final failure: increments caller-side metric + throws {@link CryptoLakeStateException}.
    *
@@ -420,13 +427,19 @@ public final class StateManager {
     boolean plannedShutdown = rs.getBoolean("planned_shutdown");
     String maintenanceId = rs.getString("maintenance_id");
     return new ComponentRuntimeState(
-        component, instanceId, hostBootId, startedAt, lastHeartbeatAt,
-        cleanShutdownAt, plannedShutdown, maintenanceId);
+        component,
+        instanceId,
+        hostBootId,
+        startedAt,
+        lastHeartbeatAt,
+        cleanShutdownAt,
+        plannedShutdown,
+        maintenanceId);
   }
 
   /**
-   * Converts an {@link OffsetDateTime} from PG to ISO-8601 string (Tier 5 F1). Returns {@code
-   * null} if the value is {@code null}.
+   * Converts an {@link OffsetDateTime} from PG to ISO-8601 string (Tier 5 F1). Returns {@code null}
+   * if the value is {@code null}.
    */
   private static String toIsoString(OffsetDateTime odt) {
     if (odt == null) return null;
@@ -453,8 +466,8 @@ public final class StateManager {
   }
 
   /**
-   * Inline retry loop: 3 attempts with exponential backoff (0, 2, 4 seconds) — no framework (Tier
-   * 5 G3). Rethrows as {@link CryptoLakeStateException} on final failure.
+   * Inline retry loop: 3 attempts with exponential backoff (0, 2, 4 seconds) — no framework (Tier 5
+   * G3). Rethrows as {@link CryptoLakeStateException} on final failure.
    *
    * <p>Ports {@code StateManager._retry_transaction()}.
    */
@@ -479,7 +492,8 @@ public final class StateManager {
         }
       }
     }
-    throw new CryptoLakeStateException("Operation '" + label + "' failed after " + maxRetries + " attempts", last);
+    throw new CryptoLakeStateException(
+        "Operation '" + label + "' failed after " + maxRetries + " attempts", last);
   }
 
   @FunctionalInterface
