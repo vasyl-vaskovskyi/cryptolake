@@ -6,7 +6,9 @@ set -euo pipefail
 MODULE="${1:?module}"
 
 case "$MODULE" in
-  common|cli)
+  common|cli|writer)
+    # Only the collector has a WebSocket capture path.
+    # writer consumes envelopes from Kafka — raw_text is already captured upstream.
     echo "gate3: $MODULE has no capture path (pass-by-definition)"
     exit 0
     ;;
