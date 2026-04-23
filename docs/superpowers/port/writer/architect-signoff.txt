@@ -1,0 +1,58 @@
+approved
+
+## Deviations review (Task A)
+
+### D1 — Counter _total suffix registration
+Verdict: accepted
+Reasoning: This is a library-version constraint, not a design-intent change. Micrometer 1.13.4 on top of Prometheus Java client 1.x refuses register-time names ending in `_total`; the client re-appends the suffix at scrape time. Wire-parity (the only externally observable contract) is preserved and explicitly asserted in `WriterMetricsTest.messagesConsumed_counterName_exactlyWriter_messages_consumed_total` (scrape contains `writer_messages_consumed_total`). `NamingConvention.identity` is still applied per Tier 5 H4 at `WriterMetrics.java:51`.
+
+### D2 — DatabaseConfig URL credential handling
+Verdict: accepted
+Reasoning: Caller-side adaptation forced by common's frozen API (`DatabaseConfig` is a single-field record `url()` — a Python-parity port). The JDBC `user`/`password` query-string form is a standard PostgreSQL driver feature that HikariCP forwards unmodified. Modifying `common/` (tagged `port-common-accepted`) would have been the wrong fix.
+
+### D3 — MonitoringConfig port accessor
+Verdict: accepted
+Reasoning: Same caller-side adaptation pattern as D2. Common's `MonitoringConfig` has a single `prometheusPort` field (Python parity). Sharing one listener for `/ready` and `/metrics` is what the design §2.1 already describes — this is a rename, not a behavior change.
+
+### D4 — LogInit.setLevel + logback.xml
+Verdict: accepted
+Reasoning: `logback.xml` loads declaratively from the classpath (Tier 2 §15 mandate); common exposes only `setLevel(String)`. Honouring an optional `LOG_LEVEL` env knob matches the Python shape. No invariant touched.
+
+### D5 — LockSupport.parkNanos in retry backoff
+Verdict: accepted
+Reasoning: This is a Tier 2 rule-10 compliance fix, not a deviation in any substantive sense. `Thread.sleep` is forbidden in main sources by the skill's own rules (virtual-thread pinning). `LockSupport.parkNanos` at `StateManager.java:488` is the correct primitive, with an interrupt check at L489. Should have been in the original design; glad the developer noticed.
+
+### D6 — RecordHandler MDC explicit try/finally
+Verdict: accepted
+Reasoning: Forced by common's `StructuredLogger.mdc()` signature (`AutoCloseable` with `close() throws Exception`). Using try-with-resources would have leaked a checked exception into `handle()`'s throws clause, which no call site can reasonably handle. The `try { ctx.close(); } catch (Exception ignored) {}` wrapper is a standard Java idiom for lambda-backed cleanup that provably cannot throw (`RecordHandler.java:128-168`). Identical MDC semantics are preserved.
+
+## Gate 7 signoff (Task B)
+
+### Tier 1 verification
+- Rule 3 (disabled streams): `Main.buildEnabledTopics` at `Main.java:366-389` filters via `binance.writerStreamsOverride()`/`getEnabledStreams()` and feeds the list verbatim to `KafkaConsumerLoop.subscribe()` at `KafkaConsumerLoop.java:105`. Only one `subscribe()` call site for the primary. Verified.
+- Rule 4 (offset commit ordering): grep for `commitSync|commitAsync` in `writer/src/main/java/` returns hits ONLY inside `OffsetCommitCoordinator.java` (lines 33–49 Javadoc, 94–100, 201–210, 303, 316–349). `flushAndCommit` at L120–210 enforces appendAndFsync → saveStatesAndCheckpoints → `primary.commitSync(offsets)` in strict linear order, with PG failure re-throwing BEFORE the commit call (L195–199). No `commitAsync` anywhere. Verified.
+- Rule 5 (gap triad): `GapEmitter.emit` at `GapEmitter.java:58-97` performs metric (L60) + log (L63-84) + buffer (L88-91). The one `new GapEnvelope(` hit outside `GapEmitter` is `CoverageFilter.coalesceGap` at `CoverageFilter.java:190` — legitimate record-immutability copy inside the coverage-filter pipeline that feeds back through `GapEmitter.emit`, not a bypass. Verified.
+- Rule 6 (replay over reconstruction): `RecoveryCoordinator.runOnStartup` at `consumer/RecoveryCoordinator.java:104-145` derives `pendingSeeks` from `max(highWaterOffset) + 1` loaded from PG; `PartitionAssignmentListener` at line 61 calls `consumer.seek(tp, seekTo)` inside `onPartitionsAssigned` (Tier 5 C4). No archive-scan reconstruction path. Verified.
+- Rule 7 (raw_text byte-for-byte): `Main.java:121-122` constructs one `EnvelopeCodec`; `BufferManager.add` uses `codec.toJsonBytes` on the already-deserialized record without touching `rawText`. No re-serialization.
+
+### Tier 2 verification
+- `synchronized(`: zero hits in main sources.
+- `Thread.sleep`: zero hits in main sources (D5 replaced the lone site with `LockSupport.parkNanos`).
+- Records used for all data carriers (`FlushResult`, `FileTarget`, `CheckpointMeta`, `SealResult`, `FileStateRecord`, `StreamCheckpoint`, `ComponentRuntimeState`, `MaintenanceIntent`, `RecoveryResult`, `RecoveryKey`).
+- Virtual threads: `Main.java:333` uses `Executors.newVirtualThreadPerTaskExecutor()` as the sole executor.
+- One ObjectMapper, one registry, one KafkaConsumer primary, one HikariDataSource — confirmed at `Main.java:121-136`.
+
+### Tier 3 / Tier 5 verification
+- `// ports:` trace comments: sampled `BufferManagerTest` (9 hits), `WriterMetricsTest` (header + per-method), `HostLifecycleEvidenceTest` (7 hits). Pattern consistent across sampled classes. Developer's §5 follow-up about spotless-reformatted Javadoc-only cases is a minor polish item, not a gate blocker.
+- Tier 5 C8 (commitSync not commitAsync): explicit inline comment at `OffsetCommitCoordinator.java:204`.
+- Tier 5 I3 (FileChannel.force(true)): `DurableAppender.java:43` uses `fc.force(true)`, not `Files.write APPEND`. Partial-write truncate path at L44-52 matches Tier 5 I4.
+- Tier 5 H4 (NamingConvention.identity): applied at `WriterMetrics.java:51`; `WriterMetricsTest:33` asserts no `_total_total`.
+- Tier 5 M9 (synthetic offset -1L sentinel): honoured at `GapEmitter.java:127` (`emitUnfiltered` passes -1L).
+
+### Minor observations (not blockers)
+- Follow-up #5 in completion.md (MockConsumer-based ordering unit test) is the right polish item; widening `OffsetCommitCoordinator`'s field type from `KafkaConsumer` to `Consumer<byte[], byte[]>` would buy a direct unit test for strict save-before-commit ordering currently only exercised via chaos integration. Non-blocking.
+- Gates 3/4/5 remain red due to fixtures deferred by `/port-init --skip-fixtures`; the writer's escalation #1 (gate3 scoping — writer has no capture path) is valid and should land as a gate-script fix or via the fixture capture task stubs at `writer/build.gradle.kts:21-35`. Orchestrator to resolve; not grounds to block architect signoff.
+- `GapEmitter` constructor still accepts an `ignoredLog StructuredLogger` parameter that the body never uses (`GapEmitter.java:40`); cosmetic but clean-up candidate.
+- `RecordHandler.handle` builds a `BrokerCoordinates syntheticCoords` local at L138 that is never referenced (shadowed by the subsequent call passing `-1L` explicitly at L139). Dead local; cosmetic.
+
+Signoff: APPROVED. No Tier 1 invariant violations; all six deviations are caller-side or tooling-compliance adaptations that preserve the design's intent and external contracts. Module may advance to `complete`.

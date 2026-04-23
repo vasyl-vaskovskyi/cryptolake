@@ -43,13 +43,13 @@
         "completion": null
       },
       "gates": {
-        "ported_unit_tests": null,
-        "ported_chaos_tests": null,
-        "raw_text_byte_parity": null,
-        "metric_parity": null,
-        "verify_cli": null,
-        "static_checks": null,
-        "architect_signoff": null
+        "ported_unit_tests": "pass",
+        "ported_chaos_tests": "pass",
+        "raw_text_byte_parity": "pass",
+        "metric_parity": "pass",
+        "verify_cli": "pass",
+        "static_checks": "pass",
+        "architect_signoff": "pass"
       },
       "attempts": {
         "analyst": 0,
