@@ -24,11 +24,11 @@ trap 'kill $COLLECTOR_PID 2>/dev/null || true' EXIT
 sleep 15
 METRICS_RAW="$(mktemp)"
 for svc in collector writer; do
-  # Scrape each service's /metrics endpoint; endpoint port derived from config.
-  # Adjust PORT values to match this project's health/metric server config.
+  # Scrape each service's /metrics endpoint. Ports match docker-compose.yml:
+  # collector→8000, writer→8001. Overridable via env for non-default setups.
   case "$svc" in
-    collector) PORT=8091 ;;
-    writer)    PORT=8092 ;;
+    collector) PORT="${COLLECTOR_METRICS_PORT:-8000}" ;;
+    writer)    PORT="${WRITER_METRICS_PORT:-8001}" ;;
   esac
   echo "Scraping $svc /metrics on :$PORT for 120s ..."
   end=$(( $(date +%s) + 120 ))
