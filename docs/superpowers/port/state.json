@@ -35,7 +35,7 @@
     {
       "name": "writer",
       "status": "in_progress",
-      "phase": "architect",
+      "phase": "complete",
       "checkpoint0_done": false,
       "artifacts": {
         "mapping": null,
@@ -57,7 +57,8 @@
         "developer": 0
       },
       "escalations": [],
-      "developer_start_sha": "019a62cd544b87c016070393d2734c1b96f4a7b7"
+      "developer_start_sha": "019a62cd544b87c016070393d2734c1b96f4a7b7",
+      "accepted_sha": "e8a52017fc0750ebf504f32872bdfc0fb5c13d33"
     },
     {
       "name": "collector",
