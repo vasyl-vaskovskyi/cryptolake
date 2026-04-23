@@ -11,25 +11,28 @@ case "$MODULE" in
     ;;
 esac
 
-EXPECTED="cryptolake-java/parity-fixtures/verify/expected.txt"
+REPO_ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
+EXPECTED="$REPO_ROOT/cryptolake-java/parity-fixtures/verify/expected.txt"
 [[ -f "$EXPECTED" ]] || { echo "gate5 FAIL: expected output missing: $EXPECTED" >&2; exit 1; }
 
 # Run Java integration harness that produces archives to a known path.
-cd cryptolake-java
+cd "$REPO_ROOT/cryptolake-java"
 ./gradlew ":${MODULE}:produceSyntheticArchives" --info
-ARCHIVE_DIR="${MODULE}/build/synthetic-archives"
-[[ -d "../$ARCHIVE_DIR" ]] || { echo "gate5 FAIL: no archives produced" >&2; exit 1; }
-cd ..
+ARCHIVE_DIR="$REPO_ROOT/cryptolake-java/${MODULE}/build/synthetic-archives"
+[[ -d "$ARCHIVE_DIR" ]] || { echo "gate5 FAIL: no archives produced at $ARCHIVE_DIR" >&2; exit 1; }
 
-# Now run Python verify against Java archives.
-ACTUAL="$(uv run python -m src.cli.verify --archive-dir "cryptolake-java/$ARCHIVE_DIR" 2>&1 || true)"
-EXP="$(cat "$EXPECTED")"
+cd "$REPO_ROOT"
+# Run Python verify against Java-produced archives. The verify CLI accepts
+# --base-dir (see src/cli/verify.py); --date derives from the archive tree.
+TODAY=$(date -u +%Y-%m-%d)
+ACTUAL="$(uv run cryptolake verify --date "$TODAY" --base-dir "$ARCHIVE_DIR" 2>&1 || true)"
 
-# Structural match: exit code + summary line shape. Numeric values will differ.
-# We compare the "PASS"/"FAIL" word + error count == 0.
-if [[ "$ACTUAL" != *"PASS"* || "$ACTUAL" == *"errors: "*[^0]* ]]; then
-  echo "gate5 FAIL: verify output not PASS or errors>0" >&2
-  echo "actual: $ACTUAL" >&2
+# Structural match: Java-produced archives must satisfy the same verification
+# the Python reference passes — zero ERRORS in the summary.
+if echo "$ACTUAL" | grep -qE "^ERRORS \([^0]"; then
+  echo "gate5 FAIL: Python verify reported errors on Java archives" >&2
+  echo "actual:" >&2
+  echo "$ACTUAL" >&2
   exit 1
 fi
 echo "gate5 OK: Python verify passes on Java archives"

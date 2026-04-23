@@ -1,0 +1,9 @@
+collector_exchange_latency_ms_bucket{exchange,le,stream,symbol}
+collector_exchange_latency_ms_count{exchange,stream,symbol}
+collector_exchange_latency_ms_created{exchange,stream,symbol}
+collector_exchange_latency_ms_sum{exchange,stream,symbol}
+collector_messages_produced_created{exchange,stream,symbol}
+collector_messages_produced_total{exchange,stream,symbol}
+collector_snapshots_taken_created{exchange,symbol}
+collector_snapshots_taken_total{exchange,symbol}
+collector_ws_connections_active{exchange}
