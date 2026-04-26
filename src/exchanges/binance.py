@@ -11,9 +11,11 @@ _STREAM_KEY_MAP = {
     "forceOrder": "liquidations",
 }
 
-# Which streams go on which socket
-_PUBLIC_STREAMS = {"depth", "bookticker"}
-_MARKET_STREAMS = {"trades", "funding_rate", "liquidations"}
+# All streams delivered over a single WebSocket connection. A prior split
+# into "public" + "market" sockets caused a reproducible Binance-side
+# half-open: when both sockets opened in parallel from the same IP, the
+# second one would TCP-connect but receive zero application frames.
+_WS_STREAMS = {"depth", "bookticker", "trades", "funding_rate", "liquidations"}
 
 # Binance subscription suffixes per our stream name
 _SUBSCRIPTION_MAP = {
@@ -31,27 +33,19 @@ class BinanceAdapter:
         self.rest_base = rest_base.rstrip("/")
 
     def get_ws_urls(self, symbols: list[str], streams: list[str]) -> dict[str, str]:
-        public_subs: list[str] = []
-        market_subs: list[str] = []
-
+        subs: list[str] = []
         for symbol in symbols:
             s = symbol.lower()
             for stream in streams:
                 suffix = _SUBSCRIPTION_MAP.get(stream)
                 if suffix is None:
                     continue
-                sub = f"{s}{suffix}"
-                if stream in _PUBLIC_STREAMS:
-                    public_subs.append(sub)
-                elif stream in _MARKET_STREAMS:
-                    market_subs.append(sub)
+                if stream in _WS_STREAMS:
+                    subs.append(f"{s}{suffix}")
 
-        urls: dict[str, str] = {}
-        if public_subs:
-            urls["public"] = f"{self.ws_base}/stream?streams={'/'.join(public_subs)}"
-        if market_subs:
-            urls["market"] = f"{self.ws_base}/stream?streams={'/'.join(market_subs)}"
-        return urls
+        if not subs:
+            return {}
+        return {"ws": f"{self.ws_base}/stream?streams={'/'.join(subs)}"}
 
     def route_stream(self, raw_frame: str) -> tuple[str, str, str]:
         """Parse combined stream frame and extract (stream_type, symbol, raw_data_text).

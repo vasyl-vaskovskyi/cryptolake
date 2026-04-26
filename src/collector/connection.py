@@ -14,7 +14,7 @@ from src.collector.streams.depth import DepthHandler
 from src.common.async_utils import cancel_tasks
 from src.common.envelope import create_data_envelope
 from src.collector.backup_chain_reader import read_last_depth_update_id, other_depth_topic
-from src.exchanges.binance import BinanceAdapter, _PUBLIC_STREAMS, _MARKET_STREAMS
+from src.exchanges.binance import BinanceAdapter, _WS_STREAMS
 
 logger = structlog.get_logger()
 
@@ -111,7 +111,7 @@ class WebSocketManager:
                     backoff = 1  # reset on successful connect
 
                     # Trigger initial depth resync on first connect (not just reconnects)
-                    if socket_name == "public" and "depth" in self.enabled_streams:
+                    if socket_name == "ws" and "depth" in self.enabled_streams:
                         for symbol in self.symbols:
                             asyncio.get_running_loop().create_task(
                                 self._depth_resync(symbol))
@@ -138,7 +138,7 @@ class WebSocketManager:
                 break
 
             # Trigger depth resync if public socket disconnected (spec 7.2)
-            if socket_name == "public" and "depth" in self.enabled_streams:
+            if socket_name == "ws" and "depth" in self.enabled_streams:
                 for symbol in self.symbols:
                     await self._depth_resync(symbol)
 
@@ -289,12 +289,9 @@ class WebSocketManager:
         still coalesces any leakage by gap_start_ts as a defense in depth.
         """
         now = time.time_ns()
-        if socket_name == "public":
-            affected = _PUBLIC_STREAMS
-        elif socket_name == "market":
-            affected = _MARKET_STREAMS
-        else:
+        if socket_name != "ws":
             return
+        affected = _WS_STREAMS
 
         for symbol in self.symbols:
             for stream in affected:

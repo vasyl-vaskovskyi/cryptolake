@@ -20,9 +20,9 @@ exchanges:
       update_speed: "100ms"
       snapshot_interval: "5m"
       snapshot_overrides:
-        btcusdt: "1m"
+        btcusdt: "30s"
     open_interest:
-      poll_interval: "5m"
+      poll_interval: "1m"
     collector_id: "binance-collector-01"
 
 redpanda:
