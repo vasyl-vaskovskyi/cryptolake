@@ -26,7 +26,10 @@ public final class GapReasons {
           "write_error",
           "deserialization_error",
           "checkpoint_lost",
-          "missing_hour");
+          "missing_hour",
+          // Added in collector silent-loss work (commits 30348b2, 3e068b7):
+          "kafka_delivery_failed",
+          "handler_error");
 
   private GapReasons() {}
 

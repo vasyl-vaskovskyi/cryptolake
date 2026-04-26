@@ -1,6 +1,11 @@
 collector_exchange_latency_ms_bucket{exchange,le,stream,symbol}
 collector_exchange_latency_ms_count{exchange,stream,symbol}
 collector_exchange_latency_ms_sum{exchange,stream,symbol}
+collector_gaps_detected_total{exchange,reason,stream,symbol}
+collector_heartbeats_emitted_total{exchange,status,stream,symbol}
+collector_messages_dropped_total{exchange,stream,symbol}
 collector_messages_produced_total{exchange,stream,symbol}
+collector_snapshots_failed_total{exchange,symbol}
 collector_snapshots_taken_total{exchange,symbol}
 collector_ws_connections_active{exchange}
+collector_ws_reconnects_total{exchange}
