@@ -63,7 +63,7 @@
     {
       "name": "collector",
       "status": "in_progress",
-      "phase": "architect",
+      "phase": "complete",
       "checkpoint0_done": false,
       "artifacts": {
         "mapping": null,
@@ -77,7 +77,7 @@
         "metric_parity": "pass",
         "verify_cli": "pass",
         "static_checks": "pass",
-        "architect_signoff": "pending"
+        "architect_signoff": "pass"
       },
       "attempts": {
         "analyst": 0,

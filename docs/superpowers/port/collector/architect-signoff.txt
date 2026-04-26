@@ -1,0 +1,33 @@
+approved
+
+## What I verified
+
+- **Tier 1 §1 (raw_text pre-parse)**: `BinanceAdapter.routeStream` (`adapter/BinanceAdapter.java:79-107`) calls `RawDataExtractor.extractDataValue` BEFORE `mapper.readTree`. Extractor uses balanced-brace `String.substring` (`adapter/RawDataExtractor.java:33-78`), preserving byte identity. `RawFrameCapture.onFrame` (`capture/RawFrameCapture.java:88-138`) routes through `routeStream` first, then drops if handler is null (Tier 1 §3 honored).
+- **Tier 1 §2/§7 (raw_sha256 once + byte-for-byte)**: `DataEnvelope.create` is the only construction path in handlers/resync/scheduler/poller; SHA computed inside common, never recomputed. Gate 3 harness (`harness/RawTextParityHarness.java:97-131`) compares `Files.readAllBytes(rawPath)` against `expected.rawText().getBytes(UTF_8)`; `build/reports/gate3-parity.txt` shows `OK 12518 fixtures`.
+- **Tier 1 §5 (gap triad)**: `GapEmitter.emitWithTimestamps` (`gap/GapEmitter.java:57-103`) is the single owner: metric → log → produce gap envelope. All callers (DepthStreamHandler, DepthSnapshotResync, RawFrameCapture, SnapshotScheduler, OpenInterestPoller, KafkaProducerBridge.deliveryCallback) route through it; no direct `producer.produceGap(...)` outside this class except KafkaProducerBridge's own internal helper which only `GapEmitter` calls.
+- **Tier 1 §6 (replay over reconstruction)**: `DepthSnapshotResync.doResync` (`snapshot/DepthSnapshotResync.java:111-139`) calls `tryBackupChainReader` first; only on empty falls through to `SnapshotFetcher.fetch`. `DepthStreamHandler.setSyncPoint` replays buffered diffs (`streams/DepthStreamHandler.java:166-227`).
+- **Design §2 catalog**: 38 collector classes present (43 main types incl. records and inner helpers) covering all specified packages: adapter, capture, connection (incl. `SubscriptionHandshake`, `FirstFrameWatchdog`, `WebSocketSupervisor`), gap, snapshot (incl. `DepthSnapshotResync`), producer, backup, lifecycle, liveness (`StreamHeartbeatEmitter`), metrics, harness. Single-socket consolidation honored (`StreamKey.WS_STREAMS` is one set; `BinanceAdapter.getWsUrls` returns map with single `"ws"` entry).
+- **Tier 2 spot-check**: zero `synchronized` keywords in production code (only in comments/JavaDoc); `Thread.sleep` only in JavaDoc; `LockSupport.parkNanos` and `CountDownLatch.await(timeout)` used for blocking waits; `KafkaProducerBridge.lock` released before `producer.send` (`producer/KafkaProducerBridge.java:166-172`); single `HttpClient`, `KafkaProducer`, `ObjectMapper` constructed in `Main.main`.
+- **Metric fixture (`parity-fixtures/metrics/collector.txt`)**: 11 lines, 9 distinct metric families, names + label keys diff-match design §9 including the new `collector_heartbeats_emitted_total{exchange,status,stream,symbol}` and exchange-latency histogram triplet.
+- **Common module `GapReasons.VALID`**: now contains `kafka_delivery_failed` and `handler_error` per design §6.2 (commit 30348b2).
+
+## Deviations assessment
+
+- **2.1 Fixture format clarification (`.raw` is inner payload)**: acceptable — design §11 Q5 was hypothetical; investigation showed the simpler path is correct, byte identity is still verified end-to-end.
+- **2.2 `KafkaProducerBridge` not `final`**: acceptable with note — sealed at the package level; a `KafkaProducerPort` interface is a reasonable future refactor (already noted in §5.1).
+- **2.3 `GapReasons.VALID` additive update in common**: acceptable — additive change matches design §6.2 explicitly. Writer's `GapReasonsLocal` continues to work unchanged.
+- **2.4 `DepthSnapshotResync.depthHandler` volatile setter**: acceptable — design §11 Q4 anticipated the circular dep; a `volatile` field with a single setter wired from `Main` is sound. `Main.java:198` calls `setDepthHandler` after construction on the main thread (visibility guaranteed by `volatile`).
+- **2.5 `collector.txt` updated to 9-metric set**: acceptable — original fixture was incomplete; the new content matches the source-of-truth Python `metrics.py` and design §9.
+
+## New issues found
+
+- **Minor**: `Main.shutdownAll` order (`Main.java:362-410`) flushes the producer BEFORE `lifecycle.markCleanShutdown` — design §3.3 lists lifecycle after producer close, which is what was implemented; consistent with the design but I note that `markCleanShutdown` is called after `producer.close()`, which prevents any final lifecycle envelope from going through Kafka. Acceptable since lifecycle uses JDBC, not Kafka.
+- **Minor**: `BackupChainReader.readLastDepthUpdateId` does `codec.readTree(rawNode.path("raw_text").asText().getBytes(UTF_8))` — re-encoding the string via `getBytes` works but allocates; not a correctness issue. (`backup/BackupChainReader.java:127-134`).
+- **Minor**: `SubscriptionHandshake.QueueAckListener.waitForAck` discards non-matching ids without re-queueing (line 124 comment acknowledges) — given only one handshake at a time, this is fine.
+- None of the §5 follow-ups are blockers in disguise: `KafkaProducerBridge` non-final, common-module `GapReasons` additive update, chaos test skeleton, `LifecycleStateManager` schema assumption, and harness simplification are all genuinely non-blocking.
+
+## Recommendations (non-blocking)
+
+- Future module: introduce `KafkaProducerPort` interface to restore `final` on `KafkaProducerBridge` and decouple test stubs (eliminates the package-private constructor footgun).
+- `CollectorSession.create` (`CollectorSession.java:25-32`) constructs an unused `Instant now` at line 26-27 — can be removed; only `wallNow` is used.
+- Consider adding a `_WS_STREAMS` capacity assertion at startup (per design §11 Q6) — currently absent; not load-bearing today but cheap insurance against a future stream/symbol expansion silently exceeding the 1024-stream Binance per-connection cap.
