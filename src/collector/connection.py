@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import time
 
 import aiohttp
+import orjson
 import structlog
 import websockets
 
@@ -22,6 +24,17 @@ logger = structlog.get_logger()
 _MAX_BACKOFF = 60
 _RECONNECT_BEFORE_24H = 23 * 3600 + 50 * 60  # 23h50m
 _REST_ONLY_STREAMS = frozenset({"depth_snapshot", "open_interest"})
+
+# fix #4: SUBSCRIBE ack timeout. Binance acks within ~100ms typically.
+_SUBSCRIBE_ACK_TIMEOUT = 5.0
+# fix #5: per-stream first-frame deadline. Binance's high-volume streams
+# deliver in <1s; markPrice ticks 1/sec; aggTrade typically <1s. Liquidations
+# (forceOrder) are exempt — Binance documents zero frames if no liquidations
+# happen during the connection window.
+_FIRST_FRAME_DEADLINE_SECONDS = 30.0
+_LIVENESS_EXEMPT_STREAMS = frozenset({"liquidations"})
+
+_subscribe_id_counter = itertools.count(1)
 
 
 class WebSocketManager:
@@ -105,18 +118,43 @@ class WebSocketManager:
                     exchange=self.exchange
                 ).inc()
                 async with websockets.connect(url, ping_interval=30, ping_timeout=10,
-                                              close_timeout=5) as ws:
+                                              close_timeout=5, max_queue=None) as ws:
                     self._ws_connected[socket_name] = True
                     logger.info("ws_connected", socket=socket_name, url=url[:80])
                     backoff = 1  # reset on successful connect
 
-                    # Trigger initial depth resync on first connect (not just reconnects)
-                    if socket_name == "ws" and "depth" in self.enabled_streams:
-                        for symbol in self.symbols:
-                            asyncio.get_running_loop().create_task(
-                                self._depth_resync(symbol))
+                    # fix #4: send SUBSCRIBE post-connect and wait for the ack.
+                    # The URL-query subscription form gives no signal when
+                    # Binance silently fails to register a subscription; the
+                    # JSON SUBSCRIBE/ack handshake is the only deterministic
+                    # confirmation that subs are wired through to the server.
+                    ws_streams = [s for s in self.enabled_streams
+                                  if s not in _REST_ONLY_STREAMS]
+                    subs = self.adapter.get_subscriptions(self.symbols, ws_streams)
+                    if subs:
+                        await self._subscribe_and_ack(ws, socket_name, subs)
 
-                    await self._receive_loop(ws, socket_name, connect_time)
+                    # fix #5: alongside the receive loop, run a first-frame
+                    # watchdog. If any non-exempt subscription has not delivered
+                    # within _FIRST_FRAME_DEADLINE_SECONDS, force the connection
+                    # closed so _connection_loop reconnects.
+                    expected = {(sym, st)
+                                for sym in self.symbols
+                                for st in ws_streams
+                                if st not in _LIVENESS_EXEMPT_STREAMS}
+
+                    receiver = asyncio.create_task(
+                        self._receive_loop(ws, socket_name, connect_time))
+                    watchdog = asyncio.create_task(
+                        self._first_frame_watchdog(ws, socket_name, expected))
+                    try:
+                        await receiver
+                    finally:
+                        watchdog.cancel()
+                        try:
+                            await watchdog
+                        except (asyncio.CancelledError, Exception):
+                            pass
             except (websockets.ConnectionClosed, ConnectionError, OSError) as e:
                 logger.warning("ws_disconnected", socket=socket_name, error=str(e))
             except Exception as e:
@@ -137,15 +175,69 @@ class WebSocketManager:
             if not self._running:
                 break
 
-            # Trigger depth resync if public socket disconnected (spec 7.2)
-            if socket_name == "ws" and "depth" in self.enabled_streams:
-                for symbol in self.symbols:
-                    await self._depth_resync(symbol)
+            # Depth resync runs post-first-frame inside _receive_loop, not here,
+            # so the snapshot HTTP call cannot race the socket's first frames.
 
             await asyncio.sleep(min(backoff, _MAX_BACKOFF))
             backoff = min(backoff * 2, _MAX_BACKOFF)
 
+    async def _subscribe_and_ack(self, ws, socket_name: str, subs: list[str]) -> None:
+        """Send SUBSCRIBE and block until Binance acks (or raises on timeout).
+
+        Binance ack format: ``{"result":null,"id":<id>}``. Any data frames
+        arriving before the ack are skipped (combined-stream wrapper has
+        ``stream`` + ``data`` keys, ack has ``result`` + ``id``).
+        """
+        sub_id = next(_subscribe_id_counter)
+        msg = orjson.dumps({"method": "SUBSCRIBE", "params": subs, "id": sub_id}).decode()
+        await ws.send(msg)
+        logger.info("ws_subscribe_sent", socket=socket_name, count=len(subs), id=sub_id)
+        deadline = time.monotonic() + _SUBSCRIBE_ACK_TIMEOUT
+        while True:
+            timeout = max(0.1, deadline - time.monotonic())
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise ConnectionError(f"SUBSCRIBE ack timeout after {_SUBSCRIBE_ACK_TIMEOUT}s")
+            try:
+                parsed = orjson.loads(raw)
+            except Exception:
+                continue
+            if isinstance(parsed, dict) and parsed.get("id") == sub_id:
+                if parsed.get("result", "missing") is None:
+                    logger.info("ws_subscribe_acked", socket=socket_name, id=sub_id)
+                    return
+                raise ConnectionError(f"SUBSCRIBE rejected: {parsed!r}")
+
+    async def _first_frame_watchdog(
+        self, ws, socket_name: str, expected: set[tuple[str, str]]
+    ) -> None:
+        """fix #5: force-close the WS if any expected (symbol, stream) hasn't
+        delivered a first frame within the deadline. Catches Binance silently
+        dropping individual subscriptions even after a successful SUBSCRIBE ack.
+        """
+        if not expected:
+            return
+        deadline = time.monotonic() + _FIRST_FRAME_DEADLINE_SECONDS
+        while time.monotonic() < deadline:
+            await asyncio.sleep(2)
+            seen = set(self._last_received_at.keys())
+            missing = expected - seen
+            if not missing:
+                return
+        logger.warning(
+            "first_frame_deadline_missed",
+            socket=socket_name,
+            missing=sorted(f"{sym}/{st}" for sym, st in missing),
+            deadline_s=_FIRST_FRAME_DEADLINE_SECONDS,
+        )
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
     async def _receive_loop(self, ws, socket_name: str, connect_time: float) -> None:
+        depth_resync_started = False
         async for raw_frame in ws:
             if not self._running:
                 break
@@ -155,12 +247,28 @@ class WebSocketManager:
                 await ws.close()
                 return
 
+            # Skip non-data control frames (e.g. SUBSCRIBE/UNSUBSCRIBE acks
+            # if a re-SUBSCRIBE ever fires inside the receive window).
+            if '"data":' not in raw_frame:
+                continue
+
+            # Spawn depth resync after the first data frame is in hand so the
+            # snapshot HTTP call cannot starve the socket's first-frame delivery.
+            if (not depth_resync_started
+                    and socket_name == "ws"
+                    and "depth" in self.enabled_streams):
+                depth_resync_started = True
+                for symbol in self.symbols:
+                    asyncio.get_running_loop().create_task(
+                        self._depth_resync(symbol))
+
             # Backpressure: if producer is overwhelmed, pause WS reads
             if self._consecutive_drops >= self._backpressure_threshold:
                 logger.warning("ws_backpressure_active", socket=socket_name,
                                consecutive_drops=self._consecutive_drops)
                 while self._consecutive_drops >= self._backpressure_threshold and self._running:
-                    self.producer.poll(0.1)
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, self.producer.poll, 0.1)
                     self._consecutive_drops = 0  # reset and re-evaluate on next produce
                     await asyncio.sleep(0.1)
                 logger.info("ws_backpressure_released", socket=socket_name)

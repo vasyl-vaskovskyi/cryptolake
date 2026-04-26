@@ -1,42 +1,41 @@
 class TestBinanceURLBuilding:
-    def test_ws_urls_single_socket_with_all_streams(self, binance_adapter):
+    def test_ws_url_is_bare_combined_endpoint(self, binance_adapter):
         urls = binance_adapter.get_ws_urls(
             symbols=["btcusdt", "ethusdt"],
             streams=["trades", "depth", "bookticker", "funding_rate", "liquidations"],
         )
-        # All streams should land on a single "ws" socket.
-        assert list(urls.keys()) == ["ws"]
-        url = urls["ws"]
-        for sym in ("btcusdt", "ethusdt"):
-            assert f"{sym}@aggTrade" in url
-            assert f"{sym}@depth@100ms" in url
-            assert f"{sym}@bookTicker" in url
-            assert f"{sym}@markPrice@1s" in url
-            assert f"{sym}@forceOrder" in url
-
-    def test_ws_url_subset_streams(self, binance_adapter):
-        urls = binance_adapter.get_ws_urls(
-            symbols=["btcusdt"],
-            streams=["depth", "bookticker"],
-        )
-        url = urls["ws"]
-        assert "btcusdt@depth@100ms" in url
-        assert "btcusdt@bookTicker" in url
-        assert url.startswith("wss://fstream.binance.com/stream?streams=")
-
-    def test_ws_url_market_only_streams(self, binance_adapter):
-        urls = binance_adapter.get_ws_urls(
-            symbols=["btcusdt"],
-            streams=["trades", "funding_rate", "liquidations"],
-        )
-        url = urls["ws"]
-        assert "btcusdt@aggTrade" in url
-        assert "btcusdt@markPrice@1s" in url
-        assert "btcusdt@forceOrder" in url
+        # No more URL-query subscriptions — those go in the post-connect
+        # SUBSCRIBE JSON message instead. URL is a bare /stream endpoint.
+        assert urls == {"ws": "wss://fstream.binance.com/stream"}
 
     def test_ws_no_streams_returns_empty(self, binance_adapter):
         urls = binance_adapter.get_ws_urls(symbols=["btcusdt"], streams=[])
         assert urls == {}
+
+    def test_subscriptions_all_streams_two_symbols(self, binance_adapter):
+        subs = binance_adapter.get_subscriptions(
+            symbols=["btcusdt", "ethusdt"],
+            streams=["trades", "depth", "bookticker", "funding_rate", "liquidations"],
+        )
+        assert set(subs) == {
+            "btcusdt@aggTrade", "btcusdt@depth@100ms", "btcusdt@bookTicker",
+            "btcusdt@markPrice@1s", "btcusdt@forceOrder",
+            "ethusdt@aggTrade", "ethusdt@depth@100ms", "ethusdt@bookTicker",
+            "ethusdt@markPrice@1s", "ethusdt@forceOrder",
+        }
+
+    def test_subscriptions_subset(self, binance_adapter):
+        subs = binance_adapter.get_subscriptions(
+            symbols=["btcusdt"], streams=["depth", "bookticker"],
+        )
+        assert set(subs) == {"btcusdt@depth@100ms", "btcusdt@bookTicker"}
+
+    def test_subscriptions_skips_unknown_streams(self, binance_adapter):
+        subs = binance_adapter.get_subscriptions(
+            symbols=["btcusdt"], streams=["depth", "depth_snapshot", "open_interest"],
+        )
+        # depth_snapshot / open_interest are REST-only, not subscribable
+        assert subs == ["btcusdt@depth@100ms"]
 
     def test_snapshot_url(self, binance_adapter):
         url = binance_adapter.build_snapshot_url("btcusdt", limit=1000)

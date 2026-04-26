@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from pathlib import Path
@@ -121,7 +122,12 @@ class CryptoLakeProducer:
                 value=value,
                 on_delivery=self._make_delivery_cb(stream),
             )
-            self._producer.poll(0)
+            # Drive delivery callbacks off the asyncio event loop so the GIL
+            # held inside librdkafka cannot starve concurrent WebSocket readers.
+            try:
+                asyncio.get_running_loop().run_in_executor(None, self._producer.poll, 0)
+            except RuntimeError:
+                self._producer.poll(0)  # called outside an event loop (e.g. tests)
             collector_metrics.messages_produced_total.labels(
                 exchange=self.exchange, symbol=symbol, stream=stream,
             ).inc()

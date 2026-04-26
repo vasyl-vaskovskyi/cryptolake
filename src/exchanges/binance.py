@@ -32,20 +32,31 @@ class BinanceAdapter:
         self.ws_base = ws_base.rstrip("/")
         self.rest_base = rest_base.rstrip("/")
 
-    def get_ws_urls(self, symbols: list[str], streams: list[str]) -> dict[str, str]:
+    def get_subscriptions(self, symbols: list[str], streams: list[str]) -> list[str]:
+        """Return the per-(symbol, stream) Binance subscription names, e.g.
+        ``["btcusdt@aggTrade", "btcusdt@depth@100ms", ...]``. Used for the
+        post-connect ``SUBSCRIBE`` JSON message.
+        """
         subs: list[str] = []
         for symbol in symbols:
             s = symbol.lower()
             for stream in streams:
                 suffix = _SUBSCRIPTION_MAP.get(stream)
-                if suffix is None:
+                if suffix is None or stream not in _WS_STREAMS:
                     continue
-                if stream in _WS_STREAMS:
-                    subs.append(f"{s}{suffix}")
+                subs.append(f"{s}{suffix}")
+        return subs
 
-        if not subs:
+    def get_ws_urls(self, symbols: list[str], streams: list[str]) -> dict[str, str]:
+        """Return the bare combined-stream WebSocket URL with no subscriptions
+        in the query string. Subscriptions are sent post-handshake via
+        ``SUBSCRIBE`` so the server emits an ack we can wait on — the prior
+        URL-based subscription form gave no signal when Binance silently
+        failed to register some subscriptions.
+        """
+        if not self.get_subscriptions(symbols, streams):
             return {}
-        return {"ws": f"{self.ws_base}/stream?streams={'/'.join(subs)}"}
+        return {"ws": f"{self.ws_base}/stream"}
 
     def route_stream(self, raw_frame: str) -> tuple[str, str, str]:
         """Parse combined stream frame and extract (stream_type, symbol, raw_data_text).
