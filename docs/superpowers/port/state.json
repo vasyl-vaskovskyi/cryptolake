@@ -84,7 +84,8 @@
         "architect": 0,
         "developer": 0
       },
-      "escalations": []
+      "escalations": [],
+      "developer_start_sha": "a77d7c554ec771f9b9a2bd7207e4b0018c02fae4"
     },
     {
       "name": "cli",
