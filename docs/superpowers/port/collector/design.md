@@ -62,7 +62,9 @@ com.cryptolake.collector
 │   └── BackupChainReader                   # one-shot Consumer; other_depth_topic derivation
 ├── lifecycle/
 │   ├── LifecycleStateManager               # JDBC+HikariCP upsert/mark-clean-shutdown; best-effort
-│   └── HeartbeatScheduler                  # 30s heartbeat task
+│   └── ProcessHeartbeatScheduler           # 30s PG-row heartbeat (process liveness)
+├── liveness/
+│   └── StreamHeartbeatEmitter              # 5s per-(symbol,stream) liveness envelope to Kafka
 ├── metrics/
 │   └── CollectorMetrics                    # Micrometer registry; 8 Prometheus meters
 └── harness/
@@ -70,7 +72,7 @@ com.cryptolake.collector
     └── RawTextParityHarness                # :collector:runRawTextParity (gate 3)
 ```
 
-Total class count in §2 (catalog below): **37 classes and records**.
+Total class count in §2 (catalog below): **38 classes and records** (+1 for `StreamHeartbeatEmitter`, the per-stream liveness emitter).
 
 ---
 
@@ -356,9 +358,28 @@ States live per-symbol inside `DepthSnapshotResync`; transitions are explicit.
 
 **`MaintenanceIntent`** — record `String maintenanceId, String reason, String createdAt`.
 
-**`HeartbeatScheduler`** — final class.
-- Purpose: schedules `lifecycleStateManager.heartbeat(...)` every 30s on a virtual-thread loop (Tier 5 A3 — `CountDownLatch.await(30, SECONDS)` returns false to continue, true on stop).
+**`ProcessHeartbeatScheduler`** — final class.
+- Purpose: schedules `lifecycleStateManager.heartbeat(...)` every 30s on a virtual-thread loop (Tier 5 A3 — `CountDownLatch.await(30, SECONDS)` returns false to continue, true on stop). This is the PROCESS liveness signal (PG row update); separate from `StreamHeartbeatEmitter` below which is the per-(symbol, stream) data-path liveness signal.
 - Public: `void start()`, `void stop()`.
+
+### 2.10b Liveness (per-stream heartbeats)
+
+**`StreamHeartbeatEmitter`** — final class. Direct port of `src/collector/heartbeat.py` (commit 3e068b7).
+- Purpose: emit a heartbeat envelope per `(symbol, stream)` to Kafka every 5s **regardless of data flow**. The collector cannot reliably infer what data was lost upstream (it only knows what it received); the consumer infers gaps from missing heartbeats. Three states encoded:
+  - `alive` — data flowed within 2 × interval (10s)
+  - `subscribed_silent` — WS up, but no data within 2 × interval (e.g. Binance silent subscription drop). Distinguishes Binance-side silence from collector-side silence (heartbeats stop entirely on collector down).
+  - `disconnected` — WebSocket currently down (between connect attempts).
+- Heartbeat envelope schema: `v, type="heartbeat", exchange, symbol, stream, received_at, collector_session_id, emitted_at_ns, last_data_at_ns (nullable), last_session_seq, status` (matches `HEARTBEAT_ENVELOPE_FIELDS` in Python `src/common/envelope.py`).
+- Published to the SAME Kafka topic as data envelopes for that `(exchange, stream)` so heartbeats land in the writer's archive alongside the streams they describe.
+- Bypasses `PerStreamBuffer` cap path: heartbeats ARE the liveness signal; cap-dropping would defeat the point. Drop is unconditional via direct `KafkaProducerBridge.publishRaw(topic, key, bytes)` (new method to add).
+- No delivery callback (no recursion on broker outage; the next heartbeat naturally reflects the gap).
+- Public: `void start()`, `void stop()`.
+- Dependencies: `KafkaProducerBridge`, `String exchange`, `List<String> symbols`, `List<String> streams`, `String collectorSessionId`, `ConcurrentHashMap<TupleKey, Long> lastReceivedAt` (ref into `RawFrameCapture`), `ConcurrentHashMap<TupleKey, Long> seqCounters` (ref into `SessionSeqAllocator`), `ConcurrentHashMap<String, Boolean> wsConnected` (ref into `WebSocketSupervisor`), `ClockSupplier`, `Duration interval` (default `Duration.ofSeconds(5)`).
+- Thread-safety: reads-only of the three shared maps (CHM is safe for unsynchronized reads); virtual-thread loop owns its own state.
+
+**`HeartbeatStatus`** — enum `ALIVE, SUBSCRIBED_SILENT, DISCONNECTED`. Serializes to lowercase strings to match Python `VALID_HEARTBEAT_STATUS`.
+
+**`HeartbeatEnvelope`** — record carrying the schema above. Built via `HeartbeatEnvelope.of(...)` factory; serialized via `EnvelopeCodec.toJsonBytes(env)`. Codec must accept the new `type="heartbeat"` discriminator alongside `data` and `gap`.
 
 ### 2.11 Metrics
 
@@ -649,7 +670,11 @@ Jackson config: insertion order via `@JsonPropertyOrder` (Tier 5 B1), no naming 
 
 ### 6.2 `GapEnvelope` (reused)
 
-Already defined. Matches Python's `create_gap_envelope` field order with optional restart-metadata last. The collector sets `reason ∈ {ws_disconnect, pu_chain_break, session_seq_skip, buffer_overflow, snapshot_poll_miss}` only; restart-metadata fields are always `null` in collector-produced gaps (they are writer-only).
+Already defined. Matches Python's `create_gap_envelope` field order with optional restart-metadata last. The collector sets `reason ∈ {ws_disconnect, pu_chain_break, session_seq_skip, buffer_overflow, snapshot_poll_miss, kafka_delivery_failed, handler_error}` only (the latter two added in commit 30348b2 to close silent-loss bugs); restart-metadata fields are always `null` in collector-produced gaps (they are writer-only).
+
+**Gap-start fallback ordering** (mirrors Python `WebSocketManager._emit_disconnect_gaps` post commit 30348b2): `gap_start_ts = lastReceivedAt[(sym,st)] ?? subscribeAckAt[(sym,st)] ?? now`. The middle fallback is critical — it ensures cold-boot half-open reconnects produce a non-zero-width gap window covering the silent period from SUBSCRIBE-ack to close. Without it, the gap envelope is invisible to downstream consumers.
+
+**Heartbeat envelope** — separate top-level type alongside `data` and `gap`. Schema: `v=1, type="heartbeat", exchange, symbol, stream, received_at, collector_session_id, emitted_at_ns, last_data_at_ns (nullable Long), last_session_seq, status`. Enforced by `EnvelopeCodec` schema validation. See §2.10b for emitter spec.
 
 ### 6.3 `DepthUpdateIds`
 
@@ -840,7 +865,7 @@ Implementation is `harness.MetricSkeletonDump.main`. Gradle task writes to `buil
 
 ## 9. Metrics plan
 
-Eight Prometheus meters, all owned by `CollectorMetrics`. Names and labels MUST match `src/collector/metrics.py` byte-for-byte (Tier 3 §18). Registered WITHOUT the `_total` suffix (Tier 5 H4); Prometheus scrape appends it. `NamingConvention.identity` applied once at construction. Gauges use holder-backed suppliers (Tier 5 H6).
+Nine Prometheus meters, all owned by `CollectorMetrics`. Names and labels MUST match `src/collector/metrics.py` byte-for-byte (Tier 3 §18). Registered WITHOUT the `_total` suffix (Tier 5 H4); Prometheus scrape appends it. `NamingConvention.identity` applied once at construction. Gauges use holder-backed suppliers (Tier 5 H6).
 
 | # | Prometheus metric                         | Java accessor (`CollectorMetrics`)                        | Type       | Label keys                              |
 | - | ----------------------------------------- | --------------------------------------------------------- | ---------- | --------------------------------------- |
@@ -852,6 +877,9 @@ Eight Prometheus meters, all owned by `CollectorMetrics`. Names and labels MUST 
 | 6 | `collector_snapshots_taken_total`          | `Counter snapshotsTaken(exchange, symbol)`                | Counter    | `exchange, symbol`                      |
 | 7 | `collector_snapshots_failed_total`         | `Counter snapshotsFailed(exchange, symbol)`               | Counter    | `exchange, symbol`                      |
 | 8 | `collector_messages_dropped_total`          | `Counter messagesDropped(exchange, symbol, stream)`       | Counter    | `exchange, symbol, stream`              |
+| 9 | `collector_heartbeats_emitted_total`       | `Counter heartbeatsEmitted(exchange, symbol, stream, status)` | Counter | `exchange, symbol, stream, status`     |
+
+`status` label values: `alive`, `subscribed_silent`, `disconnected` (mirrors Python `VALID_HEARTBEAT_STATUS`).
 
 Histogram buckets (Tier 5 H5 — `serviceLevelObjectives(...)`, NOT `publishPercentileHistogram(true)`):
 - `collector_exchange_latency_ms`: `1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000` (mirrors `metrics.py:27-32`).
