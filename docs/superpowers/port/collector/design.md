@@ -24,7 +24,9 @@ com.cryptolake.collector
 │   ├── RawDataExtractor                    # balanced-brace byte extractor (Tier 1 §1, Tier 5 B4)
 │   └── StreamKey                           # aggTrade ↔ trades etc. mapping constants
 ├── connection/
-│   ├── WebSocketClient                     # owns java.net.http.WebSocket; one per socket (public/market)
+│   ├── WebSocketClient                     # owns the single java.net.http.WebSocket carrying all 5 streams
+│   ├── SubscriptionHandshake               # post-connect SUBSCRIBE+ack; defeats Binance silent-drop
+│   ├── FirstFrameWatchdog                  # forces reconnect if any non-exempt stream is silent past 30s
 │   ├── WebSocketListenerImpl               # implements WebSocket.Listener; frame accumulation
 │   ├── FrameAccumulator                    # onText multi-fragment assembly
 │   ├── ReconnectPolicy                     # exp backoff 1→60s, 24h proactive, reset on connect
@@ -106,16 +108,22 @@ Per class: purpose / type / public API / dependencies / thread-safety. Records a
 
 **`StreamKey`** — final utility.
 - Purpose: ports `_STREAM_KEY_MAP`, `_PUBLIC_STREAMS`, `_MARKET_STREAMS`, `_SUBSCRIPTION_MAP` (Tier 5 M2). Four immutable `Map<String,String>` / `Set<String>` constants.
-- Public: `static String toInternal(String binanceKey)`, `static Set<String> publicStreams()`, `static Set<String> marketStreams()`, `static String subscriptionSuffix(String stream)`, `static Map.Entry<String,String> parseStreamKey(String streamKey)`.
+- Public: `static String toInternal(String binanceKey)`, `static Set<String> wsStreams()`, `static String subscriptionSuffix(String stream)`, `static Map.Entry<String,String> parseStreamKey(String streamKey)`. (Single `wsStreams()` set since the public/market socket split is gone — commit 9e40d25.)
 - Thread-safety: constants only.
 
 ### 2.3 Connection layer
 
-**`WebSocketClient`** — final class. Owns one `java.net.http.WebSocket` per socket (`public` / `market`).
-- Purpose: maintain a single long-running WebSocket; surface received bytes via the capture callback.
-- Public: `void connect()` (blocking on the owning virtual thread), `void sendPing()`, `CompletableFuture<WebSocket> close()`, `boolean isConnected()`.
-- Dependencies: `HttpClient`, `URI`, `WebSocketListenerImpl`, `ReconnectPolicy`, `FrameConsumer` (lambda).
+**`WebSocketClient`** — final class. Owns the single `java.net.http.WebSocket` (socket name `"ws"`) carrying all 5 subscribable streams.
+- Purpose: maintain one long-running WebSocket; surface received bytes via the capture callback. The Python collector's prior public+market split is gone (commit 9e40d25); a single socket avoids the multi-connection variant of the Binance silent-drop bug.
+- Public: `void connect()` (blocking on the owning virtual thread; **does not return until the post-connect SUBSCRIBE handshake completes** — see `SubscriptionHandshake` below), `void sendPing()`, `CompletableFuture<WebSocket> close()`, `boolean isConnected()`.
+- Dependencies: `HttpClient`, `URI`, `WebSocketListenerImpl`, `ReconnectPolicy`, `FrameConsumer` (lambda), `SubscriptionHandshake`.
 - Thread-safety: `volatile boolean connected`; reads/writes to `WebSocket` go through its own thread-safe API. No `synchronized` around blocking calls (Tier 2 §9).
+
+**`SubscriptionHandshake`** — final class. Implements the SUBSCRIBE+ack protocol that defeats Binance's silent-subscription-drop bug (Python reference: `src/collector/connection.py:_subscribe_and_ack`, commit 85bbd12).
+- Purpose: post-handshake, send `{"method":"SUBSCRIBE","params":[<subscriptions>],"id":<n>}` and block until Binance acks `{"result":null,"id":<n>}`. The bare URL form (`wss://fstream.binance.com/stream`) plus the JSON ack is the only deterministic confirmation that subscriptions are wired through to Binance's per-stream publishers — URL-query subscriptions silently drop a subset of streams ~50% of cold boots with no detection signal.
+- Public: `void subscribe(WebSocket ws, List<String> subscriptions)` (throws `ConnectionException` on ack timeout / negative ack).
+- Behavior: skip data frames (those have a `"data":` key) while waiting for the ack; only parse frames whose `"id"` matches the request. Ack timeout: 5s.
+- Thread-safety: invoked once per `WebSocketClient.connect()`, on the virtual thread that owns the connection.
 
 **`WebSocketListenerImpl`** — implements `java.net.http.WebSocket.Listener`.
 - Purpose: accumulate multi-fragment text frames via `FrameAccumulator` and hand the complete UTF-8 bytes to the capture callback (Tier 5 D1, D2; Rule 1 pre-parse capture).
@@ -136,10 +144,17 @@ Per class: purpose / type / public API / dependencies / thread-safety. Records a
 - Thread-safety: caller-confined per-client instance.
 
 **`WebSocketSupervisor`** — final class.
-- Purpose: top-level coordinator. For each URL returned by `BinanceAdapter.getWsUrls(...)`, fork a virtual thread running `connectionLoop(socketName, url)` inside a `StructuredTaskScope.ShutdownOnFailure` (Tier 5 A1) so shutdown cancels cleanly. Each `connectionLoop` owns one `WebSocketClient`, catches `IOException`/`ConnectionClosedException`, increments `collector_ws_reconnects_total`, sleeps per `ReconnectPolicy` (via `CountDownLatch.await(timeout)` so stop is interruptible — Tier 5 A3), reconnects. On first public-socket connect with depth enabled, triggers `DepthSnapshotResync.start(symbol)` per symbol.
+- Purpose: top-level coordinator. Owns one `WebSocketClient` (single `"ws"` socket, all 5 streams). Forks a virtual thread running `connectionLoop()` inside a `StructuredTaskScope.ShutdownOnFailure` (Tier 5 A1) so shutdown cancels cleanly. The loop catches `IOException`/`ConnectionClosedException`, increments `collector_ws_reconnects_total`, sleeps per `ReconnectPolicy` (via `CountDownLatch.await(timeout)` so stop is interruptible — Tier 5 A3), reconnects. On the FIRST data frame after a successful connect+ack with depth enabled, triggers `DepthSnapshotResync.start(symbol)` per symbol (deferred-resync pattern from commit 85bbd12 — never run the resync HTTP call concurrently with the socket's first-frame delivery).
+- **Spawns `FirstFrameWatchdog` as a sibling task** to the receive loop on every connect. The watchdog tracks `lastReceivedAt[(symbol, stream)]`; if any non-exempt subscription has not delivered within 30s of the SUBSCRIBE ack, it closes the WebSocket so `connectionLoop` reconnects. `liquidations` is exempt (Binance documents zero frames if no liquidations occur). This recovers the data that the bare SUBSCRIBE+ack protocol still misses ~10-20% of the time when Binance acks but never wires the per-stream publisher.
 - Public: `void start()`, `void stop()`, `boolean isConnected()`, `void triggerDepthResync(String symbol)` (callback used by `DepthStreamHandler`).
-- Dependencies: `List<String> symbols`, `List<String> enabledStreams`, `BinanceAdapter`, `HttpClient`, `RawFrameCapture`, `DepthSnapshotResync`, `BackpressureGate`, `DisconnectGapCoalescer`, `CollectorMetrics`, `ExecutorService` (virtual threads).
+- Dependencies: `List<String> symbols`, `List<String> enabledStreams`, `BinanceAdapter`, `HttpClient`, `RawFrameCapture`, `DepthSnapshotResync`, `BackpressureGate`, `DisconnectGapCoalescer`, `FirstFrameWatchdog`, `CollectorMetrics`, `ExecutorService` (virtual threads).
 - Thread-safety: all maps are `ConcurrentHashMap`; status flags `volatile`. Lifecycle methods (`start`/`stop`) called only from `Main`.
+
+**`FirstFrameWatchdog`** — final class. Forces reconnect when Binance's edge silently fails to wire some subscriptions through (the residual silent-drop variant that survives even the SUBSCRIBE+ack protocol).
+- Purpose: per-connect, watch a `Set<TupleKey>` of expected `(symbol, stream)` pairs. Sleep 2s, check `RawFrameCapture.lastReceivedAt`; if all expected pairs have a non-null timestamp, return (healthy). If the 30s deadline passes with any pair still missing, log `first_frame_deadline_missed` with the missing list and close the WebSocket.
+- Exempt streams: `liquidations` (Binance documents zero frames if no liquidations happen during the window). Hardcoded set, not configurable.
+- Public: `void watch(WebSocket ws, Set<TupleKey> expected, Duration deadline)`.
+- Thread-safety: stateless except for the deadline tracker; one instance per `connectionLoop` iteration.
 
 **`BackpressureGate`** — final class.
 - Purpose: `AtomicInteger consecutiveDrops` + `int threshold=10`. `shouldPause()` returns true when drops ≥ threshold. `onDrop()` increments (invoked by `KafkaProducerBridge` overflow callback, Tier 5 A1 callback thread-safety). `onRecovery()` resets to 0. When paused, the capture pipeline blocks by calling `producer.poll(Duration.ofMillis(100))` on the listener's virtual thread (not `Thread.sleep` — Tier 2 §10) until the gate releases.
@@ -162,7 +177,7 @@ Per class: purpose / type / public API / dependencies / thread-safety. Records a
 - `handle` builds envelopes via `DataEnvelope.create(...)`; Tier 1 §2 SHA-256 is computed inside that factory exactly once.
 - Public: `void onFrame(String socketName, String rawFrame)`, `void onDisconnect(String socketName)` (delegates to `DisconnectGapCoalescer`).
 - Dependencies: `BinanceAdapter`, `Map<String, StreamHandler> handlers`, `SessionSeqAllocator`, `BackpressureGate`, `DisconnectGapCoalescer`, `ExchangeLatencyRecorder`, `ClockSupplier`.
-- Thread-safety: `lastReceivedAt` is `ConcurrentHashMap<TupleKey, Long>`. Handlers are stateless wrt concurrent dispatch or serialize internally. Method is called on the WebSocket listener thread (one per socket) — two sockets call it concurrently; they never share the same `(symbol, stream)` key because `_PUBLIC_STREAMS` and `_MARKET_STREAMS` are disjoint (Tier 5 M2).
+- Thread-safety: `lastReceivedAt` is `ConcurrentHashMap<TupleKey, Long>` (also read by `FirstFrameWatchdog` on a separate virtual thread). Handlers are stateless wrt concurrent dispatch or serialize internally. With the single-socket consolidation (commit 9e40d25) all streams arrive on one listener thread, so handler concurrency is sequential per connect window.
 
 **`FrameRoute`** — record `String streamType, String symbol, String rawText`. Immutable.
 
@@ -993,9 +1008,9 @@ Each question lists a preferred approach and a fallback. The developer MUST NOT 
    - Preferred: branch on the parent directory name (`websocket-frames/depth/` vs `websocket-frames/depth_snapshot/`). For REST-origin streams (`depth_snapshot`, `open_interest`), treat the fixture raw bytes as `rawText` directly, bypassing `BinanceAdapter.routeStream`. Compare bytes and SHA-256 directly.
    - Fallback: require fixture capture to produce two file flavors — `.wsraw` (full frame) and `.restraw` (body only). More work for Python side; escalate if the simple directory-branching approach produces false negatives.
 
-6. **How are `public_streams` / `market_streams` subsets enforced when a future Binance stream is introduced (e.g., `@continuousKline`)?**
-   - Preferred: the `StreamKey` constants are the single source of truth. Adding a new stream requires adding both `_STREAM_KEY_MAP` and `_PUBLIC_STREAMS`/`_MARKET_STREAMS` entries. A unit test asserts `publicStreams()` ∩ `marketStreams() == ∅` (Tier 5 M2 assumes disjoint).
-   - Fallback: none — this is an invariant in both Python and Java. Escalate if a future stream must appear on both sockets.
+6. **How is `_WS_STREAMS` enforced when a future Binance stream is introduced (e.g., `@continuousKline`)?** *(Updated post commit 9e40d25 — public/market split removed.)*
+   - Preferred: the `StreamKey` constants are the single source of truth. Adding a new stream requires adding both `_STREAM_KEY_MAP` and `_WS_STREAMS` entries plus a `_SUBSCRIPTION_MAP` suffix. A unit test asserts every `_WS_STREAMS` entry has both a key map and a subscription suffix. Capacity check: total subscriptions = `symbols * wsStreams.size()`; assert at startup that this is below Binance's documented per-connection cap (1024 streams). If a future symbol/stream growth approaches the cap, partition by symbol — open a new connection per symbol shard, **not** by stream type.
+   - Fallback: none — this is an invariant in both Python and Java.
 
 7. **Is `HttpClient.newBuilder()` sufficient for the `HttpClient` lifecycle, or do we need `executor(virtualThreadExecutor)`?**
    - Preferred: `HttpClient.newBuilder().version(Version.HTTP_2).connectTimeout(Duration.ofSeconds(5)).build()`. Java 21's default executor is already virtual-thread-aware for client-side I/O (design spec §1.4).
