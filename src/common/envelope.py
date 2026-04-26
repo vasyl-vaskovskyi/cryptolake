@@ -36,6 +36,22 @@ GAP_ENVELOPE_FIELDS = frozenset({
     "reason", "detail",
 })
 
+# Per-(symbol, stream) liveness signal emitted on a fixed cadence regardless
+# of whether the upstream is delivering data. Allows downstream consumers to
+# distinguish "collector down" from "Binance silent on this stream" and to
+# detect silent loss without relying on the collector to emit a gap.
+HEARTBEAT_ENVELOPE_FIELDS = frozenset({
+    "v", "type", "exchange", "symbol", "stream", "received_at",
+    "collector_session_id", "emitted_at_ns", "last_data_at_ns",
+    "last_session_seq", "status",
+})
+
+# Valid heartbeat status values:
+# - "alive"               — data flowing recently (last frame within heartbeat interval)
+# - "subscribed_silent"   — SUBSCRIBE acked but stream is silent (Binance-side)
+# - "disconnected"        — WebSocket is currently down (between connect attempts)
+VALID_HEARTBEAT_STATUS = frozenset({"alive", "subscribed_silent", "disconnected"})
+
 BROKER_COORD_FIELDS = frozenset({"_topic", "_partition", "_offset"})
 
 _SENTINEL = object()  # used to distinguish "not provided" from None
@@ -118,6 +134,44 @@ def create_gap_envelope(
             env[key] = value
 
     return env
+
+
+def create_heartbeat_envelope(
+    *,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    collector_session_id: str,
+    emitted_at_ns: int,
+    last_data_at_ns: int | None,
+    last_session_seq: int,
+    status: str,
+) -> dict[str, Any]:
+    """Per-(symbol, stream) liveness envelope.
+
+    Allows the downstream consumer to:
+      - Detect collector silence (missing heartbeats) without an upstream gap.
+      - Distinguish "Binance dropped the subscription" (heartbeats keep arriving
+        with status=subscribed_silent and stale last_data_at_ns) from "collector
+        crashed" (heartbeats stop entirely).
+      - Choose between primary and backup collectors using last_data_at_ns as
+        the freshness indicator.
+    """
+    if status not in VALID_HEARTBEAT_STATUS:
+        raise ValueError(f"Invalid heartbeat status '{status}'")
+    return {
+        "v": 1,
+        "type": "heartbeat",
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "received_at": emitted_at_ns,
+        "collector_session_id": collector_session_id,
+        "emitted_at_ns": emitted_at_ns,
+        "last_data_at_ns": last_data_at_ns,
+        "last_session_seq": last_session_seq,
+        "status": status,
+    }
 
 
 def serialize_envelope(envelope: dict[str, Any]) -> bytes:

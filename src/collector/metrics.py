@@ -48,3 +48,9 @@ messages_dropped_total = Counter(
     "Messages dropped due to buffer overflow",
     ["exchange", "symbol", "stream"],
 )
+
+heartbeats_emitted_total = Counter(
+    "collector_heartbeats_emitted_total",
+    "Per-(symbol, stream) liveness heartbeats produced to Kafka",
+    ["exchange", "symbol", "stream", "status"],
+)

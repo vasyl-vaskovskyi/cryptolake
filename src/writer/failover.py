@@ -242,6 +242,10 @@ class CoverageFilter:
         self._global_max_received: dict[str, int] = {}
         # (source, stream_key, gap_start_ts) -> (envelope, first_seen_monotonic)
         self._pending: dict[tuple[str, tuple[str, str, str], int], tuple[dict, float]] = {}
+        # source -> max heartbeat emitted_at_ns. Distinct from _global_max_received:
+        # heartbeats prove the collector is alive, data proves the upstream was
+        # actually delivering. Both are required for full silent-loss detection.
+        self._global_max_heartbeat: dict[str, int] = {}
 
     @property
     def enabled(self) -> bool:
@@ -314,6 +318,45 @@ class CoverageFilter:
 
         if to_remove:
             writer_metrics.gap_pending_size.set(len(self._pending))
+
+    def handle_heartbeat(self, source: str, envelope: dict) -> None:
+        """Record a heartbeat envelope's liveness signal.
+
+        Heartbeats prove the collector is alive at ``emitted_at_ns``; a heartbeat
+        with status="alive" and a non-null ``last_data_at_ns`` also proves the
+        upstream was delivering at that timestamp (use it as a passive data-
+        coverage update without requiring an actual data envelope).
+
+        Status="subscribed_silent" means collector is up but stream isn't
+        delivering (e.g. Binance silent subscription drop). The heartbeat itself
+        does NOT count as data coverage — only the bundled ``last_data_at_ns``
+        does, and only when status="alive".
+        """
+        if not self.enabled:
+            return
+        emitted_at = envelope.get("emitted_at_ns")
+        if emitted_at is not None and emitted_at > self._global_max_heartbeat.get(source, 0):
+            self._global_max_heartbeat[source] = emitted_at
+        # If the stream had real data recently per the heartbeat, treat it as
+        # passive data coverage so pending gaps from the OTHER source can be
+        # suppressed without waiting for the next data envelope.
+        if envelope.get("status") == "alive":
+            last_data = envelope.get("last_data_at_ns")
+            if last_data is not None:
+                stream_key = (
+                    envelope.get("exchange", ""),
+                    envelope.get("symbol", ""),
+                    envelope.get("stream", ""),
+                )
+                coverage = self._last_received.setdefault(stream_key, {})
+                if last_data > coverage.get(source, 0):
+                    coverage[source] = last_data
+                if last_data > self._global_max_received.get(source, 0):
+                    self._global_max_received[source] = last_data
+
+    def heartbeat_seen(self, source: str) -> int:
+        """Last heartbeat emitted_at_ns we've seen from ``source``. 0 if none."""
+        return self._global_max_heartbeat.get(source, 0)
 
     def handle_gap(self, source: str, envelope: dict) -> bool:
         """Try to suppress or park a gap envelope.

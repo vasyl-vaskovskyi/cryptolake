@@ -664,3 +664,69 @@ class TestFailoverManagerWithCoverageFilter:
         # We don't actually call activate() (would contact Kafka).
         # Instead verify CoverageFilter.max_received returns the max.
         assert cf.max_received(("binance", "btcusdt", "trades")) == 2_000_000_000_000_000_000
+
+
+def _heartbeat_env(exchange="binance", symbol="btcusdt", stream="trades",
+                   emitted_at=2000, last_data_at=1500, last_seq=10, status="alive"):
+    return {
+        "type": "heartbeat",
+        "exchange": exchange,
+        "symbol": symbol,
+        "stream": stream,
+        "emitted_at_ns": emitted_at,
+        "last_data_at_ns": last_data_at,
+        "last_session_seq": last_seq,
+        "status": status,
+    }
+
+
+class TestCoverageFilterHandleHeartbeat:
+    def test_heartbeat_records_global_liveness(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_heartbeat("primary", _heartbeat_env(emitted_at=5000))
+        assert cf.heartbeat_seen("primary") == 5000
+        assert cf.heartbeat_seen("backup") == 0
+
+    def test_alive_heartbeat_passively_updates_data_coverage(self):
+        """An alive heartbeat with last_data_at_ns proves the upstream was
+        delivering — same effect as a data envelope at last_data_at_ns."""
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_heartbeat("backup", _heartbeat_env(
+            emitted_at=5000, last_data_at=4500, status="alive",
+        ))
+        assert cf.last_received("backup", ("binance", "btcusdt", "trades")) == 4500
+        assert cf.max_received(("binance", "btcusdt", "trades")) == 4500
+
+    def test_subscribed_silent_does_not_imply_data_coverage(self):
+        """status=subscribed_silent means collector alive but stream silent —
+        last_data_at_ns must NOT be applied as data coverage."""
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_heartbeat("backup", _heartbeat_env(
+            emitted_at=5000, last_data_at=4500, status="subscribed_silent",
+        ))
+        # Heartbeat liveness recorded
+        assert cf.heartbeat_seen("backup") == 5000
+        # But no data coverage advanced
+        assert cf.last_received("backup", ("binance", "btcusdt", "trades")) == 0
+
+    def test_heartbeat_does_not_regress_data_coverage(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_data("backup", _data_env(received_at=8000))
+        cf.handle_heartbeat("backup", _heartbeat_env(
+            emitted_at=9000, last_data_at=4500, status="alive",
+        ))
+        # last_data_at < existing coverage → no regression
+        assert cf.last_received("backup", ("binance", "btcusdt", "trades")) == 8000
+
+    def test_heartbeat_disabled_when_filter_disabled(self):
+        cf = CoverageFilter(grace_period_seconds=0.0)
+        cf.handle_heartbeat("primary", _heartbeat_env(emitted_at=5000))
+        assert cf.heartbeat_seen("primary") == 0
+
+    def test_alive_heartbeat_with_no_last_data_records_only_liveness(self):
+        cf = CoverageFilter(grace_period_seconds=10.0)
+        cf.handle_heartbeat("backup", _heartbeat_env(
+            emitted_at=5000, last_data_at=None, status="alive",
+        ))
+        assert cf.heartbeat_seen("backup") == 5000
+        assert cf.last_received("backup", ("binance", "btcusdt", "trades")) == 0

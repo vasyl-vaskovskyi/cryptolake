@@ -12,6 +12,7 @@ from src.common.config import load_config
 from src.common.health_server import start_health_server
 from src.common.system_identity import get_host_boot_id
 from src.collector.connection import WebSocketManager
+from src.collector.heartbeat import HeartbeatEmitter
 from src.collector.producer import CryptoLakeProducer
 from src.collector.snapshot import SnapshotScheduler, parse_interval_seconds
 from src.collector.streams.base import StreamHandler
@@ -242,6 +243,22 @@ class Collector:
                     self.exchange_cfg.open_interest.poll_interval),
             )
             self._tasks.append(asyncio.create_task(self.oi_poller.start()))
+
+        # Per-(symbol, stream) liveness heartbeat. Continuous cadence regardless
+        # of data flow gives the consumer a definitive "collector is alive,
+        # this stream is/isn't delivering" signal it can act on without
+        # relying on upstream gap inference.
+        self.heartbeat_emitter = HeartbeatEmitter(
+            producer=self.producer,
+            exchange="binance",
+            symbols=self.symbols,
+            streams=self.enabled_streams,
+            collector_session_id=self.session_id,
+            last_received_at=self.ws_manager._last_received_at,
+            seq_counters=self.ws_manager._seq_counters,
+            ws_connected=self.ws_manager._ws_connected,
+        )
+        self._tasks.append(asyncio.create_task(self.heartbeat_emitter.start()))
 
         # Health/metrics HTTP server
         self._tasks.append(asyncio.create_task(

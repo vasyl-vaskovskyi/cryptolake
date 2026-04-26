@@ -306,3 +306,52 @@ class TestEnvelopeSerialization:
         assert stamped["_topic"] == "binance.trades"
         assert stamped["_partition"] == 0
         assert stamped["_offset"] == 42
+
+
+class TestHeartbeatEnvelope:
+    def test_heartbeat_envelope_alive_with_data(self):
+        from src.common.envelope import create_heartbeat_envelope, HEARTBEAT_ENVELOPE_FIELDS
+
+        env = create_heartbeat_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="trades",
+            collector_session_id="sess-1",
+            emitted_at_ns=1_000_000_000_000_000_000,
+            last_data_at_ns=999_999_999_000_000_000,
+            last_session_seq=42,
+            status="alive",
+        )
+        assert env["type"] == "heartbeat"
+        assert env["v"] == 1
+        assert env["status"] == "alive"
+        assert env["last_data_at_ns"] == 999_999_999_000_000_000
+        assert env["last_session_seq"] == 42
+        # Schema completeness
+        assert set(env.keys()) == HEARTBEAT_ENVELOPE_FIELDS
+
+    def test_heartbeat_envelope_subscribed_silent_no_data(self):
+        from src.common.envelope import create_heartbeat_envelope
+
+        env = create_heartbeat_envelope(
+            exchange="binance",
+            symbol="btcusdt",
+            stream="liquidations",
+            collector_session_id="sess-1",
+            emitted_at_ns=1_000_000_000_000_000_000,
+            last_data_at_ns=None,  # never had data
+            last_session_seq=0,
+            status="subscribed_silent",
+        )
+        assert env["last_data_at_ns"] is None
+        assert env["status"] == "subscribed_silent"
+
+    def test_heartbeat_envelope_invalid_status_rejected(self):
+        from src.common.envelope import create_heartbeat_envelope
+
+        with pytest.raises(ValueError, match="Invalid heartbeat status"):
+            create_heartbeat_envelope(
+                exchange="binance", symbol="btcusdt", stream="trades",
+                collector_session_id="s", emitted_at_ns=1, last_data_at_ns=None,
+                last_session_seq=0, status="bogus",
+            )

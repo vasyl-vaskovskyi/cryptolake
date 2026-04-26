@@ -975,6 +975,13 @@ class WriterConsumer:
                         self._failover.track_record(envelope)
                         self._failover.reset_silence_timer()
                         await self._handle_rotation_and_buffer(envelope, active_hours)
+                elif env_type == "heartbeat":
+                    # Liveness-only signal; no archive write, no gap detection,
+                    # no failover state change. Reset the silence timer (proof
+                    # primary is alive) and feed coverage filter for cross-
+                    # collector freshness comparison.
+                    self._coverage_filter.handle_heartbeat("primary", envelope)
+                    self._failover.reset_silence_timer()
                 else:
                     self._coverage_filter.handle_data("primary", envelope)
                     self._failover.track_record(envelope)
@@ -991,21 +998,27 @@ class WriterConsumer:
                         envelope = self._deserialize_backup_msg(backup_msg)
                         if envelope is not None and not self._failover.should_filter(envelope):
                             env_type = envelope.get("type")
-                            backup_handled_by_filter = (
-                                env_type == "gap"
-                                and self._coverage_filter.handle_gap("backup", envelope)
-                            )
-                            if not backup_handled_by_filter:
-                                if env_type != "gap":
-                                    self._coverage_filter.handle_data("backup", envelope)
+                            if env_type == "heartbeat":
+                                # Backup heartbeat — feed coverage filter so any
+                                # primary gap whose window is covered by backup
+                                # liveness gets suppressed. No archive write.
+                                self._coverage_filter.handle_heartbeat("backup", envelope)
+                            else:
+                                backup_handled_by_filter = (
+                                    env_type == "gap"
+                                    and self._coverage_filter.handle_gap("backup", envelope)
+                                )
+                                if not backup_handled_by_filter:
+                                    if env_type != "gap":
+                                        self._coverage_filter.handle_data("backup", envelope)
 
-                                self._count_consumed(envelope)
-                                self._failover.track_record(envelope)
-                                writer_metrics.failover_records_total.inc()
-                                # NOTE: skip _check_session_change for backup records --
-                                # backup collector has its own session ID which would
-                                # incorrectly trigger session change detection.
-                                await self._handle_rotation_and_buffer(envelope, active_hours)
+                                    self._count_consumed(envelope)
+                                    self._failover.track_record(envelope)
+                                    writer_metrics.failover_records_total.inc()
+                                    # NOTE: skip _check_session_change for backup records --
+                                    # backup collector has its own session ID which would
+                                    # incorrectly trigger session change detection.
+                                    await self._handle_rotation_and_buffer(envelope, active_hours)
 
                 # Probe primary -- short timeout
                 primary_msg = await loop.run_in_executor(None, self._consumer.poll, 0.1)
@@ -1013,7 +1026,12 @@ class WriterConsumer:
                     envelope = self._deserialize_and_stamp(primary_msg)
                     if envelope is not None:
                         probe_type = envelope.get("type")
-                        if probe_type == "gap":
+                        if probe_type == "heartbeat":
+                            # Heartbeats during failover indicate primary process
+                            # liveness but NOT data flow — do NOT trigger switchback.
+                            # Feed coverage filter for cross-source freshness.
+                            self._coverage_filter.handle_heartbeat("primary", envelope)
+                        elif probe_type == "gap":
                             # A primary gap envelope during failover is NOT a sign the
                             # primary is healthy — do NOT trigger switchback. Route it
                             # through the coverage filter which will suppress it if
