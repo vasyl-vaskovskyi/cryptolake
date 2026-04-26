@@ -63,6 +63,9 @@ class WebSocketManager:
         self._running = False
         self._ws_connected: dict[str, bool] = {}  # {socket_name: connected}
         self._last_received_at: dict[tuple[str, str], int] = {}
+        # Per-(sym, stream) timestamp of the last successful SUBSCRIBE ack;
+        # used as gap_start fallback when a stream gets no first frame.
+        self._subscribe_ack_at: dict[tuple[str, str], int] = {}
         self._consecutive_drops = 0
         self._backpressure_threshold = 10  # consecutive drops before pausing WS reads
         self._tasks: list[asyncio.Task] = []
@@ -206,6 +209,20 @@ class WebSocketManager:
             if isinstance(parsed, dict) and parsed.get("id") == sub_id:
                 if parsed.get("result", "missing") is None:
                     logger.info("ws_subscribe_acked", socket=socket_name, id=sub_id)
+                    # Record per-(sym,stream) ack timestamp so any subsequent
+                    # disconnect produces a meaningful gap window even on
+                    # streams that never delivered a frame this connect (the
+                    # watchdog's exact target case). _emit_disconnect_gaps
+                    # falls back to this when last_received_at is missing.
+                    # Stored separately so the watchdog (which checks
+                    # last_received_at to detect actual data delivery) is
+                    # unaffected by this baseline.
+                    ack_ns = time.time_ns()
+                    ws_streams = [s for s in self.enabled_streams
+                                  if s not in _REST_ONLY_STREAMS]
+                    for sym in self.symbols:
+                        for st in ws_streams:
+                            self._subscribe_ack_at[(sym, st)] = ack_ns
                     return
                 raise ConnectionError(f"SUBSCRIBE rejected: {parsed!r}")
 
@@ -298,7 +315,19 @@ class WebSocketManager:
             self._disconnect_gap_emitted.discard((symbol, stream_type))
 
             self._last_received_at[(symbol, stream_type)] = time.time_ns()
-            await handler.handle(symbol, raw_text, exchange_ts, seq)
+            try:
+                await handler.handle(symbol, raw_text, exchange_ts, seq)
+            except Exception as e:
+                # Don't crash the receive loop; emit a gap so downstream sees
+                # the hole, log diagnostics, then continue with the next frame.
+                logger.error("handler_failed", stream=stream_type,
+                             symbol=symbol, seq=seq, error=str(e))
+                self.producer.emit_gap(
+                    symbol=symbol, stream=stream_type,
+                    session_seq=seq,
+                    reason="handler_error",
+                    detail=f"{type(handler).__name__} raised: {e}",
+                )
 
     async def _depth_resync(self, symbol: str) -> None:
         """Depth resync flow per spec Section 7.2."""
@@ -407,7 +436,15 @@ class WebSocketManager:
                     continue
                 if (symbol, stream) in self._disconnect_gap_emitted:
                     continue  # already emitted on first disconnect for this outage
-                gap_start = self._last_received_at.get((symbol, stream), now)
+                # gap_start preference order (defense in depth against zero-width gaps):
+                # 1. last data frame received on this stream (most precise)
+                # 2. SUBSCRIBE-ack timestamp (covers half-open: stream subscribed
+                #    but never delivered data)
+                # 3. now (only as last-resort fallback if neither is recorded)
+                gap_start = self._last_received_at.get(
+                    (symbol, stream),
+                    self._subscribe_ack_at.get((symbol, stream), now),
+                )
                 seq = self._next_seq(symbol, stream)
                 self.producer.emit_gap(
                     symbol=symbol, stream=stream,

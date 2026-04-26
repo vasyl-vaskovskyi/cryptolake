@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import orjson
 import structlog
 from confluent_kafka import Producer as KafkaProducer
 
@@ -160,15 +161,38 @@ class CryptoLakeProducer:
             self._on_overflow(self.exchange, symbol, stream)
 
     def _make_delivery_cb(self, stream: str):
-        """Create a delivery callback that decrements per-stream buffer count."""
+        """Create a delivery callback that decrements per-stream buffer count
+        and emits a kafka_delivery_failed gap on error so downstream sees the
+        hole. The gap itself is not retried-on-fail (would recurse if Kafka is
+        completely down)."""
         def _cb(err, msg):
             with self._lock:
                 count = self._buffer_counts.get(stream, 0)
                 if count > 0:
                     self._buffer_counts[stream] = count - 1
-            if err is not None:
-                logger.error("producer_delivery_failed", error=str(err),
-                             topic=msg.topic(), key=msg.key())
+            if err is None:
+                return
+            logger.error("producer_delivery_failed", error=str(err),
+                         topic=msg.topic(), key=msg.key())
+            # Reconstruct (symbol, seq, received_at) from the failed message
+            # and emit a gap. Skip if the failed message was already a gap
+            # envelope — emitting another one would recurse on broker outage.
+            try:
+                env = orjson.loads(msg.value())
+                if env.get("type") != "data":
+                    return
+                self.emit_gap(
+                    symbol=env["symbol"],
+                    stream=env["stream"],
+                    session_seq=env.get("session_seq", 0),
+                    reason="kafka_delivery_failed",
+                    detail=f"Kafka delivery error: {err}",
+                    gap_start_ts=env.get("received_at"),
+                    gap_end_ts=time.time_ns(),
+                )
+            except Exception as e:
+                logger.error("delivery_fail_gap_emit_failed",
+                             error=str(e), original_error=str(err))
         return _cb
 
     def _emit_overflow_gap(self, symbol: str, stream: str, window: dict) -> None:

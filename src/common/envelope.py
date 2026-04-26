@@ -20,6 +20,8 @@ VALID_GAP_REASONS = frozenset(
         "deserialization_error",
         "checkpoint_lost",
         "missing_hour",
+        "kafka_delivery_failed",  # producer.poll delivery callback received err
+        "handler_error",          # handler.handle() raised — frame lost without disconnect
     }
 )
 
