@@ -15,8 +15,8 @@ import java.util.Map;
  * Binance USD-M Futures exchange adapter.
  *
  * <p>Ports {@code BinanceAdapter} from {@code src/exchanges/binance.py}. Stateless per instance
- * except for the two base URLs. All methods are pure (thread-safe) given a thread-safe
- * {@link ObjectMapper}.
+ * except for the two base URLs. All methods are pure (thread-safe) given a thread-safe {@link
+ * ObjectMapper}.
  *
  * <p>The {@link #routeStream(String)} method extracts {@code raw_text} using balanced-brace byte
  * slicing (via {@link RawDataExtractor}) <em>before</em> any Jackson parse — Tier 1 §1, Tier 5 B4.
@@ -40,8 +40,8 @@ public final class BinanceAdapter {
   // ── WebSocket URL building ────────────────────────────────────────────────
 
   /**
-   * Returns the subscriptions list for the SUBSCRIBE JSON message: one entry per
-   * {@code (symbol, stream)} pair that has a WS subscription suffix (Tier 5 M2).
+   * Returns the subscriptions list for the SUBSCRIBE JSON message: one entry per {@code (symbol,
+   * stream)} pair that has a WS subscription suffix (Tier 5 M2).
    */
   public List<String> getSubscriptions(List<String> symbols, List<String> streams) {
     List<String> subs = new ArrayList<>();
@@ -112,8 +112,8 @@ public final class BinanceAdapter {
    * Extracts the exchange timestamp in milliseconds from a data payload. Returns {@code null} for
    * streams that have no event timestamp (depth_snapshot, or any missing "E" field).
    *
-   * <p>The returned value is left as-is (ms) — callers convert to the correct unit for latency
-   * math (Tier 5 E4).
+   * <p>The returned value is left as-is (ms) — callers convert to the correct unit for latency math
+   * (Tier 5 E4).
    */
   public Long extractExchangeTs(String stream, String rawText) {
     JsonNode parsed;
@@ -135,16 +135,16 @@ public final class BinanceAdapter {
 
   // ── REST URL builders ─────────────────────────────────────────────────────
 
-  /**
-   * Builds the depth snapshot URL for the given symbol (uppercase — Tier 5 M1).
-   */
+  /** Builds the depth snapshot URL for the given symbol (uppercase — Tier 5 M1). */
   public String buildSnapshotUrl(String symbol, int limit) {
-    return restBase + "/fapi/v1/depth?symbol=" + symbol.toUpperCase(Locale.ROOT) + "&limit=" + limit;
+    return restBase
+        + "/fapi/v1/depth?symbol="
+        + symbol.toUpperCase(Locale.ROOT)
+        + "&limit="
+        + limit;
   }
 
-  /**
-   * Builds the open-interest URL for the given symbol.
-   */
+  /** Builds the open-interest URL for the given symbol. */
   public String buildOpenInterestUrl(String symbol) {
     return restBase + "/fapi/v1/openInterest?symbol=" + symbol.toUpperCase(Locale.ROOT);
   }

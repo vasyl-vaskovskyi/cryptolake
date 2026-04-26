@@ -19,8 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Ports {@code SnapshotScheduler} from {@code src/collector/snapshot.py}. Each symbol runs on
  * its own virtual thread with a staggered initial delay ({@code interval / symbolCount * i}).
  *
- * <p>Important: periodic snapshots do NOT call {@code DepthStreamHandler.setSyncPoint} — that
- * is only done by {@link DepthSnapshotResync} (matches Python comment in {@code snapshot.py:156-159}).
+ * <p>Important: periodic snapshots do NOT call {@code DepthStreamHandler.setSyncPoint} — that is
+ * only done by {@link DepthSnapshotResync} (matches Python comment in {@code snapshot.py:156-159}).
  *
  * <p>Uses {@link CountDownLatch#await(long, TimeUnit)} for interruptible waits (Tier 5 A3).
  */
@@ -67,9 +67,7 @@ public final class SnapshotScheduler {
     }
   }
 
-  /**
-   * Parses an interval string ({@code "5m"}, {@code "1m"}, {@code "30s"}) to seconds.
-   */
+  /** Parses an interval string ({@code "5m"}, {@code "1m"}, {@code "30s"}) to seconds. */
   public static int parseIntervalSeconds(String interval) {
     if (interval == null || interval.isEmpty()) return 300;
     if (interval.endsWith("m")) {
@@ -92,9 +90,7 @@ public final class SnapshotScheduler {
       final String sym = symbol;
       final int intSec = intervalSec;
       final long delSec = delaySec;
-      Thread.ofVirtual()
-          .name("snapshot-" + symbol)
-          .start(() -> pollLoop(sym, intSec, delSec));
+      Thread.ofVirtual().name("snapshot-" + symbol).start(() -> pollLoop(sym, intSec, delSec));
     }
   }
 
@@ -133,15 +129,25 @@ public final class SnapshotScheduler {
     var rawText = fetcher.fetch(symbol);
     if (rawText.isEmpty()) {
       log.warn("snapshot_poll_miss", "symbol", symbol);
-      gapEmitter.emit(symbol, "depth_snapshot", -1L, "snapshot_poll_miss",
+      gapEmitter.emit(
+          symbol,
+          "depth_snapshot",
+          -1L,
+          "snapshot_poll_miss",
           "REST snapshot fetch failed after 3 retries");
       return;
     }
     // Produce depth_snapshot envelope
-    DataEnvelope env = DataEnvelope.create(
-        exchange, symbol, "depth_snapshot", rawText.get(),
-        0L, // depth_snapshot has no exchange_ts
-        session.sessionId(), -1L, clock);
+    DataEnvelope env =
+        DataEnvelope.create(
+            exchange,
+            symbol,
+            "depth_snapshot",
+            rawText.get(),
+            0L, // depth_snapshot has no exchange_ts
+            session.sessionId(),
+            -1L,
+            clock);
     producer.produce(env);
     log.info("snapshot_produced", "symbol", symbol);
   }

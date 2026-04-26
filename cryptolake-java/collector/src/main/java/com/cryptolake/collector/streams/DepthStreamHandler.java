@@ -25,6 +25,7 @@ import java.util.function.Consumer;
  * <p>Ports {@code DepthHandler} from {@code src/collector/streams/depth.py}.
  *
  * <p>State per symbol:
+ *
  * <ul>
  *   <li>{@code pendingDiffs} — buffered when not yet synced (up to {@link #MAX_PENDING_DIFFS}).
  *   <li>{@code detectors} — per-symbol pu-chain validator.
@@ -89,7 +90,11 @@ public final class DepthStreamHandler implements StreamHandler {
     Optional<SeqGap> seqGap = tracker.check(sessionSeq);
     if (seqGap.isPresent()) {
       SeqGap g = seqGap.get();
-      gapEmitter.emit(symbol, "depth", sessionSeq, "session_seq_skip",
+      gapEmitter.emit(
+          symbol,
+          "depth",
+          sessionSeq,
+          "session_seq_skip",
           "Expected seq " + g.expected() + " got " + g.actual());
     }
 
@@ -138,10 +143,16 @@ public final class DepthStreamHandler implements StreamHandler {
     }
 
     // Valid diff: produce
-    DataEnvelope env = DataEnvelope.create(
-        exchange, symbol, "depth", rawText,
-        exchangeTs != null ? exchangeTs : 0L,
-        session.sessionId(), sessionSeq, clock);
+    DataEnvelope env =
+        DataEnvelope.create(
+            exchange,
+            symbol,
+            "depth",
+            rawText,
+            exchangeTs != null ? exchangeTs : 0L,
+            session.sessionId(),
+            sessionSeq,
+            clock);
     producer.produce(env);
   }
 
@@ -161,9 +172,13 @@ public final class DepthStreamHandler implements StreamHandler {
     Long firstDrop = firstDropTsNs.remove(symbol);
     if (drops != null && drops > 0 && firstDrop != null) {
       gapEmitter.emitWithTimestamps(
-          symbol, "depth", -1L, "pu_chain_break",
+          symbol,
+          "depth",
+          -1L,
+          "pu_chain_break",
           "Dropped " + drops + " diffs while buffering (buffer full)",
-          firstDrop, clock.nowNs());
+          firstDrop,
+          clock.nowNs());
     }
 
     // Replay buffered diffs
@@ -184,7 +199,11 @@ public final class DepthStreamHandler implements StreamHandler {
       if (!result.valid()) {
         if (result.isGap()) {
           // pu-chain break during replay — emit gap and trigger resync
-          gapEmitter.emit(symbol, "depth", diff.sessionSeq(), "pu_chain_break",
+          gapEmitter.emit(
+              symbol,
+              "depth",
+              diff.sessionSeq(),
+              "pu_chain_break",
               "pu chain break during snapshot replay: " + result.reason());
           detector.reset();
           onPuChainBreak.accept(symbol);
@@ -193,10 +212,16 @@ public final class DepthStreamHandler implements StreamHandler {
         continue;
       }
 
-      DataEnvelope env = DataEnvelope.create(
-          exchange, symbol, "depth", diff.rawText(),
-          diff.exchangeTs() != null ? diff.exchangeTs() : 0L,
-          session.sessionId(), diff.sessionSeq(), clock);
+      DataEnvelope env =
+          DataEnvelope.create(
+              exchange,
+              symbol,
+              "depth",
+              diff.rawText(),
+              diff.exchangeTs() != null ? diff.exchangeTs() : 0L,
+              session.sessionId(),
+              diff.sessionSeq(),
+              clock);
       producer.produce(env);
     }
   }

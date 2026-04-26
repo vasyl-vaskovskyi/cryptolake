@@ -15,11 +15,12 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Gate 3 parity harness: verifies byte-for-byte identity of {@code raw_text} and {@code
- * raw_sha256} in Java vs Python-produced fixture envelopes.
+ * Gate 3 parity harness: verifies byte-for-byte identity of {@code raw_text} and {@code raw_sha256}
+ * in Java vs Python-produced fixture envelopes.
  *
- * <p>Fixture layout: {@code parity-fixtures/websocket-frames/{stream}/{timestamp}-{seq}-{stream}.raw}
- * with a sibling {@code .json} file (the Python-produced {@link DataEnvelope}).
+ * <p>Fixture layout: {@code
+ * parity-fixtures/websocket-frames/{stream}/{timestamp}-{seq}-{stream}.raw} with a sibling {@code
+ * .json} file (the Python-produced {@link DataEnvelope}).
  *
  * <p>The {@code .raw} files contain the extracted {@code raw_text} value directly — the Python
  * {@code FrameTap} saves the inner data payload, not the full WebSocket frame. Therefore, the
@@ -47,8 +48,7 @@ public final class RawTextParityHarness {
         try (Stream<Path> files = Files.list(streamDir)) {
           for (Path rawPath : files.filter(p -> p.toString().endsWith(".raw")).toList()) {
             Path jsonPath =
-                rawPath.resolveSibling(
-                    rawPath.getFileName().toString().replace(".raw", ".json"));
+                rawPath.resolveSibling(rawPath.getFileName().toString().replace(".raw", ".json"));
             if (!Files.exists(jsonPath)) {
               System.err.println("WARNING: no JSON sibling for " + rawPath);
               continue;
@@ -68,7 +68,11 @@ public final class RawTextParityHarness {
       report.append("OK ").append(total).append(" fixtures\n");
       System.out.println("gate3 OK: " + total + " fixtures all byte-identical");
     } else {
-      report.append("FAIL ").append(failures.size()).append("/").append(total)
+      report
+          .append("FAIL ")
+          .append(failures.size())
+          .append("/")
+          .append(total)
           .append(" fixtures differ\n");
       for (String f : failures) {
         report.append(f).append("\n");
@@ -109,8 +113,12 @@ public final class RawTextParityHarness {
       // Compare raw_sha256 (Tier 1 §2)
       String javaSha = Sha256.hexDigestUtf8(javaRawText);
       if (!javaSha.equals(expected.rawSha256())) {
-        return "FAIL " + rawPath + ":\n  sha256 mismatch java=" + javaSha
-            + " expected=" + expected.rawSha256();
+        return "FAIL "
+            + rawPath
+            + ":\n  sha256 mismatch java="
+            + javaSha
+            + " expected="
+            + expected.rawSha256();
       }
 
       return null; // success

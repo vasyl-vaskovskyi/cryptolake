@@ -32,6 +32,7 @@ public final class DepthGapDetector {
    * Validates a depth diff ({@code U}, {@code u}, {@code pu}) against the pu-chain.
    *
    * <p>Returns:
+   *
    * <ul>
    *   <li>{@link DiffValidationResult#ok()} — diff is valid and accepted
    *   <li>{@link DiffValidationResult#stale()} — diff is before the sync point (discard silently)

@@ -32,13 +32,15 @@ class GapEmitterTest {
     metrics = new CollectorMetrics(registry);
     testProducer = new TestProducerBridge();
     CollectorSession session =
-        new CollectorSession("test-collector", "test-collector_2026-01-01T00:00:00Z", Instant.now());
+        new CollectorSession(
+            "test-collector", "test-collector_2026-01-01T00:00:00Z", Instant.now());
     ClockSupplier clock = () -> 1_000_000_000_000L;
     gapEmitter = new GapEmitter("binance", session, testProducer, metrics, clock);
   }
 
   @Test
-  // ports: tests/unit/collector/test_emit_gap.py::test_emit_gap_produces_gap_envelope_and_increments_metric
+  // ports:
+  // tests/unit/collector/test_emit_gap.py::test_emit_gap_produces_gap_envelope_and_increments_metric
   void emitGapProducesEnvelopeAndIncrementsMetric() {
     gapEmitter.emit("btcusdt", "depth", 5L, "ws_disconnect", "test detail");
 
@@ -67,7 +69,8 @@ class GapEmitterTest {
   }
 
   @Test
-  // ports: tests/unit/collector/test_emit_gap.py::test_emit_overflow_gap_increments_gaps_detected_total
+  // ports:
+  // tests/unit/collector/test_emit_gap.py::test_emit_overflow_gap_increments_gaps_detected_total
   void emitOverflowGapIncrementsGapsDetectedTotal() {
     OverflowWindow window = new OverflowWindow(900_000_000_000L, 5);
     gapEmitter.emitOverflowRecovery("btcusdt", "depth", window);

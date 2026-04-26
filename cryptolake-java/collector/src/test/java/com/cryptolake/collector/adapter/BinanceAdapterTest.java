@@ -20,9 +20,7 @@ class BinanceAdapterTest {
   void setUp() {
     adapter =
         new BinanceAdapter(
-            "wss://fstream.binance.com",
-            "https://fapi.binance.com",
-            EnvelopeCodec.newMapper());
+            "wss://fstream.binance.com", "https://fapi.binance.com", EnvelopeCodec.newMapper());
   }
 
   @Test
@@ -43,9 +41,7 @@ class BinanceAdapterTest {
     // Values exceeding Integer.MAX_VALUE (2^31 = 2147483648)
     long bigU = 3_000_000_000L;
     long bigPu = 2_999_999_999L;
-    String rawText =
-        String.format(
-            "{\"U\":%d,\"u\":%d,\"pu\":%d}", bigU, bigU, bigPu);
+    String rawText = String.format("{\"U\":%d,\"u\":%d,\"pu\":%d}", bigU, bigU, bigPu);
     DepthUpdateIds ids = adapter.parseDepthUpdateIds(rawText);
     assertThat(ids.U()).isEqualTo(bigU);
     assertThat(ids.u()).isEqualTo(bigU);

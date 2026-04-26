@@ -3,7 +3,6 @@ package com.cryptolake.collector.connection;
 import com.cryptolake.common.logging.StructuredLogger;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;

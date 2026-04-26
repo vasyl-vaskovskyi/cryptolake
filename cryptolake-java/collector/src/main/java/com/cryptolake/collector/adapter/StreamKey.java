@@ -53,16 +53,16 @@ public final class StreamKey {
   }
 
   /**
-   * Returns the WS subscription suffix for an internal stream name (e.g. {@code "trades"} →
-   * {@code "@aggTrade"}). Returns {@code null} if not a WS stream.
+   * Returns the WS subscription suffix for an internal stream name (e.g. {@code "trades"} → {@code
+   * "@aggTrade"}). Returns {@code null} if not a WS stream.
    */
   public static String subscriptionSuffix(String stream) {
     return SUBSCRIPTION_MAP.get(stream);
   }
 
   /**
-   * Parses a Binance combined-stream key (e.g. {@code "btcusdt@aggTrade"}) into {@code
-   * (symbol, streamType)}.
+   * Parses a Binance combined-stream key (e.g. {@code "btcusdt@aggTrade"}) into {@code (symbol,
+   * streamType)}.
    *
    * <p>Strips parameters after a second {@code "@"} (e.g. {@code depth@100ms} → {@code "depth"}).
    * Returns {@code null} for unknown stream keys (caller should drop the frame).

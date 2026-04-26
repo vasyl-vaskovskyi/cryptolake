@@ -1,18 +1,19 @@
 package com.cryptolake.collector.gap;
 
+import com.cryptolake.collector.CollectorSession;
 import com.cryptolake.collector.metrics.CollectorMetrics;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.collector.producer.OverflowWindow;
-import com.cryptolake.collector.CollectorSession;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 
 /**
- * THE TRIAD: every gap emission in the collector module goes through this class (Tier 1 §5;
- * design §2.7).
+ * THE TRIAD: every gap emission in the collector module goes through this class (Tier 1 §5; design
+ * §2.7).
  *
  * <p>Each {@link #emit} call does:
+ *
  * <ol>
  *   <li>Increments {@code collector_gaps_detected_total{exchange, symbol, stream, reason}}.
  *   <li>Logs a structured {@code gap_emitted} event (Tier 5 H2).
@@ -46,18 +47,13 @@ public final class GapEmitter {
     this.clock = clock;
   }
 
-  /**
-   * Emits a gap with {@code now} as both gap_start_ts and gap_end_ts.
-   */
-  public void emit(
-      String symbol, String stream, long sessionSeq, String reason, String detail) {
+  /** Emits a gap with {@code now} as both gap_start_ts and gap_end_ts. */
+  public void emit(String symbol, String stream, long sessionSeq, String reason, String detail) {
     long now = clock.nowNs();
     emitWithTimestamps(symbol, stream, sessionSeq, reason, detail, now, now);
   }
 
-  /**
-   * Emits a gap with explicit start and end timestamps.
-   */
+  /** Emits a gap with explicit start and end timestamps. */
   public void emitWithTimestamps(
       String symbol,
       String stream,
@@ -73,14 +69,22 @@ public final class GapEmitter {
     // (2) Structured log (Tier 1 §5 action 2; Tier 5 H2)
     log.info(
         "gap_emitted",
-        "exchange", exchange,
-        "symbol", symbol,
-        "stream", stream,
-        "reason", reason,
-        "gap_start_ts", gapStartTs,
-        "gap_end_ts", gapEndTs,
-        "session_seq", sessionSeq,
-        "detail", detail);
+        "exchange",
+        exchange,
+        "symbol",
+        symbol,
+        "stream",
+        stream,
+        "reason",
+        reason,
+        "gap_start_ts",
+        gapStartTs,
+        "gap_end_ts",
+        gapEndTs,
+        "session_seq",
+        sessionSeq,
+        "detail",
+        detail);
 
     // (3) Build and produce gap envelope (Tier 1 §5 action 3)
     GapEnvelope gap =
@@ -98,9 +102,7 @@ public final class GapEmitter {
     producer.produceGap(gap);
   }
 
-  /**
-   * Emits a {@code buffer_overflow} gap when recovering from an overflow window.
-   */
+  /** Emits a {@code buffer_overflow} gap when recovering from an overflow window. */
   public void emitOverflowRecovery(String symbol, String stream, OverflowWindow window) {
     long now = clock.nowNs();
     String detail =

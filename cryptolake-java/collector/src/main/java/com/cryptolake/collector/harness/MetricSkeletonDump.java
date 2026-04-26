@@ -13,8 +13,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Harness that instantiates {@link CollectorMetrics}, exercises each meter with sample label values,
- * scrapes the Prometheus registry, canonicalizes the output, and writes it to {@code args[0]}.
+ * Harness that instantiates {@link CollectorMetrics}, exercises each meter with sample label
+ * values, scrapes the Prometheus registry, canonicalizes the output, and writes it to {@code
+ * args[0]}.
  *
  * <p>Used by the Gradle {@code :collector:dumpMetricSkeleton} task (gate 4 metric-parity check).
  * Mirrors the writer's {@code MetricSkeletonDump} pattern exactly.

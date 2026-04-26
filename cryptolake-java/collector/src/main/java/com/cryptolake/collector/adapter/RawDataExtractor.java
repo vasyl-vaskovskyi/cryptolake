@@ -4,9 +4,9 @@ package com.cryptolake.collector.adapter;
  * Extracts the raw JSON value of the {@code "data"} key from a Binance combined-stream frame using
  * balanced-brace counting.
  *
- * <p>Tier 1 §1 and Tier 5 B4: the extraction happens <em>before</em> any {@code ObjectMapper.readTree}
- * call, preserving the exact byte sequence of the inner payload. Any parse-and-reserialize
- * round-trip via Jackson would break byte identity (gate 3 invariant).
+ * <p>Tier 1 §1 and Tier 5 B4: the extraction happens <em>before</em> any {@code
+ * ObjectMapper.readTree} call, preserving the exact byte sequence of the inner payload. Any
+ * parse-and-reserialize round-trip via Jackson would break byte identity (gate 3 invariant).
  *
  * <p>Ports Python's {@code _extract_data_value} in {@code src/exchanges/binance.py:160-196}.
  *
@@ -19,9 +19,9 @@ public final class RawDataExtractor {
   /**
    * Extracts the JSON object value that follows the {@code "data":} key in {@code frame}.
    *
-   * <p>The returned string is a substring of the input — same char sequence, no copying beyond
-   * what {@link String#substring} does. After {@code getBytes(UTF_8)}, the bytes are identical to
-   * the original frame bytes for that slice.
+   * <p>The returned string is a substring of the input — same char sequence, no copying beyond what
+   * {@link String#substring} does. After {@code getBytes(UTF_8)}, the bytes are identical to the
+   * original frame bytes for that slice.
    *
    * @param frame the full combined-stream WebSocket frame text (e.g. {@code
    *     {"stream":"btcusdt@aggTrade","data":{...}}})

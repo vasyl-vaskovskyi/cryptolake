@@ -35,9 +35,11 @@ class KafkaProducerBridgeTopicPrefixTest {
     private static java.util.Properties defaultProps() {
       var p = new java.util.Properties();
       p.put("bootstrap.servers", "localhost:9092");
-      p.put("key.serializer",
+      p.put(
+          "key.serializer",
           org.apache.kafka.common.serialization.ByteArraySerializer.class.getName());
-      p.put("value.serializer",
+      p.put(
+          "value.serializer",
           org.apache.kafka.common.serialization.ByteArraySerializer.class.getName());
       return p;
     }
@@ -63,18 +65,26 @@ class KafkaProducerBridgeTopicPrefixTest {
     var registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
     var metrics = new CollectorMetrics(registry);
     var capturingProducer = new CapturingProducer();
-    var bridge = new KafkaProducerBridge(
-        capturingProducer,
-        "binance",
-        "backup.", // non-empty prefix
-        new ProducerConfig(100_000, null, 10_000),
-        new EnvelopeCodec(EnvelopeCodec.newMapper()),
-        metrics,
-        List.of("localhost:9092"));
+    var bridge =
+        new KafkaProducerBridge(
+            capturingProducer,
+            "binance",
+            "backup.", // non-empty prefix
+            new ProducerConfig(100_000, null, 10_000),
+            new EnvelopeCodec(EnvelopeCodec.newMapper()),
+            metrics,
+            List.of("localhost:9092"));
 
-    DataEnvelope env = DataEnvelope.create(
-        "binance", "btcusdt", "trades", "{\"e\":\"aggTrade\"}", 0L,
-        "test_2026-01-01T00:00:00Z", 0L, Clocks.systemNanoClock());
+    DataEnvelope env =
+        DataEnvelope.create(
+            "binance",
+            "btcusdt",
+            "trades",
+            "{\"e\":\"aggTrade\"}",
+            0L,
+            "test_2026-01-01T00:00:00Z",
+            0L,
+            Clocks.systemNanoClock());
     bridge.produce(env);
 
     assertThat(capturingProducer.records).hasSize(1);
@@ -90,21 +100,30 @@ class KafkaProducerBridgeTopicPrefixTest {
     var metrics = new CollectorMetrics(registry);
     var capturingProducer = new CapturingProducer();
     var cfg = new ProducerConfig(1_000, java.util.Map.of("depth", 2, "trades", 100), 10);
-    var bridge = new KafkaProducerBridge(
-        capturingProducer,
-        "binance", "",
-        cfg,
-        new EnvelopeCodec(EnvelopeCodec.newMapper()),
-        metrics,
-        List.of("localhost:9092"));
+    var bridge =
+        new KafkaProducerBridge(
+            capturingProducer,
+            "binance",
+            "",
+            cfg,
+            new EnvelopeCodec(EnvelopeCodec.newMapper()),
+            metrics,
+            List.of("localhost:9092"));
 
     // Produce 3 depth messages — cap is 2 (delivery callback not fired so count stays high)
     // Note: with synchronous capturing producer, the delivery callback fires immediately,
     // decrementing the count. So all 3 should succeed.
     for (int i = 0; i < 3; i++) {
-      DataEnvelope env = DataEnvelope.create(
-          "binance", "btcusdt", "depth", "{\"e\":\"depthUpdate\"}", 0L,
-          "test_2026-01-01T00:00:00Z", (long) i, Clocks.systemNanoClock());
+      DataEnvelope env =
+          DataEnvelope.create(
+              "binance",
+              "btcusdt",
+              "depth",
+              "{\"e\":\"depthUpdate\"}",
+              0L,
+              "test_2026-01-01T00:00:00Z",
+              (long) i,
+              Clocks.systemNanoClock());
       bridge.produce(env);
     }
     // With immediate callback decrement, buffer count stays at 0 after each send

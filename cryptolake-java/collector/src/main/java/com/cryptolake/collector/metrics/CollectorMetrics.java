@@ -15,8 +15,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Prometheus scrape appends it automatically. {@link NamingConvention#identity} prevents any other
  * Micrometer transformation.
  *
- * <p>Gauges use supplier-backed {@link MetricHolders} — strongly referenced to avoid GC (Tier 5
- * H6 watch-out).
+ * <p>Gauges use supplier-backed {@link MetricHolders} — strongly referenced to avoid GC (Tier 5 H6
+ * watch-out).
  *
  * <p>Thread safety: Micrometer meters are thread-safe; holders use atomic types (Tier 2 §9).
  */
@@ -25,9 +25,7 @@ public final class CollectorMetrics {
   private final PrometheusMeterRegistry registry;
   private final MetricHolders holders;
 
-  /**
-   * SLO buckets for exchange-latency histogram (Tier 5 H5; matches {@code metrics.py:27-32}).
-   */
+  /** SLO buckets for exchange-latency histogram (Tier 5 H5; matches {@code metrics.py:27-32}). */
   private static final double[] LATENCY_SLO =
       new double[] {1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000};
 

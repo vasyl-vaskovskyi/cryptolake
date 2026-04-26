@@ -20,15 +20,16 @@ import java.util.concurrent.TimeUnit;
  * <p>Ports {@code StreamHeartbeatEmitter} from {@code src/collector/heartbeat.py} (commit 3e068b7).
  *
  * <p>Three states:
+ *
  * <ul>
  *   <li>{@link HeartbeatStatus#ALIVE} — data flowed within 2 × interval (10s)
  *   <li>{@link HeartbeatStatus#SUBSCRIBED_SILENT} — WS up, but no data within 2 × interval
  *   <li>{@link HeartbeatStatus#DISCONNECTED} — WebSocket currently down
  * </ul>
  *
- * <p>Heartbeats bypass the per-stream cap path via
- * {@link KafkaProducerBridge#publishRaw(String, byte[], byte[])} — they ARE the liveness signal,
- * so cap-dropping would defeat the point (design §2.10b).
+ * <p>Heartbeats bypass the per-stream cap path via {@link KafkaProducerBridge#publishRaw(String,
+ * byte[], byte[])} — they ARE the liveness signal, so cap-dropping would defeat the point (design
+ * §2.10b).
  *
  * <p>Thread safety: virtual-thread loop; shared map reads are safe via CHM.
  */
@@ -83,9 +84,7 @@ public final class StreamHeartbeatEmitter {
 
   /** Starts the heartbeat loop on a virtual thread. */
   public void start() {
-    Thread.ofVirtual()
-        .name("stream-heartbeat-emitter")
-        .start(this::loop);
+    Thread.ofVirtual().name("stream-heartbeat-emitter").start(this::loop);
   }
 
   /** Stops the heartbeat loop. */
@@ -136,9 +135,9 @@ public final class StreamHeartbeatEmitter {
           status = HeartbeatStatus.ALIVE;
         }
 
-        HeartbeatEnvelope env = HeartbeatEnvelope.of(
-            exchange, symbol, stream, collectorSessionId,
-            nowNs, lastDataNs, lastSeq, status);
+        HeartbeatEnvelope env =
+            HeartbeatEnvelope.of(
+                exchange, symbol, stream, collectorSessionId, nowNs, lastDataNs, lastSeq, status);
 
         try {
           byte[] bytes = codec.toJsonBytes(env);
@@ -147,8 +146,14 @@ public final class StreamHeartbeatEmitter {
           producer.publishRaw(topic, kafkaKey, bytes);
           metrics.heartbeatsEmitted(exchange, symbol, stream, status.toJsonValue()).increment();
         } catch (UncheckedIOException e) {
-          log.warn("heartbeat_serialize_failed", "symbol", symbol, "stream", stream,
-              "error", e.getMessage());
+          log.warn(
+              "heartbeat_serialize_failed",
+              "symbol",
+              symbol,
+              "stream",
+              stream,
+              "error",
+              e.getMessage());
         }
       }
     }

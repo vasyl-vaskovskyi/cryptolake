@@ -3,11 +3,9 @@ package com.cryptolake.collector.backup;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.fasterxml.jackson.databind.JsonNode;
-import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -126,8 +124,12 @@ public final class BackupChainReader {
             if (!symbol.equals(envSymbol)) continue;
 
             // Extract u from raw_text
-            JsonNode rawNode = codec.readTree(
-                envNode.path("raw_text").asText().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            JsonNode rawNode =
+                codec.readTree(
+                    envNode
+                        .path("raw_text")
+                        .asText()
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
             JsonNode uNode = rawNode.path("u");
             if (uNode.isMissingNode()) continue;
             long u = uNode.asLong(); // never .asInt() — Tier 5 E1

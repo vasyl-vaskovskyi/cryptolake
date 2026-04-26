@@ -32,8 +32,8 @@ import org.slf4j.MDC.MDCCloseable;
  * </ol>
  *
  * <p>Thread safety: {@code lastReceivedAt} is a {@link ConcurrentHashMap} safe for unsynchronized
- * reads from the {@code FirstFrameWatchdog} thread. All other fields are immutable post-construction
- * or owned by the listener thread.
+ * reads from the {@code FirstFrameWatchdog} thread. All other fields are immutable
+ * post-construction or owned by the listener thread.
  */
 public final class RawFrameCapture {
 
@@ -138,11 +138,12 @@ public final class RawFrameCapture {
   }
 
   /**
-   * Called when the WebSocket disconnects. Emits one {@code ws_disconnect} gap per enabled
-   * {@code (symbol, stream)} pair that has not already had one emitted since the last data frame.
+   * Called when the WebSocket disconnects. Emits one {@code ws_disconnect} gap per enabled {@code
+   * (symbol, stream)} pair that has not already had one emitted since the last data frame.
    *
-   * <p>Gap-start fallback ordering (design §6.2; Python commit 30348b2): {@code lastReceivedAt[(sym,
-   * st)] ?? subscribeAckAt ?? now}. The middle fallback covers cold-boot half-open reconnects.
+   * <p>Gap-start fallback ordering (design §6.2; Python commit 30348b2): {@code
+   * lastReceivedAt[(sym, st)] ?? subscribeAckAt ?? now}. The middle fallback covers cold-boot
+   * half-open reconnects.
    *
    * @param subscribeAckAtNs timestamp when the SUBSCRIBE ack was received; {@code 0} if not known
    */

@@ -1,7 +1,6 @@
 package com.cryptolake.collector;
 
 import com.cryptolake.collector.adapter.BinanceAdapter;
-import com.cryptolake.collector.adapter.StreamKey;
 import com.cryptolake.collector.backup.BackupChainReader;
 import com.cryptolake.collector.capture.ExchangeLatencyRecorder;
 import com.cryptolake.collector.capture.RawFrameCapture;
@@ -100,9 +99,12 @@ public final class Main {
 
     log.info(
         "collector_starting",
-        "session_id", session.sessionId(),
-        "symbols", symbols.toString(),
-        "streams", enabledStreams.toString());
+        "session_id",
+        session.sessionId(),
+        "symbols",
+        symbols.toString(),
+        "streams",
+        enabledStreams.toString());
 
     // ── Kafka producer ────────────────────────────────────────────────────
     var producerBridge =
@@ -151,10 +153,11 @@ public final class Main {
     }
 
     // ── HTTP client (one per service — Tier 2 §14, Tier 5 D3) ────────────
-    HttpClient httpClient = HttpClient.newBuilder()
-        .version(HttpClient.Version.HTTP_2)
-        .connectTimeout(Duration.ofSeconds(5))
-        .build();
+    HttpClient httpClient =
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .connectTimeout(Duration.ofSeconds(5))
+            .build();
 
     // ── Snapshot fetcher + resync ─────────────────────────────────────────
     var snapshotFetcher = new SnapshotFetcher(httpClient, adapter, exchange, metrics);
@@ -228,19 +231,34 @@ public final class Main {
     if (enabledStreams.contains("depth_snapshot")) {
       snapshotScheduler =
           new SnapshotScheduler(
-              exchange, session, snapshotFetcher, producerBridge, gapEmitter, clock,
-              symbols, binance.depth().snapshotInterval(),
+              exchange,
+              session,
+              snapshotFetcher,
+              producerBridge,
+              gapEmitter,
+              clock,
+              symbols,
+              binance.depth().snapshotInterval(),
               binance.depth().snapshotOverrides());
     }
 
     // ── OI poller ─────────────────────────────────────────────────────────
     OpenInterestPoller oiPoller = null;
     if (enabledStreams.contains("open_interest")) {
-      long oiIntervalSec = SnapshotScheduler.parseIntervalSeconds(
-          binance.openInterest().pollInterval());
-      oiPoller = new OpenInterestPoller(
-          exchange, session, adapter, httpClient, producerBridge, gapEmitter, clock, metrics,
-          symbols, oiIntervalSec);
+      long oiIntervalSec =
+          SnapshotScheduler.parseIntervalSeconds(binance.openInterest().pollInterval());
+      oiPoller =
+          new OpenInterestPoller(
+              exchange,
+              session,
+              adapter,
+              httpClient,
+              producerBridge,
+              gapEmitter,
+              clock,
+              metrics,
+              symbols,
+              oiIntervalSec);
     }
 
     // ── Stream heartbeat emitter ──────────────────────────────────────────
@@ -343,18 +361,50 @@ public final class Main {
 
     log.info("shutdown_started");
 
-    try { heartbeatEmitter.stop(); } catch (Exception ignored) {}
-    try { supervisor.stop(); } catch (Exception ignored) {}
-    if (snapshotScheduler != null) { try { snapshotScheduler.stop(); } catch (Exception ignored) {} }
-    if (oiPoller != null) { try { oiPoller.stop(); } catch (Exception ignored) {} }
-    try { processHeartbeat.stop(); } catch (Exception ignored) {}
-    try { producer.flush(Duration.ofSeconds(10)); } catch (Exception ignored) {}
-    try { producer.close(); } catch (Exception ignored) {}
+    try {
+      heartbeatEmitter.stop();
+    } catch (Exception ignored) {
+    }
+    try {
+      supervisor.stop();
+    } catch (Exception ignored) {
+    }
+    if (snapshotScheduler != null) {
+      try {
+        snapshotScheduler.stop();
+      } catch (Exception ignored) {
+      }
+    }
+    if (oiPoller != null) {
+      try {
+        oiPoller.stop();
+      } catch (Exception ignored) {
+      }
+    }
+    try {
+      processHeartbeat.stop();
+    } catch (Exception ignored) {
+    }
+    try {
+      producer.flush(Duration.ofSeconds(10));
+    } catch (Exception ignored) {
+    }
+    try {
+      producer.close();
+    } catch (Exception ignored) {
+    }
     try {
       lifecycle.markCleanShutdown(state.component(), state.instanceId(), false, null);
-    } catch (Exception ignored) {}
-    try { lifecycle.close(); } catch (Exception ignored) {}
-    try { healthServer.stop(); } catch (Exception ignored) {}
+    } catch (Exception ignored) {
+    }
+    try {
+      lifecycle.close();
+    } catch (Exception ignored) {
+    }
+    try {
+      healthServer.stop();
+    } catch (Exception ignored) {
+    }
     virtualExec.close();
 
     log.info("shutdown_complete");

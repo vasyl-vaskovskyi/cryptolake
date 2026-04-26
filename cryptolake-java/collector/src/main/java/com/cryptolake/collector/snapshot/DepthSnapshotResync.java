@@ -1,11 +1,10 @@
 package com.cryptolake.collector.snapshot;
 
-import com.cryptolake.collector.adapter.BinanceAdapter;
+import com.cryptolake.collector.CollectorSession;
 import com.cryptolake.collector.backup.BackupChainReader;
 import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.collector.streams.DepthStreamHandler;
-import com.cryptolake.collector.CollectorSession;
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
@@ -21,6 +20,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Depth snapshot resync state machine (design §2.6).
  *
  * <p>Phases per {@link #start(String)}:
+ *
  * <ol>
  *   <li>Wait up to 60s for producer to be healthy (Tier 5 A3).
  *   <li>Try backup-chain reader first (Tier 1 §6 — replay preferred over reconstruction).
@@ -28,9 +28,9 @@ import java.util.concurrent.locks.ReentrantLock;
  *   <li>Apply sync point to {@link DepthStreamHandler}.
  * </ol>
  *
- * <p>Per-symbol serialization via {@link ReentrantLock} — {@link #start(String)} uses
- * {@link ReentrantLock#tryLock()} so a concurrent resync trigger (from reconnect + pu-break)
- * skips if one is already in progress (design §11 Q4 preferred path).
+ * <p>Per-symbol serialization via {@link ReentrantLock} — {@link #start(String)} uses {@link
+ * ReentrantLock#tryLock()} so a concurrent resync trigger (from reconnect + pu-break) skips if one
+ * is already in progress (design §11 Q4 preferred path).
  *
  * <p>Thread safety: per-symbol {@link ReentrantLock} (Tier 5 A5); blocking I/O (REST, Kafka)
  * happens outside the lock.
@@ -129,8 +129,8 @@ public final class DepthSnapshotResync {
     Optional<String> rawText = snapshotFetcher.fetch(symbol);
     if (rawText.isEmpty()) {
       log.warn("depth_resync_snapshot_failed", "symbol", symbol);
-      gapEmitter.emit(symbol, "depth", -1L, "pu_chain_break",
-          "Snapshot exhausted (3 retries) during resync");
+      gapEmitter.emit(
+          symbol, "depth", -1L, "pu_chain_break", "Snapshot exhausted (3 retries) during resync");
       return;
     }
 
@@ -144,8 +144,8 @@ public final class DepthSnapshotResync {
     while (!producer.isHealthyForResync()) {
       if (System.nanoTime() - started > timeoutNs) {
         log.warn("resync_producer_unhealthy_timeout", "symbol", symbol);
-        gapEmitter.emit(symbol, "depth", -1L, "pu_chain_break",
-            "Resync aborted: producer unhealthy after 60s");
+        gapEmitter.emit(
+            symbol, "depth", -1L, "pu_chain_break", "Resync aborted: producer unhealthy after 60s");
         return false;
       }
       try {
@@ -163,8 +163,8 @@ public final class DepthSnapshotResync {
   private Optional<Long> tryBackupChainReader(String symbol) {
     try {
       String backupTopic = BackupChainReader.otherDepthTopic(topicPrefix, exchange);
-      return backupChainReader.readLastDepthUpdateId(brokers, backupTopic, symbol,
-          Duration.ofSeconds(30));
+      return backupChainReader.readLastDepthUpdateId(
+          brokers, backupTopic, symbol, Duration.ofSeconds(30));
     } catch (Exception e) {
       log.warn("backup_chain_reader_failed", "symbol", symbol, "error", e.getMessage());
       return Optional.empty();
@@ -177,16 +177,22 @@ public final class DepthSnapshotResync {
       depthHandler.setSyncPoint(symbol, lastUpdateId);
 
       // Produce the depth_snapshot envelope
-      DataEnvelope env = DataEnvelope.create(
-          exchange, symbol, "depth_snapshot", rawText,
-          extractSnapshotTs(rawText),
-          session.sessionId(), -1L, clock);
+      DataEnvelope env =
+          DataEnvelope.create(
+              exchange,
+              symbol,
+              "depth_snapshot",
+              rawText,
+              extractSnapshotTs(rawText),
+              session.sessionId(),
+              -1L,
+              clock);
       producer.produce(env);
       log.info("depth_resync_snapshot_applied", "symbol", symbol, "last_update_id", lastUpdateId);
     } catch (Exception e) {
       log.error("depth_resync_apply_failed", e, "symbol", symbol, "error", e.getMessage());
-      gapEmitter.emit(symbol, "depth", -1L, "pu_chain_break",
-          "Failed to apply snapshot: " + e.getMessage());
+      gapEmitter.emit(
+          symbol, "depth", -1L, "pu_chain_break", "Failed to apply snapshot: " + e.getMessage());
     }
   }
 

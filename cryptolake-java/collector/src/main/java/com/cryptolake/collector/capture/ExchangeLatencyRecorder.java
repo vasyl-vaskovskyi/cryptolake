@@ -6,9 +6,9 @@ import com.cryptolake.collector.metrics.CollectorMetrics;
  * Records the latency between exchange-side event timestamps and local received-at timestamps into
  * a histogram.
  *
- * <p>Latency is computed as {@code receivedAtNs / 1_000_000 - exchangeTsMs} — integer division
- * from nanoseconds to milliseconds, matching Python's {@code int(received_at / 1_000_000)}
- * pattern (Tier 5 E4).
+ * <p>Latency is computed as {@code receivedAtNs / 1_000_000 - exchangeTsMs} — integer division from
+ * nanoseconds to milliseconds, matching Python's {@code int(received_at / 1_000_000)} pattern (Tier
+ * 5 E4).
  *
  * <p>Thread safety: Micrometer meters are thread-safe.
  */

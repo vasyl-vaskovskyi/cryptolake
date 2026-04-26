@@ -3,8 +3,8 @@ package com.cryptolake.collector.producer;
 /**
  * Tracks an overflow window for a {@code (symbol, stream)} pair.
  *
- * <p>Immutable record — mutations are done by replacing the whole record in the
- * {@link java.util.concurrent.ConcurrentHashMap} via {@code compute(...)}.
+ * <p>Immutable record — mutations are done by replacing the whole record in the {@link
+ * java.util.concurrent.ConcurrentHashMap} via {@code compute(...)}.
  *
  * <p>Immutable record (Tier 2 §12).
  */

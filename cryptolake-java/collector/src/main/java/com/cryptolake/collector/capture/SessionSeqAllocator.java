@@ -6,8 +6,8 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Per-{@code (symbol, stream)} monotonically increasing sequence number allocator.
  *
- * <p>Ports {@code WebSocketManager._next_seq} from {@code src/collector/connection.py}. Uses
- * {@link AtomicLong} per key inside a {@link ConcurrentHashMap} for lock-free allocation.
+ * <p>Ports {@code WebSocketManager._next_seq} from {@code src/collector/connection.py}. Uses {@link
+ * AtomicLong} per key inside a {@link ConcurrentHashMap} for lock-free allocation.
  *
  * <p>Thread safety: lock-free via atomics + CHM (design §3.2).
  */
@@ -26,8 +26,8 @@ public final class SessionSeqAllocator {
   }
 
   /**
-   * Returns the current (last allocated) sequence for the pair without incrementing. Returns
-   * {@code -1L} if no sequence has been allocated yet.
+   * Returns the current (last allocated) sequence for the pair without incrementing. Returns {@code
+   * -1L} if no sequence has been allocated yet.
    */
   public long current(String symbol, String stream) {
     String key = symbol + '\0' + stream;

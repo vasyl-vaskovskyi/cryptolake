@@ -7,8 +7,8 @@ import java.time.Instant;
  * Exponential backoff reconnection policy with a 24h proactive reconnect limit.
  *
  * <p>Ports the reconnect backoff logic from {@code src/collector/connection.py} (Tier 5 D7). Pure
- * data — no sleeps inside this class; callers sleep using the value returned by
- * {@link #nextBackoffMillis()}.
+ * data — no sleeps inside this class; callers sleep using the value returned by {@link
+ * #nextBackoffMillis()}.
  *
  * <p>Thread safety: caller-confined per-client instance.
  */
@@ -19,19 +19,17 @@ public final class ReconnectPolicy {
 
   /** Maximum backoff: 60 seconds (Tier 5 D7; Python _MAX_BACKOFF = 60). */
   public static final long MAX_BACKOFF_SECONDS = 60L;
+
   private static final long MAX_BACKOFF_MS = MAX_BACKOFF_SECONDS * 1_000L;
 
-  /**
-   * Proactive reconnect window: 23h50m (Tier 5 D6; Python {@code _RECONNECT_BEFORE_24H}).
-   */
-  public static final Duration PROACTIVE_RECONNECT_DURATION =
-      Duration.ofHours(23).plusMinutes(50);
+  /** Proactive reconnect window: 23h50m (Tier 5 D6; Python {@code _RECONNECT_BEFORE_24H}). */
+  public static final Duration PROACTIVE_RECONNECT_DURATION = Duration.ofHours(23).plusMinutes(50);
 
   private long currentBackoffMs = INITIAL_BACKOFF_MS;
 
   /**
-   * Returns the current backoff duration in milliseconds, then doubles it up to
-   * {@link #MAX_BACKOFF_MS} for the next call.
+   * Returns the current backoff duration in milliseconds, then doubles it up to {@link
+   * #MAX_BACKOFF_MS} for the next call.
    */
   public long nextBackoffMillis() {
     long result = currentBackoffMs;
@@ -39,9 +37,7 @@ public final class ReconnectPolicy {
     return result;
   }
 
-  /**
-   * Resets the backoff to the initial value (call when a connection succeeds).
-   */
+  /** Resets the backoff to the initial value (call when a connection succeeds). */
   public void reset() {
     currentBackoffMs = INITIAL_BACKOFF_MS;
   }

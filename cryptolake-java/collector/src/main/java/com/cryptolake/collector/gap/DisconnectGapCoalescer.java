@@ -4,8 +4,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Coalesces disconnect gaps so each {@code (symbol, stream)} pair emits exactly ONE
- * {@code ws_disconnect} gap per reconnect cycle.
+ * Coalesces disconnect gaps so each {@code (symbol, stream)} pair emits exactly ONE {@code
+ * ws_disconnect} gap per reconnect cycle.
  *
  * <p>Ports the {@code _disconnect_gap_emitted} set behavior from {@code
  * src/collector/connection.py:283-322}. The flag is set on the first disconnect gap for a pair and
@@ -30,8 +30,8 @@ public final class DisconnectGapCoalescer {
   }
 
   /**
-   * Clears the emitted flag when live data arrives for a {@code (symbol, stream)} pair, so the
-   * next disconnect cycle will emit a fresh gap.
+   * Clears the emitted flag when live data arrives for a {@code (symbol, stream)} pair, so the next
+   * disconnect cycle will emit a fresh gap.
    */
   public void onData(String symbol, String stream) {
     emitted.remove(key(symbol, stream));

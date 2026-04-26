@@ -20,7 +20,8 @@ class DisconnectGapCoalescerTest {
   }
 
   @Test
-  // ports: tests/unit/collector/test_disconnect_gap_coalescing.py::test_first_disconnect_emits_one_gap_per_public_stream
+  // ports:
+  // tests/unit/collector/test_disconnect_gap_coalescing.py::test_first_disconnect_emits_one_gap_per_public_stream
   void firstDisconnectEmitsOneGapPerPublicStream() {
     // First call for a given (symbol, stream) pair returns true (emit gap)
     assertThat(coalescer.tryMark("btcusdt", "trades")).isTrue();
@@ -29,7 +30,8 @@ class DisconnectGapCoalescerTest {
   }
 
   @Test
-  // ports: tests/unit/collector/test_disconnect_gap_coalescing.py::test_repeated_disconnect_calls_coalesce
+  // ports:
+  // tests/unit/collector/test_disconnect_gap_coalescing.py::test_repeated_disconnect_calls_coalesce
   void repeatedDisconnectCallsCoalesce() {
     assertThat(coalescer.tryMark("btcusdt", "trades")).isTrue();
     // Second call for same pair: already marked — suppress
@@ -38,7 +40,8 @@ class DisconnectGapCoalescerTest {
   }
 
   @Test
-  // ports: tests/unit/collector/test_disconnect_gap_coalescing.py::test_data_arrival_clears_emitted_flag
+  // ports:
+  // tests/unit/collector/test_disconnect_gap_coalescing.py::test_data_arrival_clears_emitted_flag
   void dataArrivalClearsEmittedFlag() {
     assertThat(coalescer.tryMark("btcusdt", "trades")).isTrue();
     coalescer.onData("btcusdt", "trades");

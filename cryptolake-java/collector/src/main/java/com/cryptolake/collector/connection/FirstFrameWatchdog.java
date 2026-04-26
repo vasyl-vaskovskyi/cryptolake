@@ -12,10 +12,10 @@ import java.util.concurrent.CountDownLatch;
 /**
  * Forces a WebSocket reconnect when Binance silently fails to wire some subscriptions.
  *
- * <p>Per-connect, watches a set of expected {@code (symbol, stream)} tuples. Polls
- * {@link RawFrameCapture#lastReceivedAt} every 2s; if all expected pairs have received at least one
- * frame before the deadline, returns healthy. If the deadline passes with any pair still silent,
- * logs the missing list and closes the socket.
+ * <p>Per-connect, watches a set of expected {@code (symbol, stream)} tuples. Polls {@link
+ * RawFrameCapture#lastReceivedAt} every 2s; if all expected pairs have received at least one frame
+ * before the deadline, returns healthy. If the deadline passes with any pair still silent, logs the
+ * missing list and closes the socket.
  *
  * <p>Exempt streams: {@code liquidations} — Binance documents zero frames if no liquidations occur
  * during the window. Hardcoded, not configurable.
@@ -78,7 +78,8 @@ public final class FirstFrameWatchdog {
 
       // Sleep for check interval or stop signal (Tier 5 A3)
       try {
-        if (stopLatch.await(CHECK_INTERVAL.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)) {
+        if (stopLatch.await(
+            CHECK_INTERVAL.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)) {
           return; // stop requested
         }
       } catch (InterruptedException e) {

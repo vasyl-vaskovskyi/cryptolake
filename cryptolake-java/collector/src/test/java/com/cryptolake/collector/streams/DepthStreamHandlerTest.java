@@ -13,7 +13,6 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,15 +35,21 @@ class DepthStreamHandlerTest {
     var registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
     var metrics = new com.cryptolake.collector.metrics.CollectorMetrics(registry);
     producer = new TestProducerBridge();
-    var session =
-        new CollectorSession("test", "test_2026-01-01T00:00:00Z", Instant.now());
+    var session = new CollectorSession("test", "test_2026-01-01T00:00:00Z", Instant.now());
     gapEmitter = new GapEmitter("binance", session, producer, metrics, clock);
-    adapter = new BinanceAdapter(
-        "wss://fstream.binance.com", "https://fapi.binance.com", EnvelopeCodec.newMapper());
+    adapter =
+        new BinanceAdapter(
+            "wss://fstream.binance.com", "https://fapi.binance.com", EnvelopeCodec.newMapper());
     puBreakTriggers = new ArrayList<>();
-    handler = new DepthStreamHandler(
-        "binance", session, adapter, producer, gapEmitter, clock,
-        symbol -> puBreakTriggers.add(symbol));
+    handler =
+        new DepthStreamHandler(
+            "binance",
+            session,
+            adapter,
+            producer,
+            gapEmitter,
+            clock,
+            symbol -> puBreakTriggers.add(symbol));
   }
 
   private static String depthRaw(long U, long u, long pu) {

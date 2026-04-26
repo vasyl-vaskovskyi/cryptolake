@@ -20,11 +20,11 @@ import java.util.Optional;
  * {@code _send_heartbeat}, {@code _mark_lifecycle_shutdown}, and {@code _close_state_manager}.
  *
  * <p>ALL methods catch exceptions, log WARN, and continue (Tier 5 G1, G2 — best-effort; never
- * blocks the main lifecycle). On {@link #connect()} failure, {@link #dataSource} is set to
- * {@code null}; subsequent calls short-circuit silently.
+ * blocks the main lifecycle). On {@link #connect()} failure, {@link #dataSource} is set to {@code
+ * null}; subsequent calls short-circuit silently.
  *
- * <p>Thread safety: {@code volatile HikariDataSource}; method-scoped connections. No shared
- * mutable state beyond the data source reference.
+ * <p>Thread safety: {@code volatile HikariDataSource}; method-scoped connections. No shared mutable
+ * state beyond the data source reference.
  */
 public final class LifecycleStateManager {
 
@@ -55,9 +55,7 @@ public final class LifecycleStateManager {
     }
   }
 
-  /**
-   * Upserts the collector's lifecycle start record.
-   */
+  /** Upserts the collector's lifecycle start record. */
   public void registerStart(ComponentRuntimeState state) {
     HikariDataSource ds = dataSource;
     if (ds == null) return;
@@ -81,9 +79,7 @@ public final class LifecycleStateManager {
     }
   }
 
-  /**
-   * Updates the heartbeat timestamp.
-   */
+  /** Updates the heartbeat timestamp. */
   public void heartbeat(ComponentRuntimeState state) {
     HikariDataSource ds = dataSource;
     if (ds == null) return;
@@ -102,9 +98,7 @@ public final class LifecycleStateManager {
     }
   }
 
-  /**
-   * Marks the component as cleanly shutdown.
-   */
+  /** Marks the component as cleanly shutdown. */
   public void markCleanShutdown(
       String component, String instanceId, boolean planned, String maintenanceId) {
     HikariDataSource ds = dataSource;
@@ -125,9 +119,7 @@ public final class LifecycleStateManager {
     }
   }
 
-  /**
-   * Loads an active maintenance intent, if any.
-   */
+  /** Loads an active maintenance intent, if any. */
   public Optional<MaintenanceIntent> loadActiveMaintenanceIntent() {
     HikariDataSource ds = dataSource;
     if (ds == null) return Optional.empty();
@@ -162,9 +154,7 @@ public final class LifecycleStateManager {
     dataSource = null;
   }
 
-  /**
-   * Parses a PG timestamp string with tz-tolerance (Tier 5 F2).
-   */
+  /** Parses a PG timestamp string with tz-tolerance (Tier 5 F2). */
   private static String parseTs(String raw) {
     if (raw == null) return Instant.now().toString();
     try {

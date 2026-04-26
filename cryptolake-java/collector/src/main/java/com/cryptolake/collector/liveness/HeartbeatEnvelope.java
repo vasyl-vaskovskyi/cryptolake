@@ -39,9 +39,7 @@ public record HeartbeatEnvelope(
     @JsonProperty("last_session_seq") long lastSessionSeq,
     @JsonProperty("status") String status) {
 
-  /**
-   * Creates a heartbeat envelope with the given status and metadata.
-   */
+  /** Creates a heartbeat envelope with the given status and metadata. */
   public static HeartbeatEnvelope of(
       String exchange,
       String symbol,

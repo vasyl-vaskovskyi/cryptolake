@@ -33,9 +33,9 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  * {@code producer.send(...)} call runs OUTSIDE the lock — the lock never wraps a blocking call
  * (Tier 2 §9).
  *
- * <p>Thread safety: {@link KafkaProducer} is documented as thread-safe. The count map is guarded
- * by {@link #lock}. Delivery callbacks run on kafka-clients' internal thread and also take the
- * lock. Overflow tracking uses a {@link ConcurrentHashMap}.
+ * <p>Thread safety: {@link KafkaProducer} is documented as thread-safe. The count map is guarded by
+ * {@link #lock}. Delivery callbacks run on kafka-clients' internal thread and also take the lock.
+ * Overflow tracking uses a {@link ConcurrentHashMap}.
  */
 public class KafkaProducerBridge {
 
@@ -170,8 +170,7 @@ public class KafkaProducerBridge {
     // Send OUTSIDE the lock (Tier 5 A5 watch-out; Tier 2 §9)
     try {
       producer.send(
-          new ProducerRecord<>(topic, key, value),
-          makeDeliveryCallback(stream, symbol, value));
+          new ProducerRecord<>(topic, key, value), makeDeliveryCallback(stream, symbol, value));
       metrics.messagesProduced(exchange, symbol, stream).increment();
 
       // Check if recovering from overflow
@@ -223,19 +222,26 @@ public class KafkaProducerBridge {
             if (ex != null) {
               log.error(
                   "gap_delivery_failed",
-                  ex, "stream", stream, "symbol", symbol, "error", ex.getMessage());
+                  ex,
+                  "stream",
+                  stream,
+                  "symbol",
+                  symbol,
+                  "error",
+                  ex.getMessage());
             }
           });
       return true;
     } catch (TimeoutException e) { // includes BufferExhaustedException (subclass)
-      log.error("gap_produce_failed", e, "stream", stream, "symbol", symbol, "error", e.getMessage());
+      log.error(
+          "gap_produce_failed", e, "stream", stream, "symbol", symbol, "error", e.getMessage());
       return false;
     }
   }
 
   /**
-   * Publishes raw bytes directly to a topic, bypassing all cap and codec logic. Used by
-   * {@code StreamHeartbeatEmitter} for heartbeat envelopes (design §2.10b).
+   * Publishes raw bytes directly to a topic, bypassing all cap and codec logic. Used by {@code
+   * StreamHeartbeatEmitter} for heartbeat envelopes (design §2.10b).
    */
   public void publishRaw(String topic, byte[] key, byte[] value) {
     try {
@@ -261,8 +267,7 @@ public class KafkaProducerBridge {
   }
 
   /**
-   * True if no overflow windows are active AND buffer usage is below 80% (Tier 5 C1; design
-   * §2.8).
+   * True if no overflow windows are active AND buffer usage is below 80% (Tier 5 C1; design §2.8).
    */
   public boolean isHealthyForResync() {
     if (!overflowWindows.isEmpty()) return false;
@@ -337,9 +342,13 @@ public class KafkaProducerBridge {
 
       log.error(
           "producer_delivery_failed",
-          ex, "stream", stream,
-          "symbol", symbol,
-          "error", ex.getMessage());
+          ex,
+          "stream",
+          stream,
+          "symbol",
+          symbol,
+          "error",
+          ex.getMessage());
 
       // Emit a kafka_delivery_failed gap from the failed data envelope (design §2.8)
       // Skip if gapEmitter is not yet wired (startup race), or if the failed payload was
@@ -360,8 +369,10 @@ public class KafkaProducerBridge {
         // failed to parse as DataEnvelope — might be a gap envelope; skip gap-on-gap
         log.warn(
             "delivery_fail_gap_emit_skipped",
-            "reason", "not_data_envelope",
-            "error", parseEx.getMessage());
+            "reason",
+            "not_data_envelope",
+            "error",
+            parseEx.getMessage());
       }
     };
   }

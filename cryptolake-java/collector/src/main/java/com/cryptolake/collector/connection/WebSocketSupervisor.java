@@ -12,7 +12,6 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +22,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Top-level WebSocket connection coordinator for the collector.
@@ -31,8 +29,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Owns one WebSocket ({@code "ws"} socket, all 5 subscribable streams). Manages the connect →
  * SUBSCRIBE+ack → FirstFrameWatchdog → receive loop with exponential reconnect backoff.
  *
- * <p>On the first data frame after a successful connect+ack, triggers
- * {@link DepthSnapshotResync#start(String)} for each depth-enabled symbol.
+ * <p>On the first data frame after a successful connect+ack, triggers {@link
+ * DepthSnapshotResync#start(String)} for each depth-enabled symbol.
  *
  * <p>Thread safety: {@link ConcurrentHashMap} for cross-thread state; {@code volatile} flags.
  */
@@ -57,8 +55,8 @@ public final class WebSocketSupervisor {
   private final ReconnectPolicy reconnectPolicy = new ReconnectPolicy();
 
   /**
-   * Cross-thread readable map: {@code "ws"} → connected. Shared with
-   * {@code StreamHeartbeatEmitter}.
+   * Cross-thread readable map: {@code "ws"} → connected. Shared with {@code
+   * StreamHeartbeatEmitter}.
    */
   public final ConcurrentHashMap<String, Boolean> wsConnected = new ConcurrentHashMap<>();
 
@@ -117,8 +115,8 @@ public final class WebSocketSupervisor {
   }
 
   /**
-   * Triggers a depth snapshot resync for the given symbol on a new virtual thread. Called by
-   * {@code DepthStreamHandler} when a pu-chain break is detected.
+   * Triggers a depth snapshot resync for the given symbol on a new virtual thread. Called by {@code
+   * DepthStreamHandler} when a pu-chain break is detected.
    */
   public void triggerDepthResync(String symbol) {
     virtualExec.submit(
@@ -247,7 +245,8 @@ public final class WebSocketSupervisor {
     Set<String> expected = new HashSet<>();
     for (String symbol : symbols) {
       for (String stream : enabledStreams) {
-        if (!StreamKey.REST_ONLY_STREAMS.contains(stream) && StreamKey.WS_STREAMS.contains(stream)) {
+        if (!StreamKey.REST_ONLY_STREAMS.contains(stream)
+            && StreamKey.WS_STREAMS.contains(stream)) {
           expected.add(RawFrameCapture.tupleKey(symbol, stream));
         }
       }

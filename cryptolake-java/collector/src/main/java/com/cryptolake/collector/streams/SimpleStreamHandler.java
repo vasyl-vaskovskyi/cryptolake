@@ -20,7 +20,8 @@ import java.util.Optional;
  * message: checks the session seq, emits a {@code session_seq_skip} gap on mismatch, builds a
  * {@link DataEnvelope} and produces it.
  *
- * <p>Thread safety: each instance is confined to a single virtual thread (one WebSocket connection).
+ * <p>Thread safety: each instance is confined to a single virtual thread (one WebSocket
+ * connection).
  */
 public final class SimpleStreamHandler implements StreamHandler {
 
@@ -60,10 +61,14 @@ public final class SimpleStreamHandler implements StreamHandler {
       SeqGap g = gap.get();
       log.info(
           "session_seq_gap_detected",
-          "symbol", symbol,
-          "stream", streamName,
-          "expected", g.expected(),
-          "actual", g.actual());
+          "symbol",
+          symbol,
+          "stream",
+          streamName,
+          "expected",
+          g.expected(),
+          "actual",
+          g.actual());
       gapEmitter.emit(
           symbol,
           streamName,

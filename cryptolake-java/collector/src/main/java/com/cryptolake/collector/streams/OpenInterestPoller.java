@@ -25,13 +25,14 @@ import java.util.concurrent.locks.LockSupport;
  * Virtual-thread-based per-symbol open-interest REST poller.
  *
  * <p>Ports {@code OpenInterestPoller} from {@code src/collector/streams/open_interest.py}. One
- * virtual thread per symbol; each thread polls at the configured interval using
- * {@link CountDownLatch#await(long, TimeUnit)} for interruptible waits (Tier 5 A3).
+ * virtual thread per symbol; each thread polls at the configured interval using {@link
+ * CountDownLatch#await(long, TimeUnit)} for interruptible waits (Tier 5 A3).
  *
  * <p>HTTP semantics: 429 honors {@code Retry-After}; other errors retry up to 3 times with
  * exp-backoff 1s/2s (Tier 5 D4). On exhaustion, emits {@code snapshot_poll_miss} gap.
  *
- * <p>Thread safety: one virtual thread per symbol; stop coordinated via shared {@link CountDownLatch}.
+ * <p>Thread safety: one virtual thread per symbol; stop coordinated via shared {@link
+ * CountDownLatch}.
  */
 public final class OpenInterestPoller {
 
@@ -82,9 +83,7 @@ public final class OpenInterestPoller {
   public void start() {
     running.set(true);
     for (String symbol : symbols) {
-      Thread.ofVirtual()
-          .name("oi-poller-" + symbol)
-          .start(() -> pollLoop(symbol));
+      Thread.ofVirtual().name("oi-poller-" + symbol).start(() -> pollLoop(symbol));
     }
   }
 
@@ -121,8 +120,7 @@ public final class OpenInterestPoller {
         HttpResponse<byte[]> response = httpClient.send(request, BodyHandlers.ofByteArray());
 
         if (response.statusCode() == 429) {
-          long retryAfterSec = response.headers()
-              .firstValueAsLong("Retry-After").orElse(5L);
+          long retryAfterSec = response.headers().firstValueAsLong("Retry-After").orElse(5L);
           log.warn("oi_rate_limited", "symbol", symbol, "retry_after_sec", retryAfterSec);
           LockSupport.parkNanos(retryAfterSec * 1_000_000_000L); // (Tier 5 D4; Tier 2 §10)
           attempt--;
@@ -130,8 +128,14 @@ public final class OpenInterestPoller {
         }
 
         if (response.statusCode() >= 400) {
-          log.warn("oi_http_error", "symbol", symbol, "attempt", attempt,
-              "status", response.statusCode());
+          log.warn(
+              "oi_http_error",
+              "symbol",
+              symbol,
+              "attempt",
+              attempt,
+              "status",
+              response.statusCode());
           if (attempt < MAX_RETRIES) {
             int backoffIdx = Math.min(attempt - 1, BACKOFF_NS.length - 1);
             LockSupport.parkNanos(BACKOFF_NS[backoffIdx]);
@@ -142,10 +146,16 @@ public final class OpenInterestPoller {
         // Success
         String rawText = new String(response.body(), StandardCharsets.UTF_8); // (Tier 5 D5)
         Long exchangeTs = adapter.extractExchangeTs("open_interest", rawText);
-        DataEnvelope env = DataEnvelope.create(
-            exchange, symbol, "open_interest", rawText,
-            exchangeTs != null ? exchangeTs : 0L,
-            session.sessionId(), -1L, clock);
+        DataEnvelope env =
+            DataEnvelope.create(
+                exchange,
+                symbol,
+                "open_interest",
+                rawText,
+                exchangeTs != null ? exchangeTs : 0L,
+                session.sessionId(),
+                -1L,
+                clock);
         producer.produce(env);
         log.info("oi_produced", "symbol", symbol);
         return;
@@ -165,7 +175,11 @@ public final class OpenInterestPoller {
 
     // All retries exhausted
     log.warn("oi_all_retries_failed", "symbol", symbol);
-    gapEmitter.emit(symbol, "open_interest", -1L, "snapshot_poll_miss",
+    gapEmitter.emit(
+        symbol,
+        "open_interest",
+        -1L,
+        "snapshot_poll_miss",
         "Open interest fetch failed after " + MAX_RETRIES + " retries");
   }
 }

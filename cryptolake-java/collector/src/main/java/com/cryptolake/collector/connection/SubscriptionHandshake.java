@@ -5,15 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.http.WebSocket;
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Implements the post-connect SUBSCRIBE + ack protocol that defeats Binance's silent-subscription-
@@ -46,10 +43,7 @@ public final class SubscriptionHandshake {
    * @param subscriptions the subscription strings (e.g. {@code ["btcusdt@aggTrade", ...]})
    * @throws ConnectionException if the ack does not arrive within 5s or is negative
    */
-  public void subscribe(
-      WebSocket ws,
-      List<String> subscriptions,
-      AckListener ackListener)
+  public void subscribe(WebSocket ws, List<String> subscriptions, AckListener ackListener)
       throws ConnectionException, InterruptedException {
 
     int id = ID_COUNTER.getAndIncrement();
@@ -78,9 +72,7 @@ public final class SubscriptionHandshake {
     }
   }
 
-  /**
-   * Interface for the WebSocket listener to deliver ack frames back to a waiting handshake.
-   */
+  /** Interface for the WebSocket listener to deliver ack frames back to a waiting handshake. */
   public interface AckListener {
     /**
      * Offers an ack frame text to the listener. Called by {@code WebSocketListenerImpl} when a
@@ -96,9 +88,7 @@ public final class SubscriptionHandshake {
     boolean waitForAck(int id, Duration timeout) throws InterruptedException;
   }
 
-  /**
-   * Default {@link AckListener} implementation using a blocking queue.
-   */
+  /** Default {@link AckListener} implementation using a blocking queue. */
   public static final class QueueAckListener implements AckListener {
 
     private final BlockingQueue<String> queue = new ArrayBlockingQueue<>(64);

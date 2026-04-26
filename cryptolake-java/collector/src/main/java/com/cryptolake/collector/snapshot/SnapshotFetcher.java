@@ -16,11 +16,12 @@ import java.util.concurrent.locks.LockSupport;
 /**
  * One-shot REST fetcher for Binance depth snapshots ({@code GET /fapi/v1/depth}).
  *
- * <p>Ports {@code SnapshotScheduler.fetch_snapshot} from {@code src/collector/snapshot.py}.
- * Returns the raw JSON body as a {@code String} on success; {@link Optional#empty()} after 3
- * failed attempts.
+ * <p>Ports {@code SnapshotScheduler.fetch_snapshot} from {@code src/collector/snapshot.py}. Returns
+ * the raw JSON body as a {@code String} on success; {@link Optional#empty()} after 3 failed
+ * attempts.
  *
  * <p>HTTP semantics (Tier 5 D4, D5):
+ *
  * <ul>
  *   <li>429: read {@code Retry-After} header, sleep that long, retry.
  *   <li>Other non-2xx: log, retry up to 3 times with 1s/2s exp-backoff.
@@ -44,10 +45,7 @@ public final class SnapshotFetcher {
   private final CollectorMetrics metrics;
 
   public SnapshotFetcher(
-      HttpClient httpClient,
-      BinanceAdapter adapter,
-      String exchange,
-      CollectorMetrics metrics) {
+      HttpClient httpClient, BinanceAdapter adapter, String exchange, CollectorMetrics metrics) {
     this.httpClient = httpClient;
     this.adapter = adapter;
     this.exchange = exchange;
@@ -60,8 +58,8 @@ public final class SnapshotFetcher {
   }
 
   /**
-   * Fetches a depth snapshot for {@code symbol}. Returns the raw JSON body on success or
-   * {@link Optional#empty()} after {@link #MAX_RETRIES} failures.
+   * Fetches a depth snapshot for {@code symbol}. Returns the raw JSON body on success or {@link
+   * Optional#empty()} after {@link #MAX_RETRIES} failures.
    */
   public Optional<String> fetch(String symbol) {
     String url = adapter.buildSnapshotUrl(symbol, SNAPSHOT_LIMIT);
@@ -72,20 +70,24 @@ public final class SnapshotFetcher {
         HttpResponse<byte[]> response = httpClient.send(request, BodyHandlers.ofByteArray());
 
         if (response.statusCode() == 429) {
-          long retryAfterSec = response.headers()
-              .firstValueAsLong("Retry-After").orElse(5L);
+          long retryAfterSec = response.headers().firstValueAsLong("Retry-After").orElse(5L);
           log.warn("snapshot_rate_limited", "symbol", symbol, "retry_after_sec", retryAfterSec);
-          LockSupport.parkNanos(retryAfterSec * 1_000_000_000L); // (Tier 5 D4; not Thread.sleep — Tier 2 §10)
+          LockSupport.parkNanos(
+              retryAfterSec * 1_000_000_000L); // (Tier 5 D4; not Thread.sleep — Tier 2 §10)
           // Don't count as a retry attempt
           attempt--;
           continue;
         }
 
         if (response.statusCode() >= 400) {
-          log.warn("snapshot_http_error",
-              "symbol", symbol,
-              "attempt", attempt,
-              "status", response.statusCode());
+          log.warn(
+              "snapshot_http_error",
+              "symbol",
+              symbol,
+              "attempt",
+              attempt,
+              "status",
+              response.statusCode());
           if (attempt < MAX_RETRIES) {
             int backoffIdx = Math.min(attempt - 1, BACKOFF_NS.length - 1);
             LockSupport.parkNanos(BACKOFF_NS[backoffIdx]); // (Tier 2 §10)
@@ -104,10 +106,8 @@ public final class SnapshotFetcher {
           Thread.currentThread().interrupt();
           return Optional.empty();
         }
-        log.warn("snapshot_fetch_error",
-            "symbol", symbol,
-            "attempt", attempt,
-            "error", e.getMessage());
+        log.warn(
+            "snapshot_fetch_error", "symbol", symbol, "attempt", attempt, "error", e.getMessage());
         if (attempt < MAX_RETRIES) {
           int backoffIdx = Math.min(attempt - 1, BACKOFF_NS.length - 1);
           LockSupport.parkNanos(BACKOFF_NS[backoffIdx]); // (Tier 2 §10)
