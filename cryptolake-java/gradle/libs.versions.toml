@@ -17,6 +17,7 @@ testcontainers = "1.20.1"
 errorProne = "2.31.0"
 nullaway = "0.11.1"
 spotless = "7.0.0.BETA2"
+commonsCompress = "1.27.1"
 
 [libraries]
 jackson-databind     = { module = "com.fasterxml.jackson.core:jackson-databind",               version.ref = "jackson" }
@@ -37,8 +38,9 @@ assertj              = { module = "org.assertj:assertj-core",                   
 testcontainers-bom   = { module = "org.testcontainers:testcontainers-bom",                      version.ref = "testcontainers" }
 testcontainers-kafka = { module = "org.testcontainers:kafka" }
 testcontainers-postgres = { module = "org.testcontainers:postgresql" }
+commons-compress     = { module = "org.apache.commons:commons-compress",                        version.ref = "commonsCompress" }
 
 [plugins]
-spotless  = { id = "com.diffplug.spotless",                   version.ref = "spotless" }
-errorProne= { id = "net.ltgt.errorprone",                     version = "4.0.1" }
-nullawayPlug = { id = "net.ltgt.nullaway",                    version = "2.0.0" }
+spotless     = { id = "com.diffplug.spotless",  version.ref = "spotless"  }
+errorProne   = { id = "net.ltgt.errorprone",    version = "4.0.1"         }
+nullawayPlug = { id = "net.ltgt.nullaway",       version = "2.0.0"         }
