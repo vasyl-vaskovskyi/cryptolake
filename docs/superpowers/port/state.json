@@ -1,7 +1,7 @@
 {
   "version": 1,
   "started_at": "2026-04-21T15:05:42Z",
-  "current_module": "cli",
+  "current_module": "DONE",
   "halt_reason": null,
   "modules": [
     {
@@ -91,7 +91,7 @@
     {
       "name": "cli",
       "status": "in_progress",
-      "phase": "complete",
+      "phase": "accepted",
       "checkpoint0_done": false,
       "artifacts": {
         "mapping": null,
