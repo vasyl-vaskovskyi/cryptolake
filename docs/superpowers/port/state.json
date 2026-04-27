@@ -1,7 +1,7 @@
 {
   "version": 1,
   "started_at": "2026-04-21T15:05:42Z",
-  "current_module": "collector",
+  "current_module": "cli",
   "halt_reason": null,
   "modules": [
     {
@@ -63,7 +63,7 @@
     {
       "name": "collector",
       "status": "in_progress",
-      "phase": "complete",
+      "phase": "accepted",
       "checkpoint0_done": false,
       "artifacts": {
         "mapping": null,
@@ -90,7 +90,7 @@
     },
     {
       "name": "cli",
-      "status": "pending",
+      "status": "in_progress",
       "phase": "pending",
       "checkpoint0_done": false,
       "artifacts": {
