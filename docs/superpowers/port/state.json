@@ -91,7 +91,7 @@
     {
       "name": "cli",
       "status": "in_progress",
-      "phase": "analyst",
+      "phase": "architect",
       "checkpoint0_done": false,
       "artifacts": {
         "mapping": null,
