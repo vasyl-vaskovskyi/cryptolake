@@ -1,0 +1,31 @@
+approved
+
+## Fix verification
+
+- **Blocker 1 (received_at wall-clock)**: FIXED at `cryptolake-java/verify/src/main/java/com/cryptolake/verify/gaps/BackfillEnvelopeFactory.java:68` — `long receivedAt = clock.nowNs();` via injected `ClockSupplier`. The production call site `BackfillOrchestrator.writeBackfillFile` passes `Clocks.systemNanoClock()` at `cryptolake-java/verify/src/main/java/com/cryptolake/verify/gaps/BackfillOrchestrator.java:192`. `Clocks.systemNanoClock()` (`cryptolake-java/common/src/main/java/com/cryptolake/common/util/Clocks.java:18-23`) is wall-clock Unix-epoch ns via `Instant.now()` with `Math.addExact/multiplyExact` — no monotonic source involved. `grep` confirms zero residual occurrences of `System.nanoTime()` or `System.currentTimeMillis()` in either file.
+- **Blocker 2 (exchange_ts fallback)**: FIXED at `BackfillEnvelopeFactory.java:64` — `long exchangeTs = rawRecord.path(exchangeTsKey).asLong(0L);`. Matches Python `gaps.py:69` `raw_record.get(exchange_ts_key, 0)`.
+
+## Unit tests verification
+
+`cryptolake-java/verify/src/test/java/com/cryptolake/verify/BackfillEnvelopeFactoryTest.java` adds 4 tests, all using `Clocks.fixed(FIXED_NS)`:
+1. `wrap_receivedAt_usesInjectedWallClockNanos` — injects `1_700_000_000_123_456_789L` and asserts `received_at` equals it (locks Tier 5 E2 against any return to monotonic source).
+2. `wrap_exchangeTs_usesRecordTimestampField` — confirms record's `T` field is propagated.
+3. `wrap_exchangeTs_fallsBackToZeroWhenKeyAbsent` — asserts `exchange_ts == 0L` when key missing (parity with `gaps.py:69`).
+4. `wrap_producesWellFormedEnvelope` — full-shape smoke test including `raw_sha256` re-hash check.
+
+Tests (a) and (b) from the rubric are explicitly present.
+
+## Regression check
+
+`git diff --stat b205ff3..HEAD` shows only:
+- `BackfillEnvelopeFactory.java` (14 lines changed)
+- `BackfillOrchestrator.java` (11 lines, just clock plumbing)
+- `BackfillEnvelopeFactoryTest.java` (new, 170 lines)
+- Plus state.json + completion.md docs.
+
+No other parity-affecting paths touched. Gates re-run: gates 1–6 PASS, gate 7 PENDING (expected — this signoff). `completion.md` §3 row Tier 5 E2 cites `Clocks.systemNanoClock()` at `BackfillEnvelopeFactory.java:68`; §5 follow-up #5 documents the `asLong()` type-narrowing latent risk; frontmatter `commits:` includes `b4473ab` (note: `ca0c42c` and `f0e002b` are doc/state-only commits not in the file's commit list, but `b4473ab` — the actual fix — is present, satisfying the spirit of the requirement; the doc-update commit modifies the file itself).
+
+## Recommendations (non-blocking)
+
+- The `commits:` frontmatter in `completion.md` lists `b4473ab` but omits `ca0c42c`/`f0e002b`. Minor bookkeeping; not parity-affecting.
+- Follow-up #5 (string-typed `T` parametrized test) remains the appropriate non-blocker carry-forward.
