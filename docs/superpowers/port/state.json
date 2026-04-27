@@ -99,18 +99,18 @@
         "completion": null
       },
       "gates": {
-        "ported_unit_tests": null,
-        "ported_chaos_tests": null,
-        "raw_text_byte_parity": null,
-        "metric_parity": null,
-        "verify_cli": null,
-        "static_checks": null,
-        "architect_signoff": null
+        "ported_unit_tests": "pass",
+        "ported_chaos_tests": "pass",
+        "raw_text_byte_parity": "pass",
+        "metric_parity": "pass",
+        "verify_cli": "pass",
+        "static_checks": "pass",
+        "architect_signoff": "fail"
       },
       "attempts": {
         "analyst": 0,
         "architect": 0,
-        "developer": 0
+        "developer": 1
       },
       "escalations": [],
       "developer_start_sha": "6db1daa9f933f39a070c61fc67357df188bbd1e5"
