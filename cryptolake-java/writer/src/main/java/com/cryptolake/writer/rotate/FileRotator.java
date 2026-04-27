@@ -157,6 +157,50 @@ public final class FileRotator {
     return hourPath.resolveSibling(stem + ".late-" + seq + ".jsonl.zst"); // Tier 5 M15
   }
 
+  /**
+   * Scans {@code baseDir} recursively for any {@code *.jsonl.zst} file that has non-zero size but
+   * no corresponding {@code .sha256} sidecar, and writes the sidecar.
+   *
+   * <p>Ports Python's {@code _rotate_hour} shutdown scan that writes sidecars for all non-empty
+   * archive files including the current hour (design §3.4 shutdown sequence).
+   *
+   * <p>Called from {@link com.cryptolake.writer.consumer.KafkaConsumerLoop#shutdownSequence()} after
+   * the final {@code shutdownCommit} so the current-hour file (written by periodic flushes but
+   * never sealed via {@link #seal}) also gets a sidecar.
+   */
+  public void writeMissingSidecars() {
+    try {
+      java.nio.file.Files.walk(java.nio.file.Path.of(baseDir))
+          .filter(p -> p.getFileName().toString().endsWith(".jsonl.zst"))
+          .forEach(
+              dataPath -> {
+                Path sidecarPath = FilePaths.sidecarPath(dataPath);
+                if (java.nio.file.Files.exists(sidecarPath)) return; // already sealed
+                try {
+                  if (java.nio.file.Files.size(dataPath) == 0) return; // empty file — skip
+                } catch (java.io.IOException e) {
+                  return; // can't stat — skip
+                }
+                try {
+                  Sha256Sidecar.write(dataPath, sidecarPath);
+                  log.info(
+                      "shutdown_sidecar_written",
+                      "path",
+                      dataPath.toString());
+                } catch (java.io.IOException e) {
+                  log.warn(
+                      "shutdown_sidecar_failed",
+                      "path",
+                      dataPath.toString(),
+                      "error",
+                      e.getMessage());
+                }
+              });
+    } catch (java.io.IOException e) {
+      log.warn("shutdown_sidecar_scan_failed", "base_dir", baseDir, "error", e.getMessage());
+    }
+  }
+
   /** Builds the UTC date string for the current moment (Tier 5 F3, M11). */
   public static String currentUtcDate() {
     return DateTimeFormatter.ISO_LOCAL_DATE.format(ZonedDateTime.now(ZoneOffset.UTC));

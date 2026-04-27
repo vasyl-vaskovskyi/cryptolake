@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptolake.common.envelope.BrokerCoordinates;
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
+import com.cryptolake.common.util.Sha256;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.buffer.FileTarget;
 import com.cryptolake.writer.consumer.LateArrivalSequencer;
@@ -118,5 +119,67 @@ class FileRotatorTest {
     rotator.seal(new FileTarget("binance", "btcusdt", "trades", "2024-01-15", 14));
 
     assertThat(registry.scrape()).contains("writer_files_rotated_total");
+  }
+
+  // Bug B fix — writeMissingSidecars creates .sha256 for archive files that lack one
+  @Test
+  void writeMissingSidecars_createsSidecarForUnsealedFile(@TempDir Path tmp) throws Exception {
+    // Simulate the current-hour file written by periodic flushes (no seal → no sidecar yet).
+    Path streamDir = tmp.resolve("binance/btcusdt/trades/2024-01-15");
+    Files.createDirectories(streamDir);
+    Path archiveFile = streamDir.resolve("hour-14.jsonl.zst");
+    Files.writeString(archiveFile, "some compressed data"); // non-empty archive
+    Path sidecarFile = streamDir.resolve("hour-14.jsonl.zst.sha256");
+    assertThat(sidecarFile).doesNotExist();
+
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    BufferManager buffers = new BufferManager(tmp.toString(), 100, 60, codec);
+    FileRotator rotator = buildRotator(tmp, buffers);
+
+    rotator.writeMissingSidecars();
+
+    assertThat(sidecarFile).exists();
+    String content = Files.readString(sidecarFile);
+    String expectedHex = Sha256.hexFile(archiveFile);
+    assertThat(content).startsWith(expectedHex);
+    assertThat(content).contains("  hour-14.jsonl.zst");
+  }
+
+  // Bug B fix — writeMissingSidecars skips empty archive files (they have no data to hash)
+  @Test
+  void writeMissingSidecars_skipsEmptyFiles(@TempDir Path tmp) throws Exception {
+    Path streamDir = tmp.resolve("binance/btcusdt/trades/2024-01-15");
+    Files.createDirectories(streamDir);
+    Path emptyArchive = streamDir.resolve("hour-14.jsonl.zst");
+    Files.writeString(emptyArchive, ""); // empty — no data written yet
+    Path sidecarFile = streamDir.resolve("hour-14.jsonl.zst.sha256");
+
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    BufferManager buffers = new BufferManager(tmp.toString(), 100, 60, codec);
+    FileRotator rotator = buildRotator(tmp, buffers);
+
+    rotator.writeMissingSidecars();
+
+    assertThat(sidecarFile).doesNotExist();
+  }
+
+  // Bug B fix — writeMissingSidecars skips archives that already have a sidecar
+  @Test
+  void writeMissingSidecars_skipsAlreadySealedFiles(@TempDir Path tmp) throws Exception {
+    Path streamDir = tmp.resolve("binance/btcusdt/trades/2024-01-15");
+    Files.createDirectories(streamDir);
+    Path archiveFile = streamDir.resolve("hour-14.jsonl.zst");
+    Files.writeString(archiveFile, "existing data");
+    Path sidecarFile = streamDir.resolve("hour-14.jsonl.zst.sha256");
+    Files.writeString(sidecarFile, "existing-checksum  hour-14.jsonl.zst\n");
+
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    BufferManager buffers = new BufferManager(tmp.toString(), 100, 60, codec);
+    FileRotator rotator = buildRotator(tmp, buffers);
+
+    rotator.writeMissingSidecars();
+
+    // Content should remain unchanged — should not overwrite existing sidecar
+    assertThat(Files.readString(sidecarFile)).isEqualTo("existing-checksum  hour-14.jsonl.zst\n");
   }
 }

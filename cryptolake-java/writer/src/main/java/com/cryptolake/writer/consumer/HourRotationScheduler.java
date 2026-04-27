@@ -179,4 +179,15 @@ public final class HourRotationScheduler {
       }
     }
   }
+
+  /**
+   * Writes SHA-256 sidecars for any archive files that exist on disk without a sidecar.
+   *
+   * <p>Covers the current-hour files that were written by periodic flushes but never sealed via
+   * {@link FileRotator#seal} (Tier 5 I6 — shutdown sidecar sweep, ports Python {@code
+   * _rotate_hour} sidecar sweep).
+   */
+  public void writeMissingSidecarsOnShutdown() {
+    rotator.writeMissingSidecars();
+  }
 }

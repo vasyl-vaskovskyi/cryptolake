@@ -194,6 +194,11 @@ public final class KafkaConsumerLoop implements Runnable {
     // Final flush + commit
     committer.shutdownCommit(buffers);
 
+    // Write sidecars for any archive files that still lack one — including the
+    // current-hour files that were written by periodic flushes but never sealed
+    // (Python's _rotate_hour scans all *.jsonl.zst at shutdown; Tier 5 I6).
+    rotator.writeMissingSidecarsOnShutdown();
+
     // Close backup consumer
     try {
       failover.cleanup();
