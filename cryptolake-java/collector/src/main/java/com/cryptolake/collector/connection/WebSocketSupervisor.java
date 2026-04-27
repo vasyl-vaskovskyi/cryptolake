@@ -41,6 +41,10 @@ public final class WebSocketSupervisor {
   private static final String SOCKET_NAME = "ws";
   private static final Duration WATCHDOG_DEADLINE = Duration.ofSeconds(30);
 
+  // Ping interval injected here so unit tests can use a sub-second interval without sleeping 30s.
+  // Production code uses the constant PING_INTERVAL_SECONDS via the package-private constructor.
+  private final long pingIntervalSeconds;
+
   private final HttpClient httpClient;
   private final BinanceAdapter adapter;
   private final RawFrameCapture capture;
@@ -75,6 +79,35 @@ public final class WebSocketSupervisor {
       CountDownLatch globalStop,
       ExecutorService virtualExec,
       String exchange) {
+    this(
+        httpClient,
+        adapter,
+        capture,
+        depthResync,
+        symbols,
+        enabledStreams,
+        metrics,
+        mapper,
+        globalStop,
+        virtualExec,
+        exchange,
+        30L); // production default: 30-second ping interval
+  }
+
+  /** Package-private constructor for tests — allows injecting a custom ping interval. */
+  WebSocketSupervisor(
+      HttpClient httpClient,
+      BinanceAdapter adapter,
+      RawFrameCapture capture,
+      DepthSnapshotResync depthResync,
+      List<String> symbols,
+      List<String> enabledStreams,
+      CollectorMetrics metrics,
+      ObjectMapper mapper,
+      CountDownLatch globalStop,
+      ExecutorService virtualExec,
+      String exchange,
+      long pingIntervalSeconds) {
     this.httpClient = httpClient;
     this.adapter = adapter;
     this.capture = capture;
@@ -86,6 +119,7 @@ public final class WebSocketSupervisor {
     this.globalStop = globalStop;
     this.virtualExec = virtualExec;
     this.exchange = exchange;
+    this.pingIntervalSeconds = pingIntervalSeconds;
   }
 
   /** Starts the connection supervisor loop on a virtual thread. */
@@ -254,16 +288,22 @@ public final class WebSocketSupervisor {
     return expected;
   }
 
-  private void pingLoop(WebSocket ws, CountDownLatch disconnectLatch) {
+  // package-private for testing
+  void pingLoop(WebSocket ws, CountDownLatch disconnectLatch) {
     while (true) {
       try {
-        if (disconnectLatch.await(30, TimeUnit.SECONDS)) break;
+        if (disconnectLatch.await(pingIntervalSeconds, TimeUnit.SECONDS)) break;
         ws.sendPing(ByteBuffer.allocate(0)).join();
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         break;
       } catch (Exception e) {
         log.warn("ws_ping_failed", "error", e.getMessage());
+        // Abort the dead WebSocket so the listener's onError/onClose fires and the
+        // main loop exits its disconnectLatch.await(); then release the latch ourselves
+        // in case the listener never fires (half-open connection — Tier 5 D1).
+        ws.abort();
+        disconnectLatch.countDown();
         break;
       }
     }
