@@ -85,7 +85,8 @@
         "developer": 0
       },
       "escalations": [],
-      "developer_start_sha": "a77d7c554ec771f9b9a2bd7207e4b0018c02fae4"
+      "developer_start_sha": "a77d7c554ec771f9b9a2bd7207e4b0018c02fae4",
+      "accepted_sha": "6be17268f29a0df569dde710986273134b9d0bbb"
     },
     {
       "name": "cli",
