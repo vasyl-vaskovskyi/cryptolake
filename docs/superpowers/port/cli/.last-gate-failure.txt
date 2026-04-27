@@ -1,0 +1,2 @@
+=== gate 7 FAILED ===
+gate7 FAIL: architect signoff status='rejected' (not approved)

@@ -2,7 +2,7 @@
 module: cli
 status: complete
 produced_by: developer
-commits: [56fecbc, cfb29eb, 5a8b0c0, 62c0d23, 764ea35, 6f9b675]
+commits: [56fecbc, cfb29eb, 5a8b0c0, 62c0d23, 764ea35, 6f9b675, b4473ab]
 ---
 
 # CLI module — developer completion
@@ -149,6 +149,7 @@ The import was removed by Spotless (unused). No behavior change.
 | D5 | `BinanceRestClient.fetchPage:verify/gaps/BinanceRestClient.java:50` — `BodyHandlers.ofByteArray()` |
 | D7 | `BinanceRestClient.fetchPage` inline exponential backoff (no library); no framework |
 | E1 | `DepthReplayVerifier` uses `asLong()` throughout; `DataSortKey.of` returns `long`; `TradesContinuity.check` uses `asLong()` for `a` field |
+| E2 | `BackfillEnvelopeFactory.wrap:verify/gaps/BackfillEnvelopeFactory.java:68` — `clock.nowNs()` via injected `ClockSupplier`; production call site uses `Clocks.systemNanoClock()` (wall-clock ns since epoch, matching Python `time.time_ns()`). Previously `System.nanoTime()` (monotonic, wrong origin) — fixed after Architect rejection. |
 | E5 | `MissingHourGapFactory.create:consolidation/core/MissingHourGapFactory.java:60-61` — `getEpochSecond() * 1_000_000_000L + getNano()` |
 | F1 | `MarkMaintenanceCommand.call:verify/cli/MarkMaintenanceCommand.java:55` — `Instant.now().toString()` |
 | F3 | `MissingHourGapFactory.create` uses `ZoneOffset.UTC`; `ScheduleClock.nextRunInstant` uses `ZoneOffset.UTC` |
@@ -200,3 +201,5 @@ None. All design open questions were resolved using the preferred paths specifie
 3. **MaintenanceWriter Testcontainers test**: `MarkMaintenanceCommandTest.writesIntentToPg` (named in design §8.1) is not yet implemented — it requires a Testcontainers Postgres instance. The CLI command is implemented and functionally correct; the integration test is a follow-up.
 
 4. **Consolidation/backfill integration tests**: `ConsolidationCycleIT` and similar end-to-end tests named in design §8.2 are not yet implemented. The core consolidation pipeline is tested via unit tests (`HourFileDiscoveryTest`, `DataSortKeyTest`, `ScheduleClockTest`); the integration test would require a full synthetic archive harness.
+
+5. **`BackfillEnvelopeFactory` `asLong()` type-narrowing risk**: `rawRecord.path(exchangeTsKey).asLong(0L)` silently truncates string-typed fields (Jackson coerces a string such as `"1700000000000"` to a long, but if the field is a non-numeric string it returns `0`). Python's `raw_record.get(exchange_ts_key, 0)` returns the raw int value without coercion. For Binance trades the `T` field is always a JSON long, so this is safe in practice. However, the divergence is a latent risk for future stream types that may use string timestamps. Recommended follow-up: add a parametrized unit test in `BackfillEnvelopeFactoryTest` covering a string-typed `T` field (e.g. `"1700000000000"`) and assert the result matches the Python behavior. If the coercion result ever diverges, switch to `rawRecord.path(exchangeTsKey).isLong() ? rawRecord.path(exchangeTsKey).longValue() : 0L`.
