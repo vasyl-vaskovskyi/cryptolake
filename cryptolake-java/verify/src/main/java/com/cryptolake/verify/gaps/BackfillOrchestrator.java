@@ -1,5 +1,6 @@
 package com.cryptolake.verify.gaps;
 
+import com.cryptolake.common.util.Clocks;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.ZstdOutputStream;
@@ -180,7 +181,15 @@ public final class BackfillOrchestrator {
       for (int i = 0; i < records.size(); i++) {
         byte[] envBytes =
             BackfillEnvelopeFactory.wrap(
-                records.get(i), exchange, symbol, stream, sessionId, (long) i, tsKey, mapper);
+                records.get(i),
+                exchange,
+                symbol,
+                stream,
+                sessionId,
+                (long) i,
+                tsKey,
+                mapper,
+                Clocks.systemNanoClock());
         bufOut.write(envBytes);
         bufOut.write(0x0A); // newline (Tier 5 B2)
       }

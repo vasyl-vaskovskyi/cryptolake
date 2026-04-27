@@ -1,5 +1,6 @@
 package com.cryptolake.verify.gaps;
 
+import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.common.util.Sha256;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,6 +37,8 @@ public final class BackfillEnvelopeFactory {
    * @param seq monotonic sequence number within this session
    * @param exchangeTsKey the field in {@code rawRecord} to use as {@code exchange_ts}
    * @param mapper shared {@link ObjectMapper} (Tier 5 B6)
+   * @param clock wall-clock nanosecond supplier (Tier 5 E2); use {@link
+   *     com.cryptolake.common.util.Clocks#systemNanoClock()} in production
    * @return compact JSON bytes without newline (caller appends 0x0A if needed)
    * @throws IOException on serialization failure
    */
@@ -47,7 +50,8 @@ public final class BackfillEnvelopeFactory {
       String sessionId,
       long seq,
       String exchangeTsKey,
-      ObjectMapper mapper)
+      ObjectMapper mapper,
+      ClockSupplier clock)
       throws IOException {
 
     // raw_text: compact serialization of the REST record (Tier 5 B2)
@@ -56,10 +60,12 @@ public final class BackfillEnvelopeFactory {
     String rawSha256 = Sha256.hexDigestUtf8(rawText); // Tier 1 §2
 
     // exchange_ts: from the record's timestamp field (Tier 5 E1 — asLong)
-    long exchangeTs =
-        rawRecord.path(exchangeTsKey).asLong(System.currentTimeMillis()); // fallback = now ms
+    // Falls back to 0 when the key is absent — matches Python raw_record.get(key, 0) (gaps.py:69)
+    long exchangeTs = rawRecord.path(exchangeTsKey).asLong(0L);
 
-    long receivedAt = System.nanoTime(); // approximate; nanosecond wall-clock (Tier 5 E2)
+    // Tier 5 E2: wall-clock nanoseconds since Unix epoch (matches Python time.time_ns())
+    // Use Clocks.systemNanoClock() in production; inject a fixed clock in tests.
+    long receivedAt = clock.nowNs();
 
     // Build ObjectNode with explicit insertion order (design §6.4; Tier 5 B1)
     // Order: v, type, source, exchange, symbol, stream, received_at, exchange_ts,
