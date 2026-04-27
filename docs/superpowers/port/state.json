@@ -112,7 +112,8 @@
         "architect": 0,
         "developer": 0
       },
-      "escalations": []
+      "escalations": [],
+      "developer_start_sha": "6db1daa9f933f39a070c61fc67357df188bbd1e5"
     }
   ]
 }
