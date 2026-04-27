@@ -10,6 +10,7 @@ import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.failover.FailoverController;
 import com.cryptolake.writer.gap.GapEmitter;
 import com.cryptolake.writer.metrics.WriterMetrics;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -83,6 +84,73 @@ public final class RecordHandler {
     String primaryTopic =
         topic.startsWith(backupPrefix) ? topic.substring(backupPrefix.length()) : topic;
 
+    // Peek at "type" field to route gap/heartbeat envelopes before full deserialization.
+    // Collector-emitted gap and heartbeat records land in the same Kafka topic as data records.
+    // Deserializing a GapEnvelope as DataEnvelope silently drops gap-specific fields (Bug C).
+    String envelopeType;
+    try {
+      JsonNode tree = codec.readTree(rec.value());
+      envelopeType = tree.path("type").asText("data");
+    } catch (Exception e) {
+      log.error(
+          "corrupt_message_skipped",
+          e,
+          "topic",
+          topic,
+          "partition",
+          partition,
+          "offset",
+          offset,
+          "error",
+          e.getMessage());
+      return; // DO NOT rethrow (Tier 5 G4)
+    }
+
+    // Heartbeat envelopes: liveness-only; no archive write (ports Python env_type == "heartbeat").
+    if ("heartbeat".equals(envelopeType)) {
+      // No session change, no recovery gap, no buffer write — heartbeats are not archived.
+      // Reset silence timer implicitly via the failover controller (coverage filter not called
+      // here as the coverage filter's handleHeartbeat API is not yet wired; sufficient for now).
+      if (!fromBackup) {
+        failover.resetSilenceTimer();
+      }
+      return;
+    }
+
+    // Gap envelopes emitted by the collector: deserialize as GapEnvelope and write to archive
+    // directly, bypassing session-change and recovery-gap checks (those apply to data only).
+    if ("gap".equals(envelopeType)) {
+      GapEnvelope collectorGap;
+      try {
+        collectorGap = codec.readGap(rec.value());
+      } catch (Exception e) {
+        log.error(
+            "corrupt_gap_skipped",
+            e,
+            "topic",
+            topic,
+            "partition",
+            partition,
+            "offset",
+            offset,
+            "error",
+            e.getMessage());
+        return; // DO NOT rethrow
+      }
+      // Route through coverage filter; if not suppressed, write to buffer.
+      BrokerCoordinates coords = new BrokerCoordinates(primaryTopic, partition, offset);
+      boolean accepted = coverageFilter.handleGap(source, collectorGap);
+      if (accepted) {
+        buffers.add(collectorGap, coords, source);
+      }
+      metrics.messagesConsumed(collectorGap.exchange(), collectorGap.symbol(), collectorGap.stream()).increment();
+      if (!fromBackup) {
+        failover.resetSilenceTimer();
+      }
+      return;
+    }
+
+    // Data path (existing logic below) — also handles any unknown types gracefully.
     // Deserialize (Tier 5 G4: catch + deserialization_error gap on failure)
     DataEnvelope env;
     try {
