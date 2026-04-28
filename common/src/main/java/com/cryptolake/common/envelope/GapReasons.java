@@ -29,7 +29,15 @@ public final class GapReasons {
           "missing_hour",
           // Added in collector silent-loss work (commits 30348b2, 3e068b7):
           "kafka_delivery_failed",
-          "handler_error");
+          "handler_error",
+          // Added for redundancy + outage detection (gap-detection-and-redundancy design):
+          "kafka_consumer_outage",
+          "kafka_producer_outage",
+          "kafka_offset_reset",
+          "pg_outage_hold",
+          "disk_full_hold",
+          "cross_source_pu_chain_break",
+          "both_collectors_silent");
 
   private GapReasons() {}
 

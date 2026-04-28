@@ -43,4 +43,16 @@ class GapReasonsTest {
     GapReasons.requireValid("ws_disconnect");
     GapReasons.requireValid("missing_hour");
   }
+
+  @Test
+  void newRedundancyGapReasonsPresent() {
+    // Added in gap-detection-and-redundancy design
+    assertThat(GapReasons.VALID).contains("kafka_consumer_outage");
+    assertThat(GapReasons.VALID).contains("kafka_producer_outage");
+    assertThat(GapReasons.VALID).contains("kafka_offset_reset");
+    assertThat(GapReasons.VALID).contains("pg_outage_hold");
+    assertThat(GapReasons.VALID).contains("disk_full_hold");
+    assertThat(GapReasons.VALID).contains("cross_source_pu_chain_break");
+    assertThat(GapReasons.VALID).contains("both_collectors_silent");
+  }
 }
