@@ -1,6 +1,7 @@
 package com.cryptolake.writer.consumer;
 
 import com.cryptolake.writer.buffer.BufferManager;
+import com.cryptolake.writer.durability.KafkaConsumerOutageDetector;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.failover.FailoverController;
 import com.cryptolake.writer.gap.GapEmitter;
@@ -52,6 +53,12 @@ public final class KafkaConsumerLoop implements Runnable {
   private final CoverageFilter coverage;
   private final GapEmitter gaps;
   private final WriterMetrics metrics;
+
+  /**
+   * Optional outage detector that tracks the last non-empty poll timestamp. Null if not wired
+   * (default — for backward compatibility with existing tests).
+   */
+  private volatile KafkaConsumerOutageDetector outageDetector;
 
   /** Volatile flag set by SIGTERM hook to stop the consume loop. No synchronized needed. */
   private volatile boolean stopRequested = false;
@@ -111,6 +118,10 @@ public final class KafkaConsumerLoop implements Runnable {
       try {
         // Poll primary (Tier 5 A2 — blocking call on virtual thread; no run_in_executor wrapper)
         ConsumerRecords<byte[], byte[]> records = primary.poll(Duration.ofSeconds(1));
+        if (!records.isEmpty()) {
+          KafkaConsumerOutageDetector det = outageDetector;
+          if (det != null) det.recordPollWithRecords();
+        }
         for (ConsumerRecord<byte[], byte[]> rec : records) { // Tier 5 C2 — batch-first
           recordHandler.handle(rec, false);
         }
@@ -155,6 +166,16 @@ public final class KafkaConsumerLoop implements Runnable {
 
     // Shutdown sequence (design §3.4)
     shutdownSequence();
+  }
+
+  /**
+   * Wires an outage detector to be notified on each non-empty poll. Must be called before {@link
+   * #run()}.
+   *
+   * @param detector the detector to notify; null disables notifications
+   */
+  public void setOutageDetector(KafkaConsumerOutageDetector detector) {
+    this.outageDetector = detector;
   }
 
   /** Signals the consume loop to stop. Called from the SIGTERM handler (T3 — volatile write). */
