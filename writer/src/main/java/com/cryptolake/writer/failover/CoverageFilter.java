@@ -43,6 +43,12 @@ public final class CoverageFilter {
    */
   private final Map<String, Long> lastDataTs = new HashMap<>();
 
+  /**
+   * Per-source last-heartbeat timestamp (ns). Key: "primary" or "backup"; value: nanosecond
+   * timestamp. Updated by {@link #handleHeartbeat(String)}.
+   */
+  private final Map<String, Long> lastHeartbeatTs = new HashMap<>();
+
   /** Pending gaps waiting for grace period: key is gapKey, value is pending entry. */
   private final Map<String, PendingGap> pendingGaps = new HashMap<>();
 
@@ -177,6 +183,37 @@ public final class CoverageFilter {
   /** Returns whether coverage filtering is enabled (both sources seen). */
   public boolean enabled() {
     return filterEnabled;
+  }
+
+  /**
+   * Records that a heartbeat was received from the given source.
+   *
+   * <p>Called by {@code RecordHandler} when a {@code heartbeat} envelope arrives. Used by {@code
+   * SilenceInferredGapEmitter} to distinguish "collector is alive but no data" from "both
+   * collectors silent".
+   *
+   * @param source "primary" or "backup"
+   */
+  public void handleHeartbeat(String source) {
+    lastHeartbeatTs.put(source, clock.nowNs());
+  }
+
+  /**
+   * Returns the last-data timestamp (ns) for the given source, or 0 if never seen.
+   *
+   * @param source "primary" or "backup"
+   */
+  public long getLastDataTs(String source) {
+    return lastDataTs.getOrDefault(source, 0L);
+  }
+
+  /**
+   * Returns the last-heartbeat timestamp (ns) for the given source, or 0 if never seen.
+   *
+   * @param source "primary" or "backup"
+   */
+  public long getLastHeartbeatTs(String source) {
+    return lastHeartbeatTs.getOrDefault(source, 0L);
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────────────────────

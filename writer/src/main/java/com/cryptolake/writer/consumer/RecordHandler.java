@@ -126,8 +126,8 @@ public final class RecordHandler {
     // Heartbeat envelopes: liveness-only; no archive write (ports Python env_type == "heartbeat").
     if ("heartbeat".equals(envelopeType)) {
       // No session change, no recovery gap, no buffer write — heartbeats are not archived.
-      // Reset silence timer implicitly via the failover controller (coverage filter not called
-      // here as the coverage filter's handleHeartbeat API is not yet wired; sufficient for now).
+      // Update coverage filter heartbeat timestamp for SilenceInferredGapEmitter.
+      coverageFilter.handleHeartbeat(source);
       if (!fromBackup) {
         failover.resetSilenceTimer();
       }
