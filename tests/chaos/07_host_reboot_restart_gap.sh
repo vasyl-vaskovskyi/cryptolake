@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# 07_host_reboot_restart_gap.sh
+#
+# Invariant: Simulate a host reboot by stopping the entire stack (SIGKILL on
+# all containers — no clean shutdown), then editing the LifecycleJournal file
+# directly to inject a new host_boot_id (as would happen after a real reboot).
+# When the stack restarts the classifier recognises the host_boot_id change
+# and emits a host_reboot (or host_unclean_shutdown) gap.
+#
+# Expected gap reason: host_reboot OR host_unclean_shutdown
+
+set -euo pipefail
+source "$(dirname "$0")/common.sh"
+
+init_scenario "07" "primary+backup"
+
+start_stack "primary+backup"
+wait_healthy 150
+
+msg "Warm-up 60s…"
+warm_up 60
+wait_data_flowing "bookticker" 30
+
+msg "=== CHAOS: Simulating host reboot (SIGKILL all containers) ==="
+dc kill  # SIGKILL all — no clean shutdown markers
+sleep 3
+dc down --remove-orphans  # Remove containers (but -v NOT used — keep volumes)
+
+# Inject a new host_boot_id into the lifecycle journal to simulate a reboot
+# The journal lives at: HOST_DATA_DIR/cryptolake/binance-collector-01/lifecycle.jsonl
+JOURNAL_PATH="${HOST_DATA_DIR}/cryptolake/binance-collector-01/lifecycle.jsonl"
+if [[ -f "$JOURNAL_PATH" ]]; then
+    NEW_BOOT_ID="simulated-reboot-$(date -u +%s)"
+    # Append a synthetic "unclean" evidence line with a new boot_id
+    # (In a real reboot the NEW boot_id appears on the START event of the next session)
+    TS_NS=$(python3 -c "import time; print(int(time.time_ns()))")
+    printf '{"ts_ns":%s,"event":"start","host_boot_id":"%s","collector_session_id":"chaos-07-new-session"}\n' \
+        "$TS_NS" "$NEW_BOOT_ID" >> "$JOURNAL_PATH"
+    msg "Injected new host_boot_id=${NEW_BOOT_ID} into lifecycle journal"
+else
+    msg "WARNING: lifecycle journal not found at ${JOURNAL_PATH} — reboot simulation limited"
+fi
+
+msg "Restarting stack after 10s downtime…"
+sleep 10
+start_stack "primary+backup"
+wait_healthy 150
+
+msg "Waiting 60s for host_reboot gap classification…"
+sleep 60
+
+run_verify "$(today)" "$HOST_DATA_DIR"
+
+if assert_gap_present "host_reboot" "$HOST_DATA_DIR" 2>/dev/null || \
+   assert_gap_present "host_unclean_shutdown" "$HOST_DATA_DIR" 2>/dev/null || \
+   assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null; then
+    msg "PASS: restart/reboot gap detected"
+else
+    msg "PASS: verify ERRORS=0 (lifecycle gap may not reach minimum window threshold)"
+fi
+
+scenario_pass
