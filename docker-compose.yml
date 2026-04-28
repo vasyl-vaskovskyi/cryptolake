@@ -72,10 +72,12 @@ services:
       - collector_egress
     volumes:
       - ./config/config.yaml:/etc/cryptolake/config.yml:ro
+      - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
     environment:
       - LOG_LEVEL=INFO
       - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
       - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
       interval: 15s
@@ -89,32 +91,40 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  # Backup collector requires a Java-side env-var override of topicPrefix +
-  # collectorId (currently both are sourced from config.yaml only). Re-enable
-  # this service once that small Main.java change lands. Tracking note in
-  # docs/superpowers/port/POST_PORT_FOLLOWUPS.md (if/when written).
-  #
-  # collector-backup:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/Dockerfile.collector
-  #   depends_on:
-  #     redpanda:
-  #       condition: service_healthy
-  #   ports:
-  #     - "127.0.0.1:8004:8000"
-  #   networks:
-  #     - cryptolake_internal
-  #     - backup_egress
-  #   volumes:
-  #     - ./config/config.yaml:/etc/cryptolake/config.yml:ro
-  #   environment:
-  #     - LOG_LEVEL=INFO
-  #     - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
-  #     - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
-  #     - COLLECTOR_ID=binance-collector-backup
-  #     - TOPIC_PREFIX=backup.
-  #   restart: unless-stopped
+  collector-backup:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.collector
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8004:8000"
+    networks:
+      - cryptolake_internal
+      - backup_egress
+    volumes:
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
+      - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
+    environment:
+      - LOG_LEVEL=INFO
+      - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
+      - COLLECTOR_ID=binance-collector-backup
+      - TOPIC_PREFIX=backup.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   writer:
     build:

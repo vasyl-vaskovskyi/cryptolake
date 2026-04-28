@@ -7,6 +7,9 @@ import com.cryptolake.collector.capture.RawFrameCapture;
 import com.cryptolake.collector.capture.SessionSeqAllocator;
 import com.cryptolake.collector.connection.BackpressureGate;
 import com.cryptolake.collector.connection.WebSocketSupervisor;
+import com.cryptolake.collector.durability.KafkaOutageJournal;
+import com.cryptolake.collector.durability.KafkaProducerHealthMonitor;
+import com.cryptolake.collector.durability.LifecycleJournal;
 import com.cryptolake.collector.gap.DisconnectGapCoalescer;
 import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.lifecycle.ComponentRuntimeState;
@@ -292,6 +295,26 @@ public final class Main {
     lifecycleManager.registerStart(componentState);
     var heartbeatScheduler = new ProcessHeartbeatScheduler(lifecycleManager, componentState);
 
+    // ── LifecycleJournal (Java replacement for Python host_lifecycle_agent) ─
+    Path dataDir = Path.of(YamlConfigLoader.defaultArchiveDir());
+    var lifecycleJournal = new LifecycleJournal(dataDir, collectorId, clock);
+    lifecycleJournal.pruneOlderThan(Duration.ofDays(7));
+    lifecycleJournal.recordStart(bootId, session.sessionId());
+
+    // ── KafkaOutageJournal + KafkaProducerHealthMonitor ───────────────────
+    var kafkaOutageJournal = new KafkaOutageJournal(dataDir, collectorId);
+    List<KafkaProducerHealthMonitor.SymbolStream> symbolStreams = new java.util.ArrayList<>();
+    for (String sym : symbols) {
+      for (String st : enabledStreams) {
+        if (!st.equals("depth_snapshot")) { // depth_snapshot is REST-only; no WS gap needed here
+          symbolStreams.add(new KafkaProducerHealthMonitor.SymbolStream(sym, st));
+        }
+      }
+    }
+    var kafkaHealthMonitor =
+        KafkaProducerHealthMonitor.of(
+            clock, producerBridge, kafkaOutageJournal, gapEmitter, symbolStreams);
+
     // ── Health server ─────────────────────────────────────────────────────
     int healthPort =
         config.monitoring() != null && config.monitoring().prometheusPort() > 0
@@ -320,6 +343,7 @@ public final class Main {
     supervisor.start();
     if (snapshotSchedulerFinal != null) snapshotSchedulerFinal.start();
     if (oiPollerFinal != null) oiPollerFinal.start();
+    kafkaHealthMonitor.start();
     healthServer.start();
 
     log.info("collector_started", "session_id", session.sessionId());
@@ -338,9 +362,12 @@ public final class Main {
         snapshotSchedulerFinal,
         oiPollerFinal,
         heartbeatScheduler,
+        kafkaHealthMonitor,
         producerBridge,
         lifecycleManager,
         componentState,
+        lifecycleJournal,
+        bootId,
         healthServer,
         virtualExec);
 
@@ -353,9 +380,12 @@ public final class Main {
       SnapshotScheduler snapshotScheduler,
       OpenInterestPoller oiPoller,
       ProcessHeartbeatScheduler processHeartbeat,
+      KafkaProducerHealthMonitor kafkaHealthMonitor,
       KafkaProducerBridge producer,
       LifecycleStateManager lifecycle,
       ComponentRuntimeState state,
+      LifecycleJournal lifecycleJournal,
+      String bootId,
       HealthServer healthServer,
       ExecutorService virtualExec) {
 
@@ -386,6 +416,10 @@ public final class Main {
     } catch (Exception ignored) {
     }
     try {
+      kafkaHealthMonitor.stop();
+    } catch (Exception ignored) {
+    }
+    try {
       producer.flush(Duration.ofSeconds(10));
     } catch (Exception ignored) {
     }
@@ -395,6 +429,10 @@ public final class Main {
     }
     try {
       lifecycle.markCleanShutdown(state.component(), state.instanceId(), false, null);
+    } catch (Exception ignored) {
+    }
+    try {
+      lifecycleJournal.recordCleanShutdown(bootId, state.instanceId(), false, null);
     } catch (Exception ignored) {
     }
     try {
