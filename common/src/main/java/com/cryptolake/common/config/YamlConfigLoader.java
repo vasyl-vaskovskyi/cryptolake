@@ -82,6 +82,13 @@ public final class YamlConfigLoader {
     if (env.containsKey("HOST_DATA_DIR")) {
       filtered.put("HOST_DATA_DIR", env.get("HOST_DATA_DIR"));
     }
+    // Backup-collector env-var overrides: COLLECTOR_ID and TOPIC_PREFIX map to nested paths
+    if (env.containsKey("COLLECTOR_ID")) {
+      filtered.put("EXCHANGES__BINANCE__COLLECTOR_ID", env.get("COLLECTOR_ID"));
+    }
+    if (env.containsKey("TOPIC_PREFIX")) {
+      filtered.put("EXCHANGES__BINANCE__TOPIC_PREFIX", env.get("TOPIC_PREFIX"));
+    }
     return load(path, EnvOverrides.normalize(filtered));
   }
 

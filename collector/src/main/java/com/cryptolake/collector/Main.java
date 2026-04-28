@@ -83,7 +83,7 @@ public final class Main {
     List<String> symbols = binance.symbols();
     List<String> enabledStreams = binance.getEnabledStreams();
     String exchange = "binance";
-    String topicPrefix = ""; // primary (no backup prefix)
+    String topicPrefix = binance.topicPrefix(); // "" for primary; "backup." for backup collector
     String collectorId = binance.collectorId();
 
     // ── Core singletons ───────────────────────────────────────────────────

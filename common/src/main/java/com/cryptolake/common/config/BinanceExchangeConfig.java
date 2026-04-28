@@ -33,7 +33,8 @@ public record BinanceExchangeConfig(
     @JsonProperty("writer_streams_override") List<String> writerStreamsOverride,
     @JsonProperty("depth") @Valid DepthConfig depth,
     @JsonProperty("open_interest") @Valid OpenInterestConfig openInterest,
-    @JsonProperty("collector_id") String collectorId) {
+    @JsonProperty("collector_id") String collectorId,
+    @JsonProperty("topic_prefix") String topicPrefix) {
 
   public BinanceExchangeConfig {
     // Apply defaults for null optional fields
@@ -41,6 +42,7 @@ public record BinanceExchangeConfig(
     if (wsBase == null) wsBase = "wss://fstream.binance.com";
     if (restBase == null) restBase = "https://fapi.binance.com";
     if (collectorId == null) collectorId = "binance-collector-01";
+    if (topicPrefix == null) topicPrefix = "";
     if (streams == null) streams = new StreamsConfig();
     if (depth == null) depth = new DepthConfig();
     if (openInterest == null) openInterest = new OpenInterestConfig();

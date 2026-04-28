@@ -20,7 +20,17 @@ class BinanceExchangeConfigTest {
     // ports: tests/unit/test_config.py::TestConfigLoading::test_config_symbols_are_lowercase
     BinanceExchangeConfig cfg =
         new BinanceExchangeConfig(
-            true, null, null, null, List.of("BTCUSDT", "ETHUSDT"), null, null, null, null, null);
+            true,
+            null,
+            null,
+            null,
+            List.of("BTCUSDT", "ETHUSDT"),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
     for (String s : cfg.symbols()) {
       assertThat(s).isEqualTo(s.toLowerCase());
     }
@@ -34,7 +44,7 @@ class BinanceExchangeConfigTest {
     StreamsConfig streams = new StreamsConfig(true, false, true, false, false, false); // no depth
     BinanceExchangeConfig cfg =
         new BinanceExchangeConfig(
-            true, null, null, null, List.of("btcusdt"), streams, null, null, null, null);
+            true, null, null, null, List.of("btcusdt"), streams, null, null, null, null, null);
     List<String> enabled = cfg.getEnabledStreams();
     assertThat(enabled).doesNotContain("depth");
     assertThat(enabled).doesNotContain("depth_snapshot");
@@ -51,6 +61,7 @@ class BinanceExchangeConfigTest {
             null,
             List.of("btcusdt"),
             new StreamsConfig(),
+            null,
             null,
             null,
             null,
@@ -82,6 +93,7 @@ class BinanceExchangeConfigTest {
             List.of("trades", "depth"),
             null,
             null,
+            null,
             null);
     assertThat(cfg.writerStreamsOverride()).contains("depth_snapshot");
     assertThat(cfg.writerStreamsOverride()).containsExactly("trades", "depth", "depth_snapshot");
@@ -102,6 +114,7 @@ class BinanceExchangeConfigTest {
             List.of("depth", "depth_snapshot"),
             null,
             null,
+            null,
             null);
     long count = cfg.writerStreamsOverride().stream().filter("depth_snapshot"::equals).count();
     assertThat(count).isEqualTo(1);
@@ -113,7 +126,7 @@ class BinanceExchangeConfigTest {
     // tests/unit/test_config.py::TestConfigLoading::test_writer_streams_override_none_by_default
     BinanceExchangeConfig cfg =
         new BinanceExchangeConfig(
-            true, null, null, null, List.of("btcusdt"), null, null, null, null, null);
+            true, null, null, null, List.of("btcusdt"), null, null, null, null, null, null);
     assertThat(cfg.writerStreamsOverride()).isNull();
   }
 }
