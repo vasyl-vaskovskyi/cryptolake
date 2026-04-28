@@ -5,6 +5,7 @@ import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.common.logging.StructuredLogger;
+import com.cryptolake.common.validation.CrossSourcePuChainValidator;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.failover.FailoverController;
@@ -42,6 +43,12 @@ public final class RecordHandler {
   private final WriterMetrics metrics;
   private final String backupPrefix;
 
+  /**
+   * Optional cross-source pu-chain validator. Null if not wired (e.g. older tests). Emits a {@code
+   * cross_source_pu_chain_break} gap when the merged depth stream has a pu-chain gap.
+   */
+  private volatile CrossSourcePuChainValidator crossSourceValidator;
+
   public RecordHandler(
       EnvelopeCodec codec,
       SessionChangeDetector sessionDetector,
@@ -63,6 +70,16 @@ public final class RecordHandler {
     this.gaps = gaps;
     this.metrics = metrics;
     this.backupPrefix = backupPrefix;
+  }
+
+  /**
+   * Wires a cross-source pu-chain validator. Called once during startup; must be set before the
+   * consume loop starts processing depth envelopes.
+   *
+   * @param validator the validator; null disables cross-source validation
+   */
+  public void setCrossSourceValidator(CrossSourcePuChainValidator validator) {
+    this.crossSourceValidator = validator;
   }
 
   /**
@@ -143,7 +160,9 @@ public final class RecordHandler {
       if (accepted) {
         buffers.add(collectorGap, coords, source);
       }
-      metrics.messagesConsumed(collectorGap.exchange(), collectorGap.symbol(), collectorGap.stream()).increment();
+      metrics
+          .messagesConsumed(collectorGap.exchange(), collectorGap.symbol(), collectorGap.stream())
+          .increment();
       if (!fromBackup) {
         failover.resetSilenceTimer();
       }
@@ -218,6 +237,12 @@ public final class RecordHandler {
         Optional<GapEnvelope> depthGap = depthFilter.onDepthDiff(env);
         if (depthGap.isPresent()) {
           gaps.emit(depthGap.get(), source, primaryTopic, partition, -1L);
+        }
+        // Cross-source pu-chain validation (ruler #4 from spec §4)
+        CrossSourcePuChainValidator xsValidator = crossSourceValidator;
+        if (xsValidator != null) {
+          xsValidator.handle(env);
+          // Gap emission is handled inside the validator via its GapCallback
         }
       }
 
