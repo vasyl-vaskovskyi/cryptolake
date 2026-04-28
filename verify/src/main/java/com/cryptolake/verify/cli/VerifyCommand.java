@@ -1,5 +1,7 @@
 package com.cryptolake.verify.cli;
 
+import com.cryptolake.common.envelope.DataEnvelope;
+import com.cryptolake.common.validation.CrossSourcePuChainValidator;
 import com.cryptolake.verify.archive.ArchiveFile;
 import com.cryptolake.verify.archive.ArchiveScanner;
 import com.cryptolake.verify.archive.DecompressAndParse;
@@ -139,6 +141,10 @@ public final class VerifyCommand implements java.util.concurrent.Callable<Intege
         }
       }
       allErrors.addAll(DepthReplayVerifier.verify(depthEnvs, snapEnvs, gapEnvs, mapper));
+
+      // Post-merge cross-source pu-chain pass: runs after per-source pu-chain check.
+      // Re-applies the pu-chain check on the dedup'd merged depth stream (ruler #4).
+      allErrors.addAll(runCrossSourcePuChainCheck(depthEnvs, gapEnvs, mapper));
     }
 
     // Final report (byte-identical to Python — §6.7 line templates 13-21)
@@ -172,6 +178,46 @@ public final class VerifyCommand implements java.util.concurrent.Callable<Intege
     }
 
     return allErrors.isEmpty() ? 0 : 1;
+  }
+
+  /**
+   * Runs the cross-source pu-chain check on the merged depth envelope stream.
+   *
+   * <p>Applies the {@link CrossSourcePuChainValidator} on all depth data envelopes in chronological
+   * order (sorted by {@code received_at}). Any break is reported as an ERROR.
+   *
+   * @param depthEnvs all depth data envelopes from all sources (merged stream)
+   * @param gapEnvs all gap envelopes (for context — not used for suppression in verify-mode)
+   * @param mapper Jackson mapper for envelope deserialization
+   * @return list of error strings (empty if chain is intact)
+   */
+  private static List<String> runCrossSourcePuChainCheck(
+      List<JsonNode> depthEnvs, List<JsonNode> gapEnvs, ObjectMapper mapper) {
+    List<String> errors = new ArrayList<>();
+    if (depthEnvs.isEmpty()) {
+      return errors;
+    }
+
+    // Sort by received_at ascending (chronological merge)
+    List<JsonNode> sorted =
+        depthEnvs.stream()
+            .sorted(java.util.Comparator.comparingLong(n -> n.path("received_at").asLong(0)))
+            .collect(java.util.stream.Collectors.toList());
+
+    CrossSourcePuChainValidator validator =
+        new CrossSourcePuChainValidator(
+            (exchange, symbol, detail, gapStart, gapEnd) ->
+                errors.add("cross_source_pu_chain_break: " + symbol + " " + detail));
+
+    for (JsonNode node : sorted) {
+      try {
+        DataEnvelope env = mapper.convertValue(node, DataEnvelope.class);
+        validator.handle(env);
+      } catch (Exception ignored) {
+        // skip unparseable envelopes — EnvelopeVerifier already reported them
+      }
+    }
+    return errors;
   }
 
   /**
