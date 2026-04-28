@@ -1,4 +1,4 @@
-// cryptolake-java/cli/build.gradle.kts
+// cli/build.gradle.kts
 // Aggregator project: gates 1, 5, 6 run against :cli which delegates to the three subprojects.
 
 plugins {

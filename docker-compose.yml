@@ -60,7 +60,7 @@ services:
 
   collector:
     build:
-      context: ./cryptolake-java
+      context: .
       dockerfile: docker/Dockerfile.collector
     depends_on:
       redpanda:
@@ -96,7 +96,7 @@ services:
   #
   # collector-backup:
   #   build:
-  #     context: ./cryptolake-java
+  #     context: .
   #     dockerfile: docker/Dockerfile.collector
   #   depends_on:
   #     redpanda:
@@ -118,7 +118,7 @@ services:
 
   writer:
     build:
-      context: ./cryptolake-java
+      context: .
       dockerfile: docker/Dockerfile.writer
     depends_on:
       redpanda:
@@ -154,7 +154,7 @@ services:
 
   backfill:
     build:
-      context: ./cryptolake-java
+      context: .
       dockerfile: docker/Dockerfile.backfill
     depends_on:
       writer:
@@ -177,7 +177,7 @@ services:
 
   consolidation:
     build:
-      context: ./cryptolake-java
+      context: .
       dockerfile: docker/Dockerfile.consolidation
     depends_on:
       writer:

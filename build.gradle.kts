@@ -1,4 +1,4 @@
-// cryptolake-java/build.gradle.kts
+// build.gradle.kts
 plugins {
     alias(libs.plugins.spotless) apply false
 }

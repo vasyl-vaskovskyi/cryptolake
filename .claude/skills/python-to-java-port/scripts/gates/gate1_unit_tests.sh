@@ -2,5 +2,5 @@
 # gate1: unit + integration tests for the module.
 set -euo pipefail
 MODULE="${1:?module}"
-cd cryptolake-java
+cd "$REPO_ROOT"
 ./gradlew ":${MODULE}:test" --tests '*' --info

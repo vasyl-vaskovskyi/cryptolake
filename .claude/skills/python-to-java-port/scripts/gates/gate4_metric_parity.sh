@@ -11,22 +11,22 @@ case "$MODULE" in
 esac
 
 SERVICE="$MODULE"
-# Absolute path so it survives the `cd cryptolake-java` below.
+# Absolute path so it survives the `cd "$REPO_ROOT"` below.
 REPO_ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
-REF="$REPO_ROOT/cryptolake-java/parity-fixtures/metrics/${SERVICE}.txt"
+REF="$REPO_ROOT/parity-fixtures/metrics/${SERVICE}.txt"
 if [[ ! -f "$REF" ]]; then
   echo "gate4 FAIL: reference metrics missing: $REF" >&2
   exit 1
 fi
 
-cd "$REPO_ROOT/cryptolake-java"
+cd "$REPO_ROOT"
 # Gradle task :<module>:dumpMetricSkeleton starts the service in a test JVM,
 # scrapes /metrics, writes to build/metrics-skeleton.txt (canonicalized:
 # metric_name{sorted,label,keys} with VALUE stripped; only app-level
 # <service>_* metrics).
 ./gradlew ":${SERVICE}:dumpMetricSkeleton" --info
 
-ACTUAL="$REPO_ROOT/cryptolake-java/${SERVICE}/build/metrics-skeleton.txt"
+ACTUAL="$REPO_ROOT/${SERVICE}/build/metrics-skeleton.txt"
 if [[ ! -f "$ACTUAL" ]]; then
   echo "gate4 FAIL: harness did not produce $ACTUAL" >&2
   exit 1

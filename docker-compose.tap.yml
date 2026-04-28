@@ -3,4 +3,4 @@ services:
     environment:
       - COLLECTOR__TAP_OUTPUT_DIR=/tap
     volumes:
-      - ./cryptolake-java/parity-fixtures/websocket-frames:/tap
+      - ./parity-fixtures/websocket-frames:/tap

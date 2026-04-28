@@ -14,13 +14,13 @@ case "$MODULE" in
     ;;
 esac
 
-FIXTURE_ROOT="cryptolake-java/parity-fixtures/websocket-frames"
+FIXTURE_ROOT="parity-fixtures/websocket-frames"
 if [[ ! -d "$FIXTURE_ROOT" ]]; then
   echo "gate3 FAIL: fixture directory missing: $FIXTURE_ROOT" >&2
   exit 1
 fi
 
-cd cryptolake-java
+cd "$REPO_ROOT"
 # Java harness class lives in the module's test sourceSet.
 # Harness is named RawTextParityHarness. It reads FIXTURE_ROOT, runs frames
 # through the module's capture, prints "OK <n> frames" or "FAIL ..." with

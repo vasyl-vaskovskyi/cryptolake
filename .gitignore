@@ -7,6 +7,19 @@
 .env
 /data/
 .worktrees/
+
+# Gradle / Java build artifacts (formerly cryptolake-java/.gitignore).
+.gradle/
+build/
+*.class
+*.iml
+
+# Parity fixtures: frames + verify expected.txt are large/regenerable; the
+# small metric snapshots are checked in.
+parity-fixtures/websocket-frames/
+parity-fixtures/verify/expected.txt
+!parity-fixtures/metrics/
+
 # Ignore most of .claude/ (local settings, worktree metadata) but track the
 # shared skill bundle and slash commands that are part of the repo.
 .claude/*

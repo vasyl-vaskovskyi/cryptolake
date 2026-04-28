@@ -1,10 +1,10 @@
-// cryptolake-java/consolidation/build.gradle.kts
+// backfill/build.gradle.kts
 plugins {
     application
 }
 
 application {
-    mainClass.set("com.cryptolake.consolidation.Main")
+    mainClass.set("com.cryptolake.backfill.Main")
 }
 
 dependencies {
@@ -17,15 +17,14 @@ dependencies {
     implementation(libs.slf4j.api)
     implementation(libs.logback.classic)
     implementation(libs.logstash.encoder)
-    implementation(libs.commons.compress)
 }
 
 tasks.register<JavaExec>("dumpMetricSkeleton") {
     group = "port"
-    description = "Scrape Java consolidation scheduler Prometheus registry -> build/metrics-skeleton.txt."
+    description = "Scrape Java backfill scheduler Prometheus registry -> build/metrics-skeleton.txt."
     dependsOn("compileJava")
     classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.cryptolake.consolidation.harness.MetricSkeletonDump")
+    mainClass.set("com.cryptolake.backfill.harness.MetricSkeletonDump")
     val outFile = layout.buildDirectory.file("metrics-skeleton.txt")
     args(outFile.get().asFile.absolutePath)
     outputs.file(outFile)

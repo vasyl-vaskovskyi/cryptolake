@@ -8,5 +8,5 @@ case "$MODULE" in
     exit 0
     ;;
 esac
-cd cryptolake-java
+cd "$REPO_ROOT"
 ./gradlew ":${MODULE}:test" --tests '*chaos*' --info

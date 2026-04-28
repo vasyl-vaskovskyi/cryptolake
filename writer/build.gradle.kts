@@ -1,4 +1,4 @@
-// cryptolake-java/writer/build.gradle.kts
+// writer/build.gradle.kts
 plugins {
     application
 }

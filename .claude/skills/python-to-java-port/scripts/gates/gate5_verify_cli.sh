@@ -12,13 +12,13 @@ case "$MODULE" in
 esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
-EXPECTED="$REPO_ROOT/cryptolake-java/parity-fixtures/verify/expected.txt"
+EXPECTED="$REPO_ROOT/parity-fixtures/verify/expected.txt"
 [[ -f "$EXPECTED" ]] || { echo "gate5 FAIL: expected output missing: $EXPECTED" >&2; exit 1; }
 
 # Run Java integration harness that produces archives to a known path.
-cd "$REPO_ROOT/cryptolake-java"
+cd "$REPO_ROOT"
 ./gradlew ":${MODULE}:produceSyntheticArchives" --info
-ARCHIVE_DIR="$REPO_ROOT/cryptolake-java/${MODULE}/build/synthetic-archives"
+ARCHIVE_DIR="$REPO_ROOT/${MODULE}/build/synthetic-archives"
 [[ -d "$ARCHIVE_DIR" ]] || { echo "gate5 FAIL: no archives produced at $ARCHIVE_DIR" >&2; exit 1; }
 
 cd "$REPO_ROOT"

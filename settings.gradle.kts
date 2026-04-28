@@ -1,5 +1,5 @@
-// cryptolake-java/settings.gradle.kts
-rootProject.name = "cryptolake-java"
+// settings.gradle.kts
+rootProject.name = "cryptolake"
 
 include(
     "common",

@@ -1,4 +1,4 @@
-// cryptolake-java/common/build.gradle.kts
+// common/build.gradle.kts
 plugins {
     `java-library`
 }

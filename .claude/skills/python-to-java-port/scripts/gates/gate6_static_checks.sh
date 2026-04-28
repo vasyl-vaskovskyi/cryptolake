@@ -2,7 +2,7 @@
 # gate6: Spotless + Error Prone + NullAway + custom rule checks.
 set -euo pipefail
 MODULE="${1:?module}"
-cd cryptolake-java
+cd "$REPO_ROOT"
 ./gradlew ":${MODULE}:check" --info
 
 # Custom rule: no `synchronized (` near blocking I/O patterns in this module.

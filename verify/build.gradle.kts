@@ -1,4 +1,4 @@
-// cryptolake-java/verify/build.gradle.kts
+// verify/build.gradle.kts
 plugins {
     application
 }
