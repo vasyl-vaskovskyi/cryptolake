@@ -63,9 +63,7 @@ class ChaosVerifyIT {
 
     List<Path> scenarios = discoverScenarios(filter);
 
-    assertThat(scenarios)
-        .as("Expected to discover chaos scenarios in %s", CHAOS_DIR)
-        .isNotEmpty();
+    assertThat(scenarios).as("Expected to discover chaos scenarios in %s", CHAOS_DIR).isNotEmpty();
 
     return scenarios.stream()
         .map(
@@ -144,9 +142,8 @@ class ChaosVerifyIT {
   }
 
   /**
-   * Resolves the repository root by walking up from the working directory until we find a
-   * {@code settings.gradle.kts} file. Falls back to the system property
-   * {@code chaos.repoRoot} if set.
+   * Resolves the repository root by walking up from the working directory until we find a {@code
+   * settings.gradle.kts} file. Falls back to the system property {@code chaos.repoRoot} if set.
    */
   private static Path resolveRepoRoot() {
     String override = System.getProperty("chaos.repoRoot");
