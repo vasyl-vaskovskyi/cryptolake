@@ -1,5 +1,8 @@
 name: cryptolake
 
+# Java stack. The Python implementation was retired after the Python-to-Java
+# port reached DONE state — see git tags `port-{common,writer,collector,cli}-accepted`.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -57,8 +60,8 @@ services:
 
   collector:
     build:
-      context: .
-      dockerfile: Dockerfile.collector
+      context: ./cryptolake-java
+      dockerfile: docker/Dockerfile.collector
     depends_on:
       redpanda:
         condition: service_healthy
@@ -68,13 +71,13 @@ services:
       - cryptolake_internal
       - collector_egress
     volumes:
-      - ./config:/app/config:ro
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
     environment:
-      - CONFIG_PATH=/app/config/config.yaml
-      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
+      - LOG_LEVEL=INFO
+      - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
       - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/ready', timeout=5).status == 200 else 1)"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -86,63 +89,58 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  collector-backup:
-    build:
-      context: .
-      dockerfile: Dockerfile.collector
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8004:8000"
-    networks:
-      - cryptolake_internal
-      - backup_egress
-    volumes:
-      - ./config:/app/config:ro
-    environment:
-      - CONFIG_PATH=/app/config/config.yaml
-      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
-      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
-      - COLLECTOR_ID=binance-collector-backup
-      - TOPIC_PREFIX=backup.
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/ready', timeout=5).status == 200 else 1)"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    stop_grace_period: 30s
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+  # Backup collector requires a Java-side env-var override of topicPrefix +
+  # collectorId (currently both are sourced from config.yaml only). Re-enable
+  # this service once that small Main.java change lands. Tracking note in
+  # docs/superpowers/port/POST_PORT_FOLLOWUPS.md (if/when written).
+  #
+  # collector-backup:
+  #   build:
+  #     context: ./cryptolake-java
+  #     dockerfile: docker/Dockerfile.collector
+  #   depends_on:
+  #     redpanda:
+  #       condition: service_healthy
+  #   ports:
+  #     - "127.0.0.1:8004:8000"
+  #   networks:
+  #     - cryptolake_internal
+  #     - backup_egress
+  #   volumes:
+  #     - ./config/config.yaml:/etc/cryptolake/config.yml:ro
+  #   environment:
+  #     - LOG_LEVEL=INFO
+  #     - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
+  #     - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+  #     - COLLECTOR_ID=binance-collector-backup
+  #     - TOPIC_PREFIX=backup.
+  #   restart: unless-stopped
 
   writer:
     build:
-      context: .
-      dockerfile: Dockerfile.writer
+      context: ./cryptolake-java
+      dockerfile: docker/Dockerfile.writer
     depends_on:
       redpanda:
         condition: service_healthy
       postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8001:8001"
+      - "127.0.0.1:8001:8000"
     networks:
       - cryptolake_internal
       - host_access
     volumes:
-      - ./config:/app/config:ro
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
       - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
     environment:
-      - CONFIG_PATH=/app/config/config.yaml
-      - DATABASE__URL=postgresql://cryptolake:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cryptolake
-      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      - LOG_LEVEL=INFO
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
+      - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
+      - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+    command: ["/etc/cryptolake/config.yml"]
     healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8001/ready', timeout=5).status == 200 else 1)"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -156,8 +154,8 @@ services:
 
   backfill:
     build:
-      context: .
-      dockerfile: Dockerfile.backfill
+      context: ./cryptolake-java
+      dockerfile: docker/Dockerfile.backfill
     depends_on:
       writer:
         condition: service_healthy
@@ -165,14 +163,11 @@ services:
       - cryptolake_internal
       - collector_egress
     volumes:
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
       - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
     environment:
+      - LOG_LEVEL=INFO
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8002/', timeout=5).status == 200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
     restart: unless-stopped
     logging:
       driver: json-file
@@ -182,22 +177,19 @@ services:
 
   consolidation:
     build:
-      context: .
-      dockerfile: Dockerfile.consolidation
+      context: ./cryptolake-java
+      dockerfile: docker/Dockerfile.consolidation
     depends_on:
       writer:
         condition: service_healthy
     networks:
       - cryptolake_internal
     volumes:
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
       - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
     environment:
+      - LOG_LEVEL=INFO
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8003/', timeout=5).status == 200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
     restart: unless-stopped
     logging:
       driver: json-file
