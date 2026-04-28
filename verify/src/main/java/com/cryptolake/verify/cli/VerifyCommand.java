@@ -5,6 +5,7 @@ import com.cryptolake.common.validation.CrossSourcePuChainValidator;
 import com.cryptolake.verify.archive.ArchiveFile;
 import com.cryptolake.verify.archive.ArchiveScanner;
 import com.cryptolake.verify.archive.DecompressAndParse;
+import com.cryptolake.verify.validation.HeartbeatTimelineWalker;
 import com.cryptolake.verify.verify.ChecksumVerifier;
 import com.cryptolake.verify.verify.DepthReplayVerifier;
 import com.cryptolake.verify.verify.DuplicateOffsetChecker;
@@ -15,7 +16,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -145,6 +148,10 @@ public final class VerifyCommand implements java.util.concurrent.Callable<Intege
       // Post-merge cross-source pu-chain pass: runs after per-source pu-chain check.
       // Re-applies the pu-chain check on the dedup'd merged depth stream (ruler #4).
       allErrors.addAll(runCrossSourcePuChainCheck(depthEnvs, gapEnvs, mapper));
+
+      // Heartbeat timeline walk: detects uncovered silence windows post-hoc.
+      // Groups data envelopes by (exchange, symbol, stream) and checks for heartbeat gaps.
+      allErrors.addAll(runHeartbeatTimelineWalk(base, date, allEnvelopes, gapEnvs, mapper));
     }
 
     // Final report (byte-identical to Python — §6.7 line templates 13-21)
@@ -178,6 +185,53 @@ public final class VerifyCommand implements java.util.concurrent.Callable<Intege
     }
 
     return allErrors.isEmpty() ? 0 : 1;
+  }
+
+  /**
+   * Runs the heartbeat timeline walk for each unique {@code (exchange, symbol, stream)} tuple found
+   * in the all-envelopes set.
+   *
+   * <p>For each tuple, delegates to {@link HeartbeatTimelineWalker#walk}. If heartbeat archives are
+   * absent (no archival yet), the walker returns no errors for that stream.
+   *
+   * @param base archive base directory
+   * @param date the date being verified
+   * @param allEnvelopes all envelopes (data + gap) for the date
+   * @param gapEnvelopes all gap envelopes for the date
+   * @param mapper Jackson mapper
+   * @return list of error strings (empty if no uncovered silence found)
+   */
+  private static List<String> runHeartbeatTimelineWalk(
+      Path base,
+      String date,
+      List<JsonNode> allEnvelopes,
+      List<JsonNode> gapEnvelopes,
+      ObjectMapper mapper) {
+
+    List<String> errors = new ArrayList<>();
+
+    // Group data envelopes by (exchange, symbol, stream)
+    Map<String, List<JsonNode>> byKey = new HashMap<>();
+    for (JsonNode env : allEnvelopes) {
+      if (!"data".equals(env.path("type").asText(""))) continue;
+      String ex = env.path("exchange").asText("");
+      String sym = env.path("symbol").asText("");
+      String str = env.path("stream").asText("");
+      if (ex.isBlank() || sym.isBlank() || str.isBlank()) continue;
+      String key = ex + "|" + sym + "|" + str;
+      byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(env);
+    }
+
+    for (Map.Entry<String, List<JsonNode>> entry : byKey.entrySet()) {
+      String[] parts = entry.getKey().split("\\|", 3);
+      String ex = parts[0];
+      String sym = parts[1];
+      String str = parts[2];
+      errors.addAll(
+          HeartbeatTimelineWalker.walk(
+              base, ex, sym, str, date, entry.getValue(), gapEnvelopes, mapper));
+    }
+    return errors;
   }
 
   /**
