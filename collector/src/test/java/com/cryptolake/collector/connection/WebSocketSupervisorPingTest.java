@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptolake.collector.metrics.CollectorMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;

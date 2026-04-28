@@ -58,16 +58,11 @@ class RecordHandlerGapRoutingTest {
 
     handler =
         new RecordHandler(
-            codec,
-            null, // sessionDetector — not reached in gap path
+            codec, null, // sessionDetector — not reached in gap path
             null, // depthFilter — not reached in gap path
-            coverage,
-            failover,
-            null, // recovery — not reached in gap path
-            buffers,
-            null, // gaps — not reached in gap path
-            metrics,
-            "backup_");
+            coverage, failover, null, // recovery — not reached in gap path
+            buffers, null, // gaps — not reached in gap path
+            metrics, "backup_");
   }
 
   /**
@@ -124,8 +119,8 @@ class RecordHandlerGapRoutingTest {
   }
 
   /**
-   * Bug C fix: after fix, a gap envelope must NOT be deserialized as DataEnvelope (which would
-   * lose gap_start_ts, gap_end_ts, reason, detail and emit a broken archive record).
+   * Bug C fix: after fix, a gap envelope must NOT be deserialized as DataEnvelope (which would lose
+   * gap_start_ts, gap_end_ts, reason, detail and emit a broken archive record).
    */
   @Test
   void handle_collectorGapEnvelope_doesNotWriteDataEnvelopeFields() {
@@ -160,9 +155,7 @@ class RecordHandlerGapRoutingTest {
     assertThat(node.has("raw_sha256")).isFalse();
   }
 
-  /**
-   * Heartbeat envelopes must be silently dropped — no archive write.
-   */
+  /** Heartbeat envelopes must be silently dropped — no archive write. */
   @Test
   void handle_heartbeatEnvelope_notWrittenToBuffer() {
     // Build a minimal heartbeat envelope JSON (matches HeartbeatEnvelope serialization).

@@ -164,9 +164,9 @@ public final class FileRotator {
    * <p>Ports Python's {@code _rotate_hour} shutdown scan that writes sidecars for all non-empty
    * archive files including the current hour (design §3.4 shutdown sequence).
    *
-   * <p>Called from {@link com.cryptolake.writer.consumer.KafkaConsumerLoop#shutdownSequence()} after
-   * the final {@code shutdownCommit} so the current-hour file (written by periodic flushes but
-   * never sealed via {@link #seal}) also gets a sidecar.
+   * <p>Called from {@link com.cryptolake.writer.consumer.KafkaConsumerLoop#shutdownSequence()}
+   * after the final {@code shutdownCommit} so the current-hour file (written by periodic flushes
+   * but never sealed via {@link #seal}) also gets a sidecar.
    */
   public void writeMissingSidecars() {
     try {
@@ -183,10 +183,7 @@ public final class FileRotator {
                 }
                 try {
                   Sha256Sidecar.write(dataPath, sidecarPath);
-                  log.info(
-                      "shutdown_sidecar_written",
-                      "path",
-                      dataPath.toString());
+                  log.info("shutdown_sidecar_written", "path", dataPath.toString());
                 } catch (java.io.IOException e) {
                   log.warn(
                       "shutdown_sidecar_failed",
