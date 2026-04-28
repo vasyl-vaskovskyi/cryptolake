@@ -13,10 +13,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -157,6 +159,11 @@ public final class KafkaConsumerLoop implements Runnable {
       } catch (org.apache.kafka.common.errors.WakeupException e) {
         // Expected during shutdown
         break;
+      } catch (OffsetOutOfRangeException e) {
+        // Consumer auto-reset triggered (auto.offset.reset=earliest/latest). Emit a
+        // kafka_offset_reset gap for all affected (symbol, stream) pairs.
+        // After this catch, Kafka's consumer will have already reset the offsets.
+        handleOffsetReset(e);
       } catch (Exception e) {
         // Log and continue — a single poll cycle failure must not kill the loop (design §7.2)
         log.error("consume_loop_error", "error", e.getMessage());
@@ -193,6 +200,60 @@ public final class KafkaConsumerLoop implements Runnable {
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Handles an {@link OffsetOutOfRangeException} from the consumer poll loop.
+   *
+   * <p>Emits one {@code kafka_offset_reset} gap per affected topic-partition. The Kafka consumer
+   * has already auto-reset its position (via {@code auto.offset.reset}); this gap records the event
+   * for the verify CLI.
+   *
+   * <p>Corresponds to spec §5.4 #30 / Task A3.5.
+   */
+  private void handleOffsetReset(OffsetOutOfRangeException e) {
+    Map<TopicPartition, Long> offsetsMap = e.offsetOutOfRangePartitions();
+    log.info(
+        "kafka_offset_reset_detected",
+        "partitions",
+        offsetsMap.keySet().toString(),
+        "old_offsets",
+        offsetsMap.values().toString());
+
+    long now = System.nanoTime();
+    String detail =
+        "Kafka auto-reset from OUT_OF_RANGE: partitions="
+            + offsetsMap.keySet()
+            + " old_offsets="
+            + offsetsMap.values();
+
+    // Emit one gap per affected topic-partition
+    for (Map.Entry<TopicPartition, Long> entry : offsetsMap.entrySet()) {
+      TopicPartition tp = entry.getKey();
+      long oldOffset = entry.getValue();
+      String partitionDetail =
+          detail
+              + " topic="
+              + tp.topic()
+              + " partition="
+              + tp.partition()
+              + " old_offset="
+              + oldOffset;
+      // Emit a synthetic gap — we don't have per-symbol/stream here so use topic name as detail
+      com.cryptolake.common.envelope.GapEnvelope gap =
+          com.cryptolake.common.envelope.GapEnvelope.create(
+              "binance", // exchange — best-effort; topic-partition doesn't carry symbol info
+              tp.topic(), // symbol field — use topic as placeholder
+              "kafka_offset_reset", // stream placeholder
+              "synthetic",
+              -1L,
+              now,
+              now,
+              "kafka_offset_reset",
+              partitionDetail,
+              () -> now);
+      gaps.emitUnfiltered(gap, "primary", tp.topic(), tp.partition());
+    }
+  }
 
   private void shutdownSequence() {
     log.info("consume_loop_shutting_down");
