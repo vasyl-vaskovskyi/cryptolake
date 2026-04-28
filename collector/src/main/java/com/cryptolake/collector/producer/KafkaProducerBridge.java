@@ -381,6 +381,24 @@ public class KafkaProducerBridge {
     return symbol + '\0' + stream;
   }
 
+  /**
+   * Probes broker connectivity by requesting partition metadata for a sentinel topic.
+   *
+   * <p>Returns {@code true} if the metadata call completes without exception within the caller's
+   * timeout budget. Used by {@code KafkaProducerHealthMonitor} to detect prolonged broker
+   * disconnections.
+   *
+   * <p>This is a cheap metadata-only call — it does NOT produce any message.
+   */
+  public boolean probeHealth() {
+    try {
+      producer.partitionsFor("__health_probe__");
+      return true;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
   /** Closes the underlying producer on shutdown. */
   public void close() {
     try {
