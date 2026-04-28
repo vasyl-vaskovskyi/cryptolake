@@ -1,7 +1,0 @@
-{
-  "venvPath": ".",
-  "venv": ".venv",
-  "include": ["src"],
-  "reportMissingImports": true,
-  "reportMissingTypeStubs": false
-}
