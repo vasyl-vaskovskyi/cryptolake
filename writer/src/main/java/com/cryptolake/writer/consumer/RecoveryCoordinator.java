@@ -4,6 +4,7 @@ import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.StreamKey;
+import com.cryptolake.writer.durability.LifecycleJournalReader;
 import com.cryptolake.writer.failover.HostLifecycleEvidence;
 import com.cryptolake.writer.failover.RestartGapClassifier;
 import com.cryptolake.writer.gap.GapEmitter;
@@ -13,6 +14,7 @@ import com.cryptolake.writer.recovery.SealedFileIndex;
 import com.cryptolake.writer.state.MaintenanceIntent;
 import com.cryptolake.writer.state.StateManager;
 import com.cryptolake.writer.state.StreamCheckpoint;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -41,6 +43,14 @@ public final class RecoveryCoordinator {
   private final SealedFileIndex sealedIndex;
   private final LastEnvelopeReader envelopeReader;
   private final HostLifecycleEvidence hostEvidence;
+
+  /**
+   * Java-format lifecycle journal entries from both collectors (keyed by session ID). Used as
+   * authoritative {@code collectorCleanShutdown} evidence to supplement the PG-sourced state. Null
+   * if not available (e.g. first run).
+   */
+  private final Map<String, LifecycleJournalReader.JournalEntry> journalEntries;
+
   private final RestartGapClassifier
       classifier; // unused directly — static utility, passed for testability
   private final GapEmitter gaps;
@@ -81,6 +91,37 @@ public final class RecoveryCoordinator {
       ClockSupplier clock,
       String currentBootId,
       String currentInstanceId) {
+    this(
+        stateManager,
+        sealedIndex,
+        envelopeReader,
+        hostEvidence,
+        ignoredClassifier,
+        gaps,
+        metrics,
+        clock,
+        currentBootId,
+        currentInstanceId,
+        null);
+  }
+
+  /**
+   * Full constructor including Java-format lifecycle journal entries for supplemental evidence.
+   *
+   * @param journalEntries map from session ID → most-recent journal entry; may be null
+   */
+  public RecoveryCoordinator(
+      StateManager stateManager,
+      SealedFileIndex sealedIndex,
+      LastEnvelopeReader envelopeReader,
+      HostLifecycleEvidence hostEvidence,
+      RestartGapClassifier ignoredClassifier,
+      GapEmitter gaps,
+      WriterMetrics metrics,
+      ClockSupplier clock,
+      String currentBootId,
+      String currentInstanceId,
+      Map<String, LifecycleJournalReader.JournalEntry> journalEntries) {
     this.stateManager = stateManager;
     this.sealedIndex = sealedIndex;
     this.envelopeReader = envelopeReader;
@@ -91,6 +132,7 @@ public final class RecoveryCoordinator {
     this.clock = clock;
     this.currentBootId = currentBootId;
     this.currentInstanceId = currentInstanceId;
+    this.journalEntries = journalEntries != null ? journalEntries : Collections.emptyMap();
   }
 
   /**
@@ -206,11 +248,19 @@ public final class RecoveryCoordinator {
     com.cryptolake.writer.state.ComponentRuntimeState collectorState = compStates.get("collector");
     com.cryptolake.writer.state.ComponentRuntimeState writerState = compStates.get("writer");
 
-    boolean collectorCleanShutdown =
-        collectorState != null && collectorState.cleanShutdownAt() != null;
     boolean systemCleanShutdown = writerState != null && writerState.cleanShutdownAt() != null;
     String previousBootId = writerState != null ? writerState.hostBootId() : null;
     String previousSessionId = checkpoint.lastCollectorSessionId();
+
+    // Determine collector clean shutdown: PG state takes precedence; Java lifecycle journal
+    // supplements when PG evidence is absent (e.g. after a host reboot).
+    boolean collectorCleanShutdownFromPg =
+        collectorState != null && collectorState.cleanShutdownAt() != null;
+    boolean collectorCleanShutdownFromJournal =
+        previousSessionId != null
+            && LifecycleJournalReader.wasCleanShutdown(journalEntries, previousSessionId);
+    boolean collectorCleanShutdown =
+        collectorCleanShutdownFromPg || collectorCleanShutdownFromJournal;
 
     RestartGapClassifier.Classification classification =
         RestartGapClassifier.classify(
