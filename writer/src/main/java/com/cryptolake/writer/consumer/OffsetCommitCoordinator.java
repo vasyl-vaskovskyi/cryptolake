@@ -9,12 +9,15 @@ import com.cryptolake.writer.io.DurableAppender;
 import com.cryptolake.writer.io.ZstdFrameCompressor;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import com.cryptolake.writer.recovery.SealedFileIndex;
+import com.cryptolake.writer.rotate.FilePaths;
+import com.cryptolake.writer.rotate.Sha256Sidecar;
 import com.cryptolake.writer.state.CryptoLakeStateException;
 import com.cryptolake.writer.state.FileStateRecord;
 import com.cryptolake.writer.state.StateManager;
 import com.cryptolake.writer.state.StreamCheckpoint;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -130,6 +133,18 @@ public final class OffsetCommitCoordinator {
             .writeErrors(r.target().exchange(), r.target().symbol(), r.target().stream())
             .increment();
         throw new UncheckedIOException("File write failed for " + r.filePath(), e);
+      }
+
+      // Write sidecar immediately after each append so verify always finds a valid .sha256 for
+      // the current-hour file (Tier 1 sidecar invariant; Bug B fix — in-flight sidecar updates).
+      // The sidecar is rewritten on every flush because the file grows with each append.
+      Path sidecarPath = FilePaths.sidecarPath(r.filePath());
+      try {
+        Sha256Sidecar.write(r.filePath(), sidecarPath);
+      } catch (IOException e) {
+        // Best-effort: sidecar failure does not abort the commit (it will be retried next flush
+        // and repaired on startup). Log at warn level only.
+        log.warn("flush_sidecar_failed", "path", sidecarPath.toString(), "error", e.getMessage());
       }
 
       long fileSizeAfter;
