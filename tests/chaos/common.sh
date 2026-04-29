@@ -353,22 +353,23 @@ assert_gap_present() {
     local checked=0
     while IFS= read -r -d '' zst_file; do
         checked=$(( checked + 1 ))
-        # Decompress and search for the gap reason
+        # Decompress and search for the gap reason.
+        # Read ALL stdin before exiting so zstd doesn't get SIGPIPE (pipefail would mark
+        # the pipeline as failed even when the gap was found and python exited 0 early).
         if zstd -d -c "$zst_file" 2>/dev/null \
-            | grep -q "\"type\":\"gap\"" && \
-           zstd -d -c "$zst_file" 2>/dev/null \
             | python3 -c "
 import sys, json
+found = False
 for line in sys.stdin:
     line=line.strip()
     if not line: continue
     try:
         d=json.loads(line)
-        if d.get('type')=='gap' and d.get('reason')=='${reason}':
+        if not found and d.get('type')=='gap' and d.get('reason')=='${reason}':
             print('FOUND: '+json.dumps(d)[:200])
-            sys.exit(0)
+            found = True
     except: pass
-sys.exit(1)
+sys.exit(0 if found else 1)
 " 2>/dev/null; then
             found=true
             break
