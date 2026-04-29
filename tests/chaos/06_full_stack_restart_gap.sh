@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # 06_full_stack_restart_gap.sh
 #
-# Invariant: Bring the entire stack down (docker compose down) then restart it.
-# The writer's RestartGapClassifier detects the gap from lifecycle journal
-# evidence and emits appropriate restart gaps. verify exits 0 with ERRORS=0.
-#
-# Expected gap reason: collector_restart (or unclean_shutdown / writer_restart)
+# Chaos:    docker compose down then up
+# Expected: gap reason=collector_restart OR unclean_shutdown (real loss)
+# Why:      All sources off simultaneously; no source covered the window.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

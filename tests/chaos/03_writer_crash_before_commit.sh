@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # 03_writer_crash_before_commit.sh
 #
-# Invariant: Kill the writer with SIGKILL (simulating a crash between archive
-# flush and Kafka offset commit). On restart the RestartGapClassifier sees the
-# gap and emits a writer_restart gap. verify exits 0 with ERRORS=0.
-#
-# Expected gap reason: writer_restart
+# Chaos:    SIGKILL writer mid-batch; restart it
+# Expected: gap reason=writer_restart (real loss)
+# Why:      Writer is the only writer; while dead nothing is archived.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

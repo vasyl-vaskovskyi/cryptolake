@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # 15_redpanda_leader_change.sh
 #
-# Invariant: Briefly restart Redpanda (single-broker stack acts like a leader
-# change + temporary Kafka unavailability). Both collectors lose producer
-# connectivity → KafkaProducerHealthMonitor detects outage. Writer loses
-# consumer connectivity → KafkaConsumerOutageDetector detects outage. On
-# recovery gap envelopes are emitted. verify exits 0 with ERRORS=0.
-#
-# Expected gap reason: kafka_producer_outage OR kafka_consumer_outage
+# Chaos:    docker compose restart redpanda
+# Expected: gap reason=kafka_producer_outage (transient — real loss if outage >=30s)
+# Why:      Both producer paths blocked; writer consumer paused for the outage window.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

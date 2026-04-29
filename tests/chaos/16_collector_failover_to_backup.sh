@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # 16_collector_failover_to_backup.sh
 #
-# Invariant: Kill the primary collector and verify that the backup collector
-# continues providing data. The writer's CoverageFilter should switch to
-# backup data and suppress the primary's gap envelopes (because the backup
-# covers the window). verify exits 0 with ERRORS=0.
-#
-# Expected: collector_restart gap from primary, verify ERRORS=0,
-# AND archive data continues to be written during the outage.
+# Chaos:    SIGKILL primary collector; observe writer consume backup; restart primary
+# Expected: NO gap (redundancy worked)
+# Why:      This IS the failover working; backup covers. Not a loss event.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -42,7 +38,7 @@ ARCHIVE_COUNT_AFTER=$(find "$HOST_DATA_DIR" -name "*.jsonl.zst" 2>/dev/null | wc
 msg "Archive files after recovery: ${ARCHIVE_COUNT_AFTER}"
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "collector_restart" "$HOST_DATA_DIR"
+assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
 
 # Confirm archive continued during primary outage (backup kept writing)
 if (( ARCHIVE_COUNT_BEFORE > 0 )); then

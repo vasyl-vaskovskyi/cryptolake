@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # 05_depth_reconnect_inflight.sh
 #
-# Invariant: Simulate a depth WebSocket disconnect during active depth streaming
-# by disconnecting the primary collector from the egress network (where Binance
-# WS lives). The WebSocketSupervisor detects ping failure → ws.abort() →
-# reconnect → snapshot fetch → resync. During the gap backup covers. On
-# reconnect the DepthGapDetector may emit a pu_chain_break. verify exits 0.
-#
-# Expected gap reason: ws_disconnect OR pu_chain_break
+# Chaos:    Drop primary collector's WS during depth flow; primary recovers via snapshot
+# Expected: NO gap (redundancy worked)
+# Why:      Backup's depth pu-chain bridges the missing diffs.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -36,13 +32,6 @@ msg "Waiting 90s for reconnect and resync…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-
-# Either ws_disconnect or pu_chain_break is acceptable (both indicate detection)
-if assert_gap_present "ws_disconnect" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "pu_chain_break" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: gap detected (ws_disconnect or pu_chain_break)"
-else
-    scenario_fail "Neither ws_disconnect nor pu_chain_break gap found"
-fi
+assert_gap_absent "ws_disconnect" "$HOST_DATA_DIR"
 
 scenario_pass

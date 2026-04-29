@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # 11_corrupt_message.sh
 #
-# Invariant: Produce a malformed (non-JSON / corrupt) envelope directly into
-# a Kafka topic that the writer consumes. The RecordHandler should catch the
-# deserialization error, emit a deserialization_error gap, and continue
-# processing normally. verify exits 0 with ERRORS=0.
-#
-# Expected gap reason: deserialization_error
+# Chaos:    Produce a malformed envelope to a topic the writer reads
+# Expected: gap reason=deserialization_error (real loss)
+# Why:      The corrupt envelope is unreadable; that record is lost.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -47,13 +44,6 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-if assert_gap_present "deserialization_error" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: deserialization_error gap detected"
-else
-    msg "NOTE: deserialization_error gap not found — writer may have silently dropped bad records"
-    msg "Checking that verify ERRORS=0 (the critical invariant)…"
-    # run_verify already confirmed exit 0 + ERRORS=0 above — that's the binding invariant
-    msg "PASS: verify ERRORS=0 regardless of gap presence"
-fi
+assert_gap_present "deserialization_error" "$HOST_DATA_DIR"
 
 scenario_pass

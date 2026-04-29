@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # 01_collector_unclean_exit.sh
 #
-# Invariant: Kill the primary collector mid-flight with SIGKILL. The backup
-# collector keeps data flowing. After recovery the writer sees a session_id
-# change and emits a collector_restart gap. verify exits 0 with ERRORS=0.
-#
-# Expected gap reason: collector_restart
+# Chaos:    SIGKILL primary collector; backup collector keeps running
+# Expected: NO gap (redundancy worked)
+# Why:      Backup covers the window. Redundancy worked.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -40,6 +38,6 @@ warm_up 30
 
 # Assertions
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "collector_restart" "$HOST_DATA_DIR"
+assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
 
 scenario_pass

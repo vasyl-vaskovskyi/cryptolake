@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # 07_host_reboot_restart_gap.sh
 #
-# Invariant: Simulate a host reboot by stopping the entire stack (SIGKILL on
-# all containers — no clean shutdown), then editing the LifecycleJournal file
-# directly to inject a new host_boot_id (as would happen after a real reboot).
-# When the stack restarts the classifier recognises the host_boot_id change
-# and emits a host_reboot (or host_unclean_shutdown) gap.
-#
-# Expected gap reason: host_reboot OR host_unclean_shutdown
+# Chaos:    Inject new host_boot_id into LifecycleJournal; restart stack
+# Expected: gap reason=host_reboot OR host_unclean_shutdown (real loss)
+# Why:      All sources off; lifecycle journal proves the host reboot gap.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

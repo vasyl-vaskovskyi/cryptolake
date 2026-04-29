@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # 02_buffer_overflow_recovery.sh
 #
-# Invariant: Simulate a buffer overflow by disconnecting the primary collector
-# from the Kafka network for long enough that its internal per-stream buffer
-# cap is exceeded (BackpressureGate). On recovery expect a buffer_overflow gap.
-#
-# Expected gap reason: buffer_overflow
+# Chaos:    Block primary collector's egress to Kafka for 90s; primary buffer overflows
+# Expected: NO gap (redundancy worked)
+# Why:      Backup's Kafka path is unaffected; backup data covers the window.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -37,6 +35,6 @@ msg "Waiting 60s for recovery gap envelopes to be written…"
 sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "buffer_overflow" "$HOST_DATA_DIR"
+assert_gap_absent "buffer_overflow" "$HOST_DATA_DIR"
 
 scenario_pass

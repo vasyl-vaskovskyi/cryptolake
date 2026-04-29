@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 # 17_kafka_producer_outage.sh
 #
-# Invariant: Block the primary collector's connection to Redpanda for 60s.
-# The KafkaProducerHealthMonitor detects the outage (probe fails ≥30s →
-# enters "paused" state, writes KafkaOutageJournal). On recovery it reads
-# the journal and emits a kafka_producer_outage gap envelope spanning the
-# outage window. verify exits 0 with ERRORS=0.
-#
-# Depends on: KafkaProducerHealthMonitor (Task A2.3) + KafkaOutageJournal (A2.2)
-#
-# Expected gap reason: kafka_producer_outage
+# Chaos:    Block primary collector's egress to redpanda for 60s
+# Expected: NO gap (redundancy worked)
+# Why:      Backup's producer path is unaffected; backup data covers the window.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -39,6 +33,6 @@ msg "Waiting 90s for kafka_producer_outage gap to be emitted and archived…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "kafka_producer_outage" "$HOST_DATA_DIR"
+assert_gap_absent "kafka_producer_outage" "$HOST_DATA_DIR"
 
 scenario_pass

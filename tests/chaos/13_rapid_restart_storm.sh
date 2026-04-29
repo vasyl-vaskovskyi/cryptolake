@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # 13_rapid_restart_storm.sh
 #
-# Invariant: Restart the primary collector 5 times in 30 seconds (SIGKILL +
-# restart). Each restart should produce a collector_restart gap envelope.
-# verify exits 0 with ERRORS=0.
-#
-# Expected: Multiple collector_restart gap envelopes, verify ERRORS=0.
+# Chaos:    Restart primary collector 5 times in 30s (SIGKILL + restart each time)
+# Expected: NO gap (redundancy worked)
+# Why:      Backup covers continuously through every primary blip.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -32,24 +30,6 @@ msg "Letting stack stabilise for 90s…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "collector_restart" "$HOST_DATA_DIR"
-
-# Count how many distinct collector_restart gap envelopes exist
-COUNT=$(find "$HOST_DATA_DIR" -name "*.jsonl.zst" -print0 2>/dev/null \
-    | xargs -0 -I{} sh -c 'zstd -d -c "$1" 2>/dev/null' _ {} 2>/dev/null \
-    | python3 -c "
-import sys,json
-n=0
-for line in sys.stdin:
-    line=line.strip()
-    if not line: continue
-    try:
-        d=json.loads(line)
-        if d.get('type')=='gap' and d.get('reason')=='collector_restart':
-            n+=1
-    except: pass
-print(n)
-" 2>/dev/null || echo 0)
-msg "Found ${COUNT} collector_restart gap envelopes (expected >=1, ideally ~5)"
+assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
 
 scenario_pass

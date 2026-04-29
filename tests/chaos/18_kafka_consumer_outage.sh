@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # 18_kafka_consumer_outage.sh
 #
-# Invariant: Block the writer's connection to Redpanda for 60s. The
-# KafkaConsumerOutageDetector detects empty polls lasting >30s while the
-# writer's lifecycle heartbeat keeps firing → emits kafka_consumer_outage gap.
-# verify exits 0 with ERRORS=0.
-#
-# Depends on: KafkaConsumerOutageDetector (Task A3.2)
-#
-# Expected gap reason: kafka_consumer_outage
+# Chaos:    Block writer's connection to redpanda for 60s
+# Expected: gap reason=kafka_consumer_outage (real loss)
+# Why:      Writer is the only consumer; while blocked nothing reaches the archive.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

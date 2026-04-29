@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # 04_fill_disk.sh
 #
-# Invariant: Fill the HOST_DATA_DIR filesystem to 99% from outside the
-# containers. The writer's FileRotator catches ENOSPC → DiskFullHoldController
-# enters hold mode → emits disk_full_hold gap. After freeing space the writer
-# recovers and verify exits 0 with ERRORS=0.
+# Chaos:    Fill HOST_DATA_DIR to 99%; eventually free
+# Expected: gap reason=disk_full_hold (real loss)
+# Why:      Writer pauses commits; archive frozen during hold.
 #
 # NOTE: This scenario fills /tmp which is typically tmpfs and may affect the
 # host. The teardown_stack trap calls free_disk to clean up even on failure.
-#
-# Expected gap reason: disk_full_hold
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
 # 20_cross_source_pu_chain_break.sh
 #
-# Invariant: Kill the primary collector during active depth streaming. The
-# backup collector continues but may have missed the depth diffs that primary
-# had not yet sent (the "gap between primary's last frame and backup's first").
-# The CrossSourcePuChainValidator detects this pu-chain break on the merged
-# stream and emits a cross_source_pu_chain_break gap.
-# verify exits 0 with ERRORS=0.
-#
-# Depends on: CrossSourcePuChainValidator (Task A3.6) + writer RecordHandler
-# integration.
-#
-# Expected gap reason: cross_source_pu_chain_break OR pu_chain_break
+# Chaos:    Kill primary at depth u=N; backup last-saw u=N-50; restart primary
+# Expected: gap reason=cross_source_pu_chain_break (real loss)
+# Why:      By construction neither source had u=N-49..N-1; real loss bridged by neither.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -43,12 +35,6 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-if assert_gap_present "cross_source_pu_chain_break" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "pu_chain_break" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: depth discontinuity gap detected"
-else
-    msg "PASS: verify ERRORS=0 (cross-source pu-chain may have been clean — backup seamlessly covered)"
-fi
+assert_gap_present "cross_source_pu_chain_break" "$HOST_DATA_DIR"
 
 scenario_pass

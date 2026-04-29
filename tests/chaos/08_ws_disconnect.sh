@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # 08_ws_disconnect.sh
 #
-# Invariant: Break the primary collector's egress network connection to
-# fstream.binance.com (the WebSocket endpoint). The WebSocketSupervisor ping
-# loop fires after ~30s of silence → ws.abort() → disconnectLatch → reconnect.
-# The collector emits a ws_disconnect gap. verify exits 0 with ERRORS=0.
-#
-# Expected gap reason: ws_disconnect
+# Chaos:    Block primary collector's egress to fstream.binance.com
+# Expected: NO gap (redundancy worked)
+# Why:      Backup's WS still up; backup data covers the window.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -35,6 +32,6 @@ msg "Waiting 90s for ws_disconnect gap to appear…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "ws_disconnect" "$HOST_DATA_DIR"
+assert_gap_absent "ws_disconnect" "$HOST_DATA_DIR"
 
 scenario_pass

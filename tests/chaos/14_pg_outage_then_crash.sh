@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # 14_pg_outage_then_crash.sh
 #
-# Invariant: Kill Postgres AND the writer simultaneously. On recovery the writer
-# should emit both pg_outage_hold (for the PG unavailability) and writer_restart
-# (for its own crash). verify exits 0 with ERRORS=0.
-#
-# Expected gap reasons: pg_outage_hold AND/OR writer_restart
+# Chaos:    SIGKILL primary AND backup collectors simultaneously; sleep 30s; restart both
+# Expected: gap reason=collector_restart (real loss)
+# Why:      No source covered the window; both killed simultaneously.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -19,40 +17,22 @@ msg "Warm-up 60s…"
 warm_up 60
 wait_data_flowing "bookticker" 30
 
-msg "=== CHAOS: Killing Postgres + writer simultaneously ==="
-kill_service "postgres"
-kill_service "writer"
+msg "=== CHAOS: SIGKILLing primary AND backup collectors simultaneously ==="
+kill_service "collector"
+kill_service "collector-backup"
 
-sleep 10
+msg "Holding both collectors down for 30s (no source covers this window)…"
+sleep 30
 
-msg "Restarting Postgres and writer…"
-start_service "postgres"
-sleep 5
-start_service "writer"
+msg "Restarting primary and backup collectors…"
+start_service "collector"
+start_service "collector-backup"
 wait_healthy 150
 
-msg "Waiting 120s for gap classification…"
-sleep 120
+msg "Waiting 90s for gap classification…"
+sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-
-FOUND=false
-if assert_gap_present "pg_outage_hold" "$HOST_DATA_DIR" 2>/dev/null; then
-    FOUND=true
-    msg "Found pg_outage_hold gap"
-fi
-if assert_gap_present "writer_restart" "$HOST_DATA_DIR" 2>/dev/null; then
-    FOUND=true
-    msg "Found writer_restart gap"
-fi
-if assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null; then
-    FOUND=true
-    msg "Found collector_restart gap"
-fi
-
-if ! $FOUND; then
-    msg "WARNING: No expected gap found — verifying ERRORS=0 is the binding invariant"
-    # run_verify already succeeded above
-fi
+assert_gap_present "collector_restart" "$HOST_DATA_DIR"
 
 scenario_pass

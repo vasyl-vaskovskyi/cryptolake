@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # 19_kafka_offset_reset.sh
 #
-# Invariant: Delete and recreate a Kafka topic while the writer is consuming it.
-# The writer's consumer encounters OffsetOutOfRangeException (or an assignment
-# change) and KafkaOffsetResetEmitter emits a kafka_offset_reset gap.
-# verify exits 0 with ERRORS=0.
-#
-# Depends on: KafkaOffsetResetEmitter (Task A3.5)
-#
-# Expected gap reason: kafka_offset_reset
+# Chaos:    Force OUT_OF_RANGE on writer's consumer (delete + recreate a topic)
+# Expected: gap reason=kafka_offset_reset (real loss)
+# Why:      Range of offsets that existed on the topic is unrecoverable.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

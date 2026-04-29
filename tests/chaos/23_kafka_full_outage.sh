@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 # 23_kafka_full_outage.sh
 #
-# Invariant: Stop Redpanda entirely so all collectors lose Kafka producer
-# connectivity. Each collector's KafkaProducerHealthMonitor enters "paused"
-# state and writes a KafkaOutageJournal entry. When Redpanda restarts, each
-# collector reads its journal and emits a kafka_producer_outage gap envelope
-# spanning the outage window. verify exits 0 with ERRORS=0.
-#
-# Depends on: KafkaProducerHealthMonitor + KafkaOutageJournal (Tasks A2.2, A2.3)
-#
-# Expected gap reason: kafka_producer_outage
+# Chaos:    Stop redpanda; collectors accumulate KafkaOutageJournal entries; restart redpanda
+# Expected: gap reason=kafka_producer_outage (real loss)
+# Why:      All Kafka traffic blocked for both producers; KafkaOutageJournal replays gap on recovery.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

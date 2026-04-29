@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # 22_both_collectors_silent.sh
 #
-# Invariant: Block BOTH collectors' egress networks so neither can reach
-# Binance. The SilenceInferredGapEmitter detects both sources stale
-# (data >30s AND heartbeat >15s) and emits a both_collectors_silent gap.
-# verify exits 0 with ERRORS=0.
-#
-# Depends on: SilenceInferredGapEmitter (Task A3.7)
-#
-# Expected gap reason: both_collectors_silent
+# Chaos:    iptables-block fstream.binance.com for both collectors while heartbeats keep firing
+# Expected: gap reason=both_collectors_silent (real loss)
+# Why:      SilenceInferredGapEmitter sees both sources stale; no source covered the window.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -40,15 +35,6 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-if assert_gap_present "both_collectors_silent" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: both_collectors_silent gap detected"
-else
-    # Fallback: individual ws_disconnect gaps from both collectors are acceptable
-    if assert_gap_present "ws_disconnect" "$HOST_DATA_DIR" 2>/dev/null; then
-        msg "PASS: ws_disconnect gap detected (both collectors detected silence)"
-    else
-        msg "PASS: verify ERRORS=0 (silence was below detection threshold — heartbeats may have kept firing)"
-    fi
-fi
+assert_gap_present "both_collectors_silent" "$HOST_DATA_DIR"
 
 scenario_pass

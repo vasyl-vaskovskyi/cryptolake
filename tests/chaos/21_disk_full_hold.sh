@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
 # 21_disk_full_hold.sh
 #
-# Invariant: Fill HOST_DATA_DIR to 99% triggering DiskFullHoldController in
-# the writer. The controller emits disk_full_hold gaps. After freeing space
-# the writer recovers, resumes commits, and emits a closing gap.
-# verify exits 0 with ERRORS=0.
-#
-# This scenario is more explicit than 04_fill_disk.sh — it waits for the gap
-# to appear before freeing disk, then confirms the recovery path.
-#
-# Depends on: DiskFullHoldController (Task A3.4)
-#
-# Expected gap reason: disk_full_hold
+# Chaos:    Fill HOST_DATA_DIR to 99%; wait for gap; free disk (state-machine variant of #04)
+# Expected: gap reason=disk_full_hold (real loss)
+# Why:      Writer pauses commits; archive frozen during hold.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

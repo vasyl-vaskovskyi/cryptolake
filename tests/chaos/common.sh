@@ -266,8 +266,35 @@ block_service_network() {
 restore_service_network() {
     local svc="${1:?need service name}"
     msg "Restoring network for service ${svc}…"
-    # Just restart the service so Docker re-attaches it to its configured networks
-    dc up -d --no-build "$svc"
+    local container
+    container=$(dc ps -q "$svc" 2>/dev/null | head -1)
+    if [[ -z "$container" ]]; then
+        msg "  No container for ${svc}; nothing to restore"
+        return 0
+    fi
+    local project_lower
+    project_lower=$(echo "$COMPOSE_PROJECT" | tr '[:upper:]' '[:lower:]')
+    # Reconnect to all networks the service is configured for. Use docker network
+    # connect rather than `dc up -d` so we don't trigger compose dependency
+    # restarts (which can crash redpanda or postgres mid-test).
+    case "$svc" in
+        collector)
+            local nets=("${project_lower}_cryptolake_internal" "${project_lower}_collector_egress")
+            ;;
+        collector-backup)
+            local nets=("${project_lower}_cryptolake_internal" "${project_lower}_backup_egress")
+            ;;
+        writer)
+            local nets=("${project_lower}_cryptolake_internal" "${project_lower}_host_access")
+            ;;
+        *)
+            local nets=("${project_lower}_cryptolake_internal")
+            ;;
+    esac
+    for net in "${nets[@]}"; do
+        docker network connect "$net" "$container" 2>/dev/null && \
+            msg "  Reconnected to ${net}" || true
+    done
 }
 
 # ---------------------------------------------------------------------------

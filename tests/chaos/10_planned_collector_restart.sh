@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # 10_planned_collector_restart.sh
 #
-# Invariant: Perform a PLANNED collector restart using the maintenance wrapper
-# (or equivalent: write planned=true into LifecycleJournal before stopping).
-# The RestartGapClassifier sees planned=true and should NOT flag this as an
-# unplanned gap. verify exits 0 with ERRORS=0.
-#
-# Expected: verify ERRORS=0 with no unplanned restart gap.
-# (A restart_gap with planned=true in the detail field is acceptable.)
+# Chaos:    mark_maintenance + clean stop + start primary collector
+# Expected: NO gap (redundancy worked)
+# Why:      Backup covers; planned shutdown is not loss.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -47,9 +43,8 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# The key invariant: verify returns 0 (no ERRORS).
-# A planned restart should NOT produce an unplanned restart gap.
-# (The run_verify call above already asserts this.)
-msg "PASS: planned restart — verify ERRORS=0"
+# Planned restart must not produce any gap — backup covered the window.
+assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
+msg "PASS: planned restart — verify ERRORS=0, no gap"
 
 scenario_pass
