@@ -82,8 +82,9 @@ start_stack() {
             ;;
     esac
 
-    # Pull only core services, exclude monitoring/alerting for speed
-    dc up -d --no-build "${services[@]}"
+    # Pull only core services, exclude monitoring/alerting for speed.
+    # First scenario builds images; subsequent scenarios reuse buildkit cache.
+    dc up -d "${services[@]}"
     msg "Stack started."
 }
 

@@ -44,7 +44,10 @@ fi
 # ---------------------------------------------------------------------------
 # Discover scenarios
 # ---------------------------------------------------------------------------
-mapfile -t ALL_SCENARIOS < <(find "$CHAOS_DIR" -name '[0-9][0-9]_*.sh' | sort)
+ALL_SCENARIOS=()
+while IFS= read -r line; do
+    ALL_SCENARIOS+=("$line")
+done < <(find "$CHAOS_DIR" -name '[0-9][0-9]_*.sh' | sort)
 
 if [[ ${#ALL_SCENARIOS[@]} -eq 0 ]]; then
     echo "[runner] No scenario scripts found in ${CHAOS_DIR}"
@@ -72,10 +75,12 @@ echo "[runner] Running ${#SCENARIOS[@]} scenario(s)…"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Run each scenario
+# Run each scenario.  Parallel arrays for bash 3.2 compatibility (macOS
+# /bin/bash is 3.2 — no associative arrays, no mapfile).
 # ---------------------------------------------------------------------------
-declare -A RESULTS   # name -> PASS|FAIL
-declare -A DURATIONS # name -> seconds
+NAMES=()
+RESULTS=()
+DURATIONS=()
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -88,7 +93,6 @@ for scenario in "${SCENARIOS[@]}"; do
     printf "[runner] %-50s  " "$base"
     t_start=$SECONDS
 
-    # Each scenario runs in a subshell so its `set -e` + trap don't affect us
     if bash "$scenario" > "$log_file" 2>&1; then
         status="PASS"
         PASS_COUNT=$(( PASS_COUNT + 1 ))
@@ -98,8 +102,9 @@ for scenario in "${SCENARIOS[@]}"; do
     fi
 
     t_elapsed=$(( SECONDS - t_start ))
-    RESULTS["$base"]="$status"
-    DURATIONS["$base"]="$t_elapsed"
+    NAMES+=("$base")
+    RESULTS+=("$status")
+    DURATIONS+=("$t_elapsed")
     printf "%s  (%ds)  log=%s\n" "$status" "$t_elapsed" "$log_file"
 done
 
@@ -114,11 +119,8 @@ echo "Chaos test summary  (${TOTAL_ELAPSED}s total)"
 echo "=========================================="
 printf "%-50s  %-6s  %s\n" "Scenario" "Result" "Duration"
 echo "------------------------------------------"
-for scenario in "${SCENARIOS[@]}"; do
-    base="$(basename "$scenario" .sh)"
-    result="${RESULTS[$base]:-N/A}"
-    dur="${DURATIONS[$base]:-?}"
-    printf "%-50s  %-6s  %ds\n" "$base" "$result" "$dur"
+for i in "${!NAMES[@]}"; do
+    printf "%-50s  %-6s  %ss\n" "${NAMES[$i]}" "${RESULTS[$i]}" "${DURATIONS[$i]}"
 done
 echo "=========================================="
 echo "PASS: ${PASS_COUNT}  FAIL: ${FAIL_COUNT}  TOTAL: ${#SCENARIOS[@]}"
@@ -127,10 +129,9 @@ echo "Logs in: ${LOG_DIR}"
 if (( FAIL_COUNT > 0 )); then
     echo ""
     echo "FAILED scenarios:"
-    for scenario in "${SCENARIOS[@]}"; do
-        base="$(basename "$scenario" .sh)"
-        if [[ "${RESULTS[$base]}" == "FAIL" ]]; then
-            echo "  - ${base}  (see ${LOG_DIR}/${base}.log)"
+    for i in "${!NAMES[@]}"; do
+        if [[ "${RESULTS[$i]}" == "FAIL" ]]; then
+            echo "  - ${NAMES[$i]}  (see ${LOG_DIR}/${NAMES[$i]}.log)"
         fi
     done
     exit 1
