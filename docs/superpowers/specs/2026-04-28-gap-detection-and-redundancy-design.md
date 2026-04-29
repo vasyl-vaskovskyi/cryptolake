@@ -38,32 +38,80 @@ heartbeat absence + lifecycle journal evidence.
 
 ## 3. Architectural commitments
 
+### 3.0 The TWO-COLLECTOR rule (load-bearing — read this first)
+
+The system runs **two collectors at all times**: **MAIN** (also called
+"primary" in some files) and **BACKUP**. They are not optional. They are
+not active/passive. They are **both running 24/7**, both subscribed to the
+same Binance streams independently, both publishing data to Kafka.
+
+The runtime behavior is exactly four rules:
+
+1. **MAIN healthy + BACKUP healthy** → writer archives MAIN's data,
+   ignores BACKUP's data (already covered, dedup at the archive layer).
+   No gap.
+2. **MAIN fails (process crash, WS half-open, network blip, anything)**
+   → writer immediately archives BACKUP's data instead.
+   **No gap is recorded.** This is the redundancy mechanism doing its job.
+3. **MAIN comes back (process restarts and resumes producing)** →
+   writer continues with whichever source is fresher; once MAIN is
+   delivering data again, writer prefers MAIN. **No gap.**
+4. **MAIN fails AND BACKUP also fails for some sub-window** → writer
+   has no data for that sub-window. **Only then is a gap envelope
+   archived**, with `gap_start_ts` = last data from either source,
+   `gap_end_ts` = first data from either source after recovery.
+
+In plain language:
+
+> **Gap envelopes are archived if and only if both collectors were
+> simultaneously unable to deliver data to the writer.** Any other
+> situation — MAIN flapping, BACKUP flapping, either restarting, either
+> reconnecting WebSockets — is invisible in the archive.
+
+The writer's `CoverageFilter` enforces this. Every gap signal (collector-
+emitted or writer-emitted) is suppressed if **any** source has data
+covering its window. Only signals describing a window neither source
+covered survive to the archive.
+
 ### 3.1 Deployment shape: D — same-host hot redundancy
 
-Two collector processes run side-by-side in the same `docker-compose` stack:
+The two collectors run side-by-side in the same `docker-compose` stack:
 
-- **primary**: writes envelopes to `binance.{stream}` topics with `topic_prefix=""`
-- **backup**: writes envelopes to `backup.binance.{stream}` topics with `topic_prefix="backup."`
+- **MAIN** service name `collector` — `COLLECTOR_ID=binance-collector-01`,
+  `TOPIC_PREFIX=""`, publishes to `binance.{stream}` topics.
+- **BACKUP** service name `collector-backup` — `COLLECTOR_ID=binance-collector-backup`,
+  `TOPIC_PREFIX="backup."`, publishes to `backup.binance.{stream}` topics.
 
 Both run continuously. Both connect to Binance independently from the same
-egress IP. The single writer instance consumes both topic families and uses
-the primary's data by default, falling back to the backup's data when primary
-is silent.
+egress IP. The single writer instance subscribes to both topic families.
+At any instant the writer treats MAIN's data as the canonical source and
+falls through to BACKUP's data automatically when MAIN's is missing or
+stale (per §3.0 rule 2).
 
-This shape catches: process crash, container OOM, individual WebSocket
-half-open, per-stream subscription drop, single-process deadlock, kafka send
-failure on one source.
+This shape catches: MAIN process crash, container OOM, MAIN's WebSocket
+half-open, per-stream subscription drop on MAIN, single-process deadlock
+on MAIN, Kafka send failure on MAIN — all without recording a gap,
+because BACKUP covers.
 
-This shape does NOT catch: host reboot, full ISP outage, the shared egress IP
-being throttled by Binance, NIC failure. These are out-of-scope for D and are
-recorded as gaps via lifecycle/heartbeat absence rather than prevented.
+This shape does NOT catch: host reboot, full ISP outage, the shared egress
+IP being throttled by Binance, NIC failure. Those affect both collectors
+together — §3.0 rule 4 applies and a gap is recorded.
 
 ### 3.2 Redundancy mode: A — both running 24/7
 
-No leader election, no failover state machine across collectors. Each collector
-is independent and unaware of the other. The writer's `CoverageFilter`
-performs all source-selection and gap-suppression decisions on the consumption
-side.
+No leader election. No failover state machine across collectors. MAIN and
+BACKUP are independent, unaware of each other, and identically configured
+except for `COLLECTOR_ID` and `TOPIC_PREFIX` (per §3.1). The writer's
+`CoverageFilter` is the **only place** that knows about the two-source
+relationship; it performs all source-selection and gap-suppression
+decisions on the consumption side per the §3.0 rules.
+
+When MAIN fails and BACKUP takes over (§3.0 rule 2), the writer does NOT
+need to "switch" — it consumes both topic families continuously and
+already has BACKUP's data buffered. When MAIN recovers (§3.0 rule 3),
+the writer dedups and prefers MAIN's records again automatically. There is
+no explicit failover/failback signal anywhere in the system — the
+architecture makes the question moot.
 
 ### 3.3 Coverage cadence: G — 5s heartbeats, 10s detection floor
 
