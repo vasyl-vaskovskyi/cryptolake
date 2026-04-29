@@ -72,6 +72,54 @@ seconds regardless of data flow. The writer flags a true coverage gap when
 both sources have `last_data_at_ns` older than 30s AND last heartbeat older
 than 15s for that stream. Worst-case undetected silent-loss window: ~10s.
 
+### 3.4 The single rule of gap emission (load-bearing)
+
+> **A gap envelope is archived if and only if no source had data for the
+> window `[gap_start_ts, gap_end_ts]`.**
+
+Concretely:
+
+1. Every "gap signal" — from a collector (`ws_disconnect`, `pu_chain_break`,
+   `session_seq_skip`, `buffer_overflow`, `snapshot_poll_miss`,
+   `kafka_delivery_failed`, `handler_error`) OR from the writer
+   (`collector_restart`, `restart_gap`, `kafka_consumer_outage`,
+   `kafka_producer_outage`, `pg_outage_hold`, `disk_full_hold`,
+   `kafka_offset_reset`, `cross_source_pu_chain_break`,
+   `both_collectors_silent`, `missing_hour`, `deserialization_error`,
+   `write_error`) — flows through `CoverageFilter`.
+
+2. `CoverageFilter` suppresses the gap if **any** source has data envelopes
+   with `received_at ∈ [gap_start_ts, gap_end_ts]`, OR if a heartbeat from
+   any source carries `last_data_at_ns ∈ [gap_start_ts, gap_end_ts]`.
+
+3. Gaps that survive the filter are archived. Spurious gaps from "the
+   redundancy mechanism doing its job" never reach the archive.
+
+**Consequence for redundancy tests.** When primary dies and backup covers,
+the writer must NOT archive a gap. The session change is not data loss; it
+is the redundancy mechanism working as designed. A test that asserts
+"gap envelope present" after such a scenario is asserting on cosmetics, not
+on the binding invariant.
+
+**Consequence for the binding invariant.** The chaos test acceptance is
+reframed:
+
+- **Pass:** `verify` reports `Errors: 0`. The archive contains all
+  data that any source delivered for the window.
+- **Pass with gap:** `verify` reports `Errors: 0` AND a gap envelope is
+  present, **only when no source covered some sub-window of the chaos**.
+  The gap's `[gap_start_ts, gap_end_ts]` accurately describes that
+  uncovered window.
+- **Fail:** `verify` reports any ERROR (duplicates, missing sidecars,
+  pu-chain breaks not bridged by either source, missing required gap
+  fields), OR a sub-window where neither source had data is not covered
+  by an archived gap.
+
+**Implementation.** Every emitter calls `CoverageFilter.maybeEmit(gap)`
+which routes through the existing `_other_covers` check. Writer-emitted
+gaps (collector_restart etc.) MUST go through the same path; today some
+bypass it (the bug exposed by chaos scenario 01).
+
 ## 4. The four "rulers" of gap detection
 
 Gap detection layers four independent mechanisms. Each catches a different
@@ -550,7 +598,7 @@ archive format or break verify CLI compatibility for existing archives.
 
 The design is "done" when:
 
+- §3.4 is honored: every gap-emitter routes through `CoverageFilter`. Spurious gaps from "the redundancy mechanism working" are never archived.
 - All 38 failure modes in §5 either map to a documented gap reason or an explicit non-coverage decision in §10.
-- Every `(failure mode, gap reason)` pair has a corresponding chaos test in the §9 plan.
-- Verify CLI returns ERRORS=0 in every chaos scenario after stabilization, with all data unavailability explained by gap envelopes or heartbeat-absence-as-evidenced.
+- Every chaos scenario asserts the §3.4 acceptance bar: `verify Errors: 0`, and a gap envelope is present **only** when no source covered some sub-window.
 - The Java port retains its 7-gate cleanliness (no architect re-rejection from the changes).
