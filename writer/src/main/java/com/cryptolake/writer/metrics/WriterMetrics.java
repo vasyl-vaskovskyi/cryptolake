@@ -278,6 +278,15 @@ public final class WriterMetrics {
     holders.gapPendingSize.set(size);
   }
 
+  /** Metric #25: archive-layer duplicates dropped (Tier 1 §4 exactly-once). */
+  public Counter duplicatesDropped() {
+    return Counter.builder("writer_duplicates_dropped")
+        .description(
+            "Kafka messages dropped at archive layer because the same (topic,partition,offset)"
+                + " was already archived — Tier 1 §4 exactly-once dedup")
+        .register(registry);
+  }
+
   // ── Histograms ───────────────────────────────────────────────────────────────────────────────
 
   /**

@@ -5,6 +5,7 @@ import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.writer.StreamKey;
+import com.cryptolake.writer.metrics.WriterMetrics;
 import com.cryptolake.writer.rotate.FilePaths;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -13,6 +14,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -40,10 +42,35 @@ public final class BufferManager {
 
   private static final Logger log = LoggerFactory.getLogger(BufferManager.class);
 
+  /**
+   * Maximum dedup window size (number of (topic, partition, offset) entries). Bounded to prevent
+   * unbounded growth in long-running sessions. 100 000 entries covers ~60 seconds of bookticker
+   * traffic at ~1 500 msg/s — well beyond any restart or failover window (Tier 1 §4).
+   */
+  private static final int DEDUP_MAX_ENTRIES = 100_000;
+
   private final String baseDir;
   private final int flushMessages;
   private final int flushIntervalSeconds;
   private final EnvelopeCodec codec;
+  private final WriterMetrics metrics;
+
+  /**
+   * Archive-layer dedup set: tracks recently-seen broker coordinates as "{topic}|{partition}|
+   * {offset}" strings. Uses an insertion-order {@link LinkedHashMap} with a fixed-size eviction
+   * policy so the window is bounded (Tier 1 §4 exactly-once).
+   *
+   * <p>Only real offsets (>= 0) are tracked; synthetic offset -1L sentinel records are never
+   * duplicated by Kafka so they bypass the dedup check entirely (Tier 5 M9).
+   */
+  @SuppressWarnings("serial")
+  private final Map<String, Boolean> seenCoords =
+      new LinkedHashMap<>(DEDUP_MAX_ENTRIES, 0.75f, false) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+          return size() > DEDUP_MAX_ENTRIES;
+        }
+      };
 
   /** Per-target buffer of JSON line bytes. */
   private final Map<FileTarget, List<byte[]>> buffers = new HashMap<>();
@@ -63,12 +90,37 @@ public final class BufferManager {
   /** Monotonic flush interval tracking (Tier 5 F4). */
   private long lastFlushNanos = System.nanoTime();
 
+  /**
+   * Constructs a BufferManager with archive-layer dedup support.
+   *
+   * @param baseDir base archive directory
+   * @param flushMessages auto-flush threshold (number of messages)
+   * @param flushIntervalSeconds periodic flush interval in seconds
+   * @param codec envelope serializer
+   * @param metrics writer metrics (for {@code writer_duplicates_dropped} counter)
+   */
   public BufferManager(
-      String baseDir, int flushMessages, int flushIntervalSeconds, EnvelopeCodec codec) {
+      String baseDir,
+      int flushMessages,
+      int flushIntervalSeconds,
+      EnvelopeCodec codec,
+      WriterMetrics metrics) {
     this.baseDir = baseDir;
     this.flushMessages = flushMessages;
     this.flushIntervalSeconds = flushIntervalSeconds;
     this.codec = codec;
+    this.metrics = metrics;
+  }
+
+  /**
+   * Convenience constructor without metrics (for tests that don't check the dedup counter).
+   *
+   * @deprecated Prefer the metrics-bearing constructor; use this only in legacy tests.
+   */
+  @Deprecated
+  public BufferManager(
+      String baseDir, int flushMessages, int flushIntervalSeconds, EnvelopeCodec codec) {
+    this(baseDir, flushMessages, flushIntervalSeconds, codec, null);
   }
 
   // ── Routing ──────────────────────────────────────────────────────────────────────────────────
@@ -105,6 +157,28 @@ public final class BufferManager {
    */
   public Optional<List<FlushResult>> add(
       DataEnvelope env, BrokerCoordinates coords, String source) {
+    // Archive-layer dedup: drop any message whose (topic, partition, offset) was already archived
+    // in the current dedup window (Tier 1 §4 exactly-once). Synthetic offsets (-1L) are never
+    // duplicated by Kafka and bypass this check (Tier 5 M9).
+    if (coords.offset() >= 0) {
+      String coordKey = coords.topic() + "|" + coords.partition() + "|" + coords.offset();
+      if (seenCoords.putIfAbsent(coordKey, Boolean.TRUE) != null) {
+        // Duplicate: already archived this broker coordinate — drop silently
+        log.debug(
+            "archive_dedup_drop",
+            "topic",
+            coords.topic(),
+            "partition",
+            coords.partition(),
+            "offset",
+            coords.offset());
+        if (metrics != null) {
+          metrics.duplicatesDropped().increment();
+        }
+        return Optional.empty();
+      }
+    }
+
     FileTarget target = route(env);
     byte[] line =
         codec.appendNewline(

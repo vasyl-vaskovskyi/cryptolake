@@ -166,7 +166,11 @@ public final class Main {
     // ── Buffer + codec ───────────────────────────────────────────────────────────────────────
     BufferManager buffers =
         new BufferManager(
-            baseDir, writerConfig.flushMessages(), writerConfig.flushIntervalSeconds(), codec);
+            baseDir,
+            writerConfig.flushMessages(),
+            writerConfig.flushIntervalSeconds(),
+            codec,
+            metrics);
 
     // ── Coverage filter ──────────────────────────────────────────────────────────────────────
     CoverageFilter coverage =
