@@ -233,6 +233,14 @@ public final class Main {
     // ── FileRotator ───────────────────────────────────────────────────────────────────────────
     FileRotator rotator = new FileRotator(appender, compressor, lateSeq, buffers, metrics, baseDir);
 
+    // ── Startup sidecar repair (Bug B / Tier 1 sidecar-per-archive) ──────────────────────────
+    // If the writer crashed before writing sidecars, any *.jsonl.zst without a .sha256 sibling
+    // will be repaired here — BEFORE the consume loop reads any messages. This covers the
+    // "writer crashed before sidecar was written" path that writeMissingSidecars at shutdown
+    // cannot reach (design §3.4; Tier 1 sidecar invariant).
+    rotator.writeMissingSidecars();
+    log.info("startup_sidecar_repair_complete");
+
     // ── HourRotationScheduler ────────────────────────────────────────────────────────────────
     HourRotationScheduler hourScheduler =
         new HourRotationScheduler(rotator, buffers, committer, metrics);
