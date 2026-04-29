@@ -155,7 +155,9 @@ public final class RecordHandler {
         return; // DO NOT rethrow
       }
       // Route through coverage filter; if not suppressed, write to buffer.
-      BrokerCoordinates coords = new BrokerCoordinates(primaryTopic, partition, offset);
+      // Use the actual Kafka topic (not primaryTopic) so backup gap records are stamped with
+      // _topic="backup.binance.X" — matching the data record convention (Tier 1 §4; design §6.1).
+      BrokerCoordinates coords = new BrokerCoordinates(topic, partition, offset);
       boolean accepted = coverageFilter.handleGap(source, collectorGap);
       if (accepted) {
         buffers.add(collectorGap, coords, source);
@@ -246,8 +248,14 @@ public final class RecordHandler {
         }
       }
 
-      // Add to buffer with broker coordinates
-      BrokerCoordinates coords = new BrokerCoordinates(primaryTopic, partition, offset);
+      // Add to buffer with broker coordinates.
+      // Use the ACTUAL Kafka topic (including backup prefix if applicable) so that backup records
+      // are stamped as _topic="backup.binance.X" and primary records as _topic="binance.X".
+      // This prevents false "Duplicate broker record" errors in verify when both primary and backup
+      // happen to have the same offset number for independently-produced records on different
+      // topics
+      // (Tier 1 §4; design §6.1 archive broker coordinates).
+      BrokerCoordinates coords = new BrokerCoordinates(topic, partition, offset);
       Optional<List<com.cryptolake.writer.buffer.FlushResult>> autoFlush =
           buffers.add(env, coords, source);
       // Auto-flush results are handled by the caller (KafkaConsumerLoop) via flushAndCommit
