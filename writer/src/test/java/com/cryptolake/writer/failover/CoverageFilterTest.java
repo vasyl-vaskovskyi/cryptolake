@@ -151,8 +151,12 @@ class CoverageFilterTest {
   // ports: design §3.4 — flushAllPending returns all parked gaps on shutdown
   @Test
   void flushAllPending_returnsAllParkedGaps() {
+    // Register data on BOTH streams from BOTH sources so the per-stream coverage
+    // check finds backup covering each gap's specific stream.
     filter.handleData("primary", makeData("binance", "btcusdt", "trades"));
     filter.handleData("backup", makeData("binance", "btcusdt", "trades"));
+    filter.handleData("primary", makeData("binance", "btcusdt", "depth"));
+    filter.handleData("backup", makeData("binance", "btcusdt", "depth"));
 
     filter.handleGap("primary", makeGap("binance", "btcusdt", "trades", 100L, 200L));
     filter.handleGap("primary", makeGap("binance", "btcusdt", "depth", 100L, 200L));
@@ -161,5 +165,35 @@ class CoverageFilterTest {
 
     assertThat(all).hasSize(2);
     assertThat(filter.pendingSize()).isEqualTo(0);
+  }
+
+  // TWO-COLLECTOR rule — coverage check is PER STREAM, not per source globally.
+  // A sparse stream like open_interest must not be falsely "uncovered" just
+  // because backup last published a record on a different (faster) stream.
+  @Test
+  void handleGap_perStreamCoverage_doesNotConfuseSparseStreams() {
+    // Both sources active, both delivered "trades" recently.
+    filter.handleData("primary", makeData("binance", "btcusdt", "trades"));
+    filter.handleData("backup", makeData("binance", "btcusdt", "trades"));
+    // Only PRIMARY has ever delivered open_interest (sparse stream); backup
+    // hasn't fired open_interest yet.
+    filter.handleData("primary", makeData("binance", "btcusdt", "open_interest"));
+
+    // Gap arises on primary's open_interest stream. Backup has NEVER delivered
+    // open_interest, so per-stream coverage is missing → archive immediately.
+    GapEnvelope oiGap =
+        makeGap("binance", "btcusdt", "open_interest", 100L, 200L);
+    boolean accepted = filter.handleGap("primary", oiGap);
+    assertThat(accepted)
+        .as("backup never delivered open_interest, so per-stream coverage absent")
+        .isTrue();
+
+    // But a gap on trades — where backup HAS delivered — must be parked.
+    GapEnvelope tradesGap = makeGap("binance", "btcusdt", "trades", 100L, 200L);
+    boolean tradesAccepted = filter.handleGap("primary", tradesGap);
+    assertThat(tradesAccepted)
+        .as("backup recently delivered trades, so per-stream coverage present → park")
+        .isFalse();
+    assertThat(filter.pendingSize()).isEqualTo(1);
   }
 }

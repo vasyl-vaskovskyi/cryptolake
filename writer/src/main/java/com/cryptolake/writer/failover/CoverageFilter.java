@@ -38,10 +38,20 @@ public final class CoverageFilter {
   private boolean filterEnabled = false;
 
   /**
-   * Per-source last-data timestamp (ns) for coverage detection. Key: "primary" or "backup"; value:
-   * nanosecond timestamp.
+   * Aggregate per-source last-data timestamp (ns). Tracks "did this source deliver ANY data
+   * recently" — used by {@link com.cryptolake.writer.validation.SilenceInferredGapEmitter} to
+   * detect both-collectors-silent globally. Key: "primary" or "backup"; value: ns timestamp.
    */
   private final Map<String, Long> lastDataTs = new HashMap<>();
+
+  /**
+   * Per-(stream, source) last-data timestamp (ns). The coverage decision for a gap on stream X
+   * from source S asks: "did the OTHER source deliver data on stream X within the grace
+   * window?". Without this stream-scoped granularity, sparse streams (e.g. {@code open_interest}
+   * polled once a minute) would falsely look "uncovered" just because the other source happens
+   * to have last published a different stream's record.
+   */
+  private final Map<StreamSourceKey, Long> lastDataTsByStream = new HashMap<>();
 
   /**
    * Per-source last-heartbeat timestamp (ns). Key: "primary" or "backup"; value: nanosecond
@@ -53,6 +63,9 @@ public final class CoverageFilter {
   private final Map<String, PendingGap> pendingGaps = new HashMap<>();
 
   private record PendingGap(GapEnvelope gap, String source, long firstSeenNs) {}
+
+  /** Composite key for per-(stream, source) last-data tracking. */
+  private record StreamSourceKey(String exchange, String symbol, String stream, String source) {}
 
   public CoverageFilter(
       double gracePeriodSeconds,
@@ -74,13 +87,16 @@ public final class CoverageFilter {
    * <p>Ports {@code CoverageFilter.handle_data(source, env)}.
    */
   public void handleData(String source, DataEnvelope env) {
-    lastDataTs.put(source, clock.nowNs());
+    long now = clock.nowNs();
+    lastDataTs.put(source, now);
+    lastDataTsByStream.put(
+        new StreamSourceKey(env.exchange(), env.symbol(), env.stream(), source), now);
     if (!filterEnabled && lastDataTs.size() >= 2) {
       filterEnabled = true;
       log.info(
           "LIFECYCLE COVERAGE_FILTER_ACTIVATED: Both main and backup collectors have"
               + " delivered data — redundancy is now active and spurious gaps will be"
-              + " suppressed when one source covers for the other.");
+              + " suppressed per-stream when one source covers for the other.");
     }
   }
 
@@ -96,10 +112,12 @@ public final class CoverageFilter {
     }
 
     String otherSource = "primary".equals(source) ? "backup" : "primary";
-    Long otherLastTs = lastDataTs.get(otherSource);
+    StreamSourceKey otherStreamKey =
+        new StreamSourceKey(gap.exchange(), gap.symbol(), gap.stream(), otherSource);
+    Long otherLastTs = lastDataTsByStream.get(otherStreamKey);
+    long thresholdNs = (long) (gracePeriodSeconds * 1_000_000_000L);
     boolean otherCovers =
-        otherLastTs != null
-            && (clock.nowNs() - otherLastTs) < (long) (gracePeriodSeconds * 1_000_000_000L);
+        otherLastTs != null && (clock.nowNs() - otherLastTs) < thresholdNs;
 
     String gapKey =
         gap.exchange() + "|" + gap.symbol() + "|" + gap.stream() + "|" + gap.gapStartTs();
@@ -123,23 +141,36 @@ public final class CoverageFilter {
       metrics.setGapPendingSize(pendingGaps.size());
       log.debug("gap_parked", "key", gapKey, "source", source);
       log.info(
-          "LIFECYCLE GAP_PARKED: Possible gap detected on {} — but the {} collector is"
-              + " currently delivering data, so the gap is held for {}s before deciding"
-              + " whether to record it. reason={}",
+          "LIFECYCLE GAP_PARKED: Possible gap detected on {} {} from {} (reason={}); the {}"
+              + " collector delivered data on this same stream within the {}s grace window,"
+              + " so this gap is held for {}s before deciding (will be discarded if {} keeps"
+              + " delivering, archived otherwise).",
+          gap.symbol(),
+          gap.stream(),
           source,
+          gap.reason(),
           otherSource,
           gracePeriodSeconds,
-          gap.reason());
+          gracePeriodSeconds,
+          otherSource);
       return false;
     }
 
-    // No coverage — accept immediately
+    // No coverage on THIS stream from the other source — archive immediately.
     log.info(
-        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE: Gap detected on {} and the other collector is"
-            + " also not delivering — recording gap immediately as real data loss."
-            + " reason={}",
+        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE: Gap detected on {} {} from {} (reason={}); the"
+            + " {} collector has NOT delivered data on this stream within the {}s grace"
+            + " window, so this is treated as real data loss and recorded immediately."
+            + " (Note: this only checks stream {}; data on other streams may still be"
+            + " flowing on {}.)",
+        gap.symbol(),
+        gap.stream(),
         source,
-        gap.reason());
+        gap.reason(),
+        otherSource,
+        gracePeriodSeconds,
+        gap.stream(),
+        otherSource);
     return true;
   }
 
@@ -159,30 +190,41 @@ public final class CoverageFilter {
       long ageNs = nowNs - pg.firstSeenNs();
       long thresholdNs = (long) (gracePeriodSeconds * 1_000_000_000L);
       if (ageNs >= thresholdNs) {
-        // Check if the other source covered during the grace period
+        // Check per-stream coverage from the other source
+        GapEnvelope g = pg.gap();
         String otherSource = "primary".equals(pg.source()) ? "backup" : "primary";
-        Long otherLastTs = lastDataTs.get(otherSource);
+        StreamSourceKey otherStreamKey =
+            new StreamSourceKey(g.exchange(), g.symbol(), g.stream(), otherSource);
+        Long otherLastTs = lastDataTsByStream.get(otherStreamKey);
         boolean nowCovered = otherLastTs != null && (nowNs - otherLastTs) < thresholdNs;
         if (nowCovered) {
-          // Suppress: other source covered
+          // Suppress: other source kept delivering on this same stream
           metrics.gapEnvelopesSuppressed(pg.source(), "covered").increment();
           log.debug("gap_suppressed_by_coverage", "source", pg.source());
           log.info(
-              "LIFECYCLE GAP_SUPPRESSED_BY_COVERAGE: The other collector kept delivering"
-                  + " throughout the grace period — no real data loss occurred, so the"
-                  + " parked gap on {} is discarded (this is the TWO-COLLECTOR rule"
-                  + " working). reason={}",
+              "LIFECYCLE GAP_SUPPRESSED_BY_COVERAGE: The {} collector kept delivering data"
+                  + " on {} {} throughout the {}s grace period — no real data loss"
+                  + " occurred, so the parked gap from {} is discarded (TWO-COLLECTOR rule"
+                  + " worked). reason={}",
+              otherSource,
+              g.symbol(),
+              g.stream(),
+              gracePeriodSeconds,
               pg.source(),
-              pg.gap().reason());
+              g.reason());
         } else {
-          // Archive: grace expired, still no coverage
+          // Archive: grace expired, the other source did not cover THIS stream
           toArchive.add(pg.gap());
           log.info(
-              "LIFECYCLE GAP_ARCHIVED: Grace period expired and the other collector still"
-                  + " has no data — confirmed real data loss; writing gap envelope to"
-                  + " archive. source={} reason={}",
+              "LIFECYCLE GAP_ARCHIVED: The {}s grace period expired and the {} collector"
+                  + " never delivered data on {} {} during it — confirmed real data loss"
+                  + " on this stream; writing gap envelope to archive. source={} reason={}",
+              gracePeriodSeconds,
+              otherSource,
+              g.symbol(),
+              g.stream(),
               pg.source(),
-              pg.gap().reason());
+              g.reason());
         }
         it.remove();
       }
