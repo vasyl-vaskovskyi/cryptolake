@@ -32,11 +32,10 @@ import org.mockito.ArgumentCaptor;
 
 /**
  * Verifies that on failover.activate(), the backup consumer subscribes with a
- * ConsumerRebalanceListener that seeks each assigned partition to a timestamp
- * approximately silenceTimeout + 5s before now. This causes backup to replay
- * the bridging u-frames between primary's last record and backup's current head,
- * eliminating the spurious cross_source_pu_chain_break gap observed in chaos
- * test 01 (bug C).
+ * ConsumerRebalanceListener that seeks each assigned partition to a timestamp approximately
+ * silenceTimeout + 5s before now. This causes backup to replay the bridging u-frames between
+ * primary's last record and backup's current head, eliminating the spurious
+ * cross_source_pu_chain_break gap observed in chaos test 01 (bug C).
  */
 class FailoverControllerSeekToReplayTest {
 
@@ -145,5 +144,62 @@ class FailoverControllerSeekToReplayTest {
 
     verify(backupConsumer, never()).seek(any(), anyLong());
     verify(backupConsumer, never()).offsetsForTimes(any());
+  }
+
+  // When offsetsForTimes itself throws (broker timeout, network blip),
+  // the listener must catch it, log it, and not propagate — and not seek
+  // any partitions. The next poll cycle continues normally because the
+  // consumer falls back to its auto.offset.reset policy on an unset
+  // position.
+  @Test
+  void onPartitionsAssigned_offsetsForTimesThrows_skipsAllSeeksAndDoesNotPropagate() {
+    controller.activate();
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    ArgumentCaptor<ConsumerRebalanceListener> listenerCaptor =
+        ArgumentCaptor.forClass(ConsumerRebalanceListener.class);
+    verify(backupConsumer).subscribe(anyCollection(), listenerCaptor.capture());
+    ConsumerRebalanceListener listener = listenerCaptor.getValue();
+
+    TopicPartition tp = new TopicPartition("backup.binance.btcusdt.depth", 0);
+    when(backupConsumer.offsetsForTimes(any()))
+        .thenThrow(new org.apache.kafka.common.errors.TimeoutException("broker down"));
+
+    // Must NOT propagate.
+    listener.onPartitionsAssigned(Set.of(tp));
+
+    verify(backupConsumer, never()).seek(any(TopicPartition.class), anyLong());
+  }
+
+  // Per-partition seek is independently exception-guarded. If one partition's
+  // seek fails (rare: invalid position, partition revoked mid-call), the
+  // listener must continue and seek the other partitions normally.
+  @Test
+  void onPartitionsAssigned_oneSeekThrows_otherPartitionsStillSeek() {
+    controller.activate();
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    ArgumentCaptor<ConsumerRebalanceListener> listenerCaptor =
+        ArgumentCaptor.forClass(ConsumerRebalanceListener.class);
+    verify(backupConsumer).subscribe(anyCollection(), listenerCaptor.capture());
+    ConsumerRebalanceListener listener = listenerCaptor.getValue();
+
+    TopicPartition badTp = new TopicPartition("backup.binance.btcusdt.depth", 0);
+    TopicPartition goodTp = new TopicPartition("backup.binance.btcusdt.bookticker", 0);
+
+    Map<TopicPartition, OffsetAndTimestamp> offsets = new HashMap<>();
+    offsets.put(badTp, new OffsetAndTimestamp(100L, 0L));
+    offsets.put(goodTp, new OffsetAndTimestamp(200L, 0L));
+    when(backupConsumer.offsetsForTimes(any())).thenReturn(offsets);
+
+    // First seek throws; second seek (different partition) should still happen.
+    org.mockito.Mockito.doThrow(new IllegalStateException("invalid position"))
+        .when(backupConsumer)
+        .seek(eq(badTp), anyLong());
+
+    listener.onPartitionsAssigned(Set.of(badTp, goodTp));
+
+    // Even though badTp's seek threw, goodTp's seek must have been attempted.
+    verify(backupConsumer).seek(goodTp, 200L);
   }
 }
