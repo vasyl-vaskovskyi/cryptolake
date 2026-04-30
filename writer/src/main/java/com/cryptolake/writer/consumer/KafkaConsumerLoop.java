@@ -126,6 +126,17 @@ public final class KafkaConsumerLoop implements Runnable {
         }
         for (ConsumerRecord<byte[], byte[]> rec : records) { // Tier 5 C2 — batch-first
           recordHandler.handle(rec, false);
+          // Bug B: every primary record advances the recovery observation window.
+          failover.markPrimaryDelivered(System.nanoTime());
+        }
+
+        // Bug B: hysteresis deactivation. After processing primary records, ask the
+        // controller whether primary has been delivering continuously for the
+        // recovery stability window. If yes, deactivate failover so MAIN_RECOVERED
+        // / WRITER_NOW_ARCHIVING_FROM=MAIN LIFECYCLE events fire and the writer
+        // stops polling backup.
+        if (failover.shouldDeactivate()) {
+          failover.deactivate();
         }
 
         // Sync the assigned set (listener updates assignedSink on T1; publish snapshot)
