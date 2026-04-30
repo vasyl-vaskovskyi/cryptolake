@@ -8,8 +8,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
+import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +28,9 @@ import org.slf4j.LoggerFactory;
 public final class FailoverController {
 
   private static final Logger log = LoggerFactory.getLogger(FailoverController.class);
+
+  /** How far back (in addition to silenceTimeout) to seek backup on activation. */
+  private static final long SEEK_BACK_BUFFER_MS = 5_000L;
 
   private final Supplier<KafkaConsumer<byte[], byte[]>> backupFactory;
   private final List<String> primaryTopics;
@@ -109,7 +115,7 @@ public final class FailoverController {
 
     backupConsumer = backupFactory.get();
     List<String> backupTopics = primaryTopics.stream().map(t -> backupPrefix + t).toList();
-    backupConsumer.subscribe(backupTopics);
+    backupConsumer.subscribe(backupTopics, new SeekToReplayListener());
   }
 
   /** Deactivates backup consumer. Records failover duration. */
@@ -236,5 +242,54 @@ public final class FailoverController {
 
   private static String streamId(DataEnvelope env) {
     return env.exchange() + "|" + env.symbol() + "|" + env.stream();
+  }
+
+  /**
+   * On partition assignment, seeks each assigned backup partition to the offset corresponding to
+   * (now − silenceTimeout − SEEK_BACK_BUFFER_MS). This ensures the backup consumer replays records
+   * that bridge primary's last delivered u to backup's current head, preventing a spurious
+   * cross_source_pu_chain_break at the failover boundary (bug C from chaos test 01).
+   */
+  private final class SeekToReplayListener implements ConsumerRebalanceListener {
+    @Override
+    public void onPartitionsRevoked(java.util.Collection<TopicPartition> partitions) {
+      // No-op: nothing to flush; consumer drains naturally on revoke.
+    }
+
+    @Override
+    public void onPartitionsAssigned(java.util.Collection<TopicPartition> partitions) {
+      if (partitions.isEmpty()) return;
+      long seekTargetMs =
+          (clock.nowNs() / 1_000_000L) - silenceTimeout.toMillis() - SEEK_BACK_BUFFER_MS;
+      Map<TopicPartition, Long> request = new HashMap<>();
+      for (TopicPartition tp : partitions) {
+        request.put(tp, seekTargetMs);
+      }
+      Map<TopicPartition, OffsetAndTimestamp> offsets;
+      try {
+        offsets = backupConsumer.offsetsForTimes(request);
+      } catch (Exception e) {
+        log.warn("backup_seek_offsets_for_times_failed", "error", e.getMessage());
+        return;
+      }
+      for (Map.Entry<TopicPartition, OffsetAndTimestamp> e : offsets.entrySet()) {
+        OffsetAndTimestamp ot = e.getValue();
+        if (ot != null) {
+          try {
+            backupConsumer.seek(e.getKey(), ot.offset());
+          } catch (Exception ex) {
+            log.warn(
+                "backup_seek_failed",
+                "partition",
+                e.getKey().toString(),
+                "offset",
+                ot.offset(),
+                "error",
+                ex.getMessage());
+          }
+        }
+        // If ot == null: no record old enough; let consumer's auto.offset.reset apply.
+      }
+    }
   }
 }
