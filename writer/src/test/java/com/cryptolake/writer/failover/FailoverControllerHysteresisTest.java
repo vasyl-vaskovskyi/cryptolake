@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
  * was ≥ recoveryStabilityWindow ago, AND - last primary record is fresh (within silenceTimeout —
  * primary still delivering).
  */
-@SuppressWarnings("unchecked")
 class FailoverControllerHysteresisTest {
 
   private static final Duration SILENCE_TIMEOUT = Duration.ofSeconds(5);
@@ -37,6 +36,7 @@ class FailoverControllerHysteresisTest {
   private FailoverController controller;
 
   @BeforeEach
+  @SuppressWarnings("unchecked")
   void setUp() {
     fakeClockNs = new AtomicLong(1_000_000_000_000L); // t = 1000s
     clock = fakeClockNs::get;

@@ -30,6 +30,7 @@ public final class FailoverController {
   private final List<String> primaryTopics;
   private final String backupPrefix;
   private final Duration silenceTimeout;
+  private final Duration recoveryStabilityWindow;
   private final CoverageFilter coverage;
   private final WriterMetrics metrics;
   private final ClockSupplier clock;
@@ -40,7 +41,6 @@ public final class FailoverController {
   private KafkaConsumer<byte[], byte[]> backupConsumer = null;
   private long lastPrimaryRecordNs = -1L;
   private long activationStartNs = -1L;
-  private final Duration recoveryStabilityWindow;
 
   /** Nanos timestamp of the first primary record observed since the most recent activate(). */
   private long firstRecoveryRecordNs = -1L;
