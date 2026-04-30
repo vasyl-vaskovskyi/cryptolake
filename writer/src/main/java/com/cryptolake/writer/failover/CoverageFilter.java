@@ -45,11 +45,11 @@ public final class CoverageFilter {
   private final Map<String, Long> lastDataTs = new HashMap<>();
 
   /**
-   * Per-(stream, source) last-data timestamp (ns). The coverage decision for a gap on stream X
-   * from source S asks: "did the OTHER source deliver data on stream X within the grace
-   * window?". Without this stream-scoped granularity, sparse streams (e.g. {@code open_interest}
-   * polled once a minute) would falsely look "uncovered" just because the other source happens
-   * to have last published a different stream's record.
+   * Per-(stream, source) last-data timestamp (ns). The coverage decision for a gap on stream X from
+   * source S asks: "did the OTHER source deliver data on stream X within the grace window?".
+   * Without this stream-scoped granularity, sparse streams (e.g. {@code open_interest} polled once
+   * a minute) would falsely look "uncovered" just because the other source happens to have last
+   * published a different stream's record.
    */
   private final Map<StreamSourceKey, Long> lastDataTsByStream = new HashMap<>();
 
@@ -123,8 +123,7 @@ public final class CoverageFilter {
     // gap_start_ts (gapStartTs <= 0).
     boolean otherDeliveredDuringGapWindow =
         otherLastTs != null && gap.gapStartTs() > 0 && otherLastTs > gap.gapStartTs();
-    boolean otherFreshNow =
-        otherLastTs != null && (clock.nowNs() - otherLastTs) < thresholdNs;
+    boolean otherFreshNow = otherLastTs != null && (clock.nowNs() - otherLastTs) < thresholdNs;
     boolean otherCovers = otherDeliveredDuringGapWindow || otherFreshNow;
 
     String gapKey =
@@ -207,8 +206,7 @@ public final class CoverageFilter {
         Long otherLastTs = lastDataTsByStream.get(otherStreamKey);
         boolean otherDeliveredDuringGapWindow =
             otherLastTs != null && g.gapStartTs() > 0 && otherLastTs > g.gapStartTs();
-        boolean otherFreshNow =
-            otherLastTs != null && (nowNs - otherLastTs) < thresholdNs;
+        boolean otherFreshNow = otherLastTs != null && (nowNs - otherLastTs) < thresholdNs;
         boolean nowCovered = otherDeliveredDuringGapWindow || otherFreshNow;
         if (nowCovered) {
           // Suppress: other source kept delivering on this same stream

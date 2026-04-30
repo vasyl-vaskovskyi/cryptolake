@@ -52,6 +52,7 @@ class RecordHandlerGapRoutingTest {
             List.of("binance.trades"),
             "backup_",
             Duration.ofSeconds(30),
+            Duration.ofSeconds(10),
             coverage,
             metrics,
             clock);

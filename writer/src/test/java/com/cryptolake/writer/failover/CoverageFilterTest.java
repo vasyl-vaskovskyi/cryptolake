@@ -140,10 +140,10 @@ class CoverageFilterTest {
     // Gap starts AFTER backup's last delivery so it is not auto-suppressed by
     // the gap-window coverage check; both gaps share gap_start, different gap_ends.
     long gapStart = backupLastTs + 1_000_000_000L;
-    GapEnvelope gap1 =
-        makeGap("binance", "btcusdt", "trades", gapStart, gapStart + 100L);
+    GapEnvelope gap1 = makeGap("binance", "btcusdt", "trades", gapStart, gapStart + 100L);
     GapEnvelope gap2 =
-        makeGap("binance", "btcusdt", "trades", gapStart, gapStart + 200L); // same start, higher end
+        makeGap(
+            "binance", "btcusdt", "trades", gapStart, gapStart + 200L); // same start, higher end
 
     fakeClock.set(gapStart + 100L);
     filter.handleGap("primary", gap1);
@@ -209,12 +209,7 @@ class CoverageFilterTest {
     // Construct a session-change-style gap: gap_start = primary's last pre-kill
     // record at t=1000s, gap_end = primary's first post-restart record at t=1090s.
     GapEnvelope sessionChangeGap =
-        makeGap(
-            "binance",
-            "btcusdt",
-            "open_interest",
-            primaryLastDataTs,
-            fakeClock.get());
+        makeGap("binance", "btcusdt", "open_interest", primaryLastDataTs, fakeClock.get());
     boolean accepted = filter.handleGap("primary", sessionChangeGap);
 
     assertThat(accepted)
@@ -239,8 +234,7 @@ class CoverageFilterTest {
 
     // Gap arises on primary's open_interest stream. Backup has NEVER delivered
     // open_interest, so per-stream coverage is missing → archive immediately.
-    GapEnvelope oiGap =
-        makeGap("binance", "btcusdt", "open_interest", 100L, 200L);
+    GapEnvelope oiGap = makeGap("binance", "btcusdt", "open_interest", 100L, 200L);
     boolean accepted = filter.handleGap("primary", oiGap);
     assertThat(accepted)
         .as("backup never delivered open_interest, so per-stream coverage absent")

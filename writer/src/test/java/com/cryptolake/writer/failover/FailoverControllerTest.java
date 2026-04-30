@@ -39,6 +39,7 @@ class FailoverControllerTest {
             List.of("binance.trades"),
             "backup.",
             Duration.ofSeconds(5),
+            Duration.ofSeconds(10),
             coverage,
             metrics,
             fakeClock::get);

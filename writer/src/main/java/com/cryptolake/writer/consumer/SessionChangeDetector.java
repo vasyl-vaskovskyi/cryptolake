@@ -22,10 +22,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Session marks are kept <strong>per (stream, source)</strong>, not per stream. A
  * <em>cross-source switch</em> (e.g. MAIN→BACKUP at the moment MAIN dies) is the writer's failover
- * mechanism doing its job — both collectors have full coverage of the transition window, so no
- * gap is emitted. Only a <em>within-source</em> session change (the SAME source's session_id
- * differs from its previous envelope, i.e. that specific collector restarted) is a gap candidate.
- * That candidate is then routed through {@link CoverageFilter}, which suppresses it if the OTHER
+ * mechanism doing its job — both collectors have full coverage of the transition window, so no gap
+ * is emitted. Only a <em>within-source</em> session change (the SAME source's session_id differs
+ * from its previous envelope, i.e. that specific collector restarted) is a gap candidate. That
+ * candidate is then routed through {@link CoverageFilter}, which suppresses it if the OTHER
  * source's data covered the down window — which is the steady state under the TWO-COLLECTOR rule.
  *
  * <p>Thread safety: consume-loop thread only (T1). State map owned by this class; no locking (Tier
@@ -55,13 +55,13 @@ public final class SessionChangeDetector {
   }
 
   /**
-   * Observes an envelope and emits a gap if the collector session ID changed within the SAME
-   * source since the last envelope for this stream from that source.
+   * Observes an envelope and emits a gap if the collector session ID changed within the SAME source
+   * since the last envelope for this stream from that source.
    *
    * <p>Cross-source switches (MAIN→BACKUP or BACKUP→MAIN) are the writer's failover mechanism
-   * working as designed and never emit a gap here — under the TWO-COLLECTOR rule they are not
-   * data events. A gap is only a candidate when a specific collector's session_id changes
-   * within its own envelope stream.
+   * working as designed and never emit a gap here — under the TWO-COLLECTOR rule they are not data
+   * events. A gap is only a candidate when a specific collector's session_id changes within its own
+   * envelope stream.
    *
    * @param env the incoming data envelope
    * @param source "primary" or "backup" — the source the writer received this envelope from

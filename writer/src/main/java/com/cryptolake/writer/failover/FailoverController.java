@@ -40,6 +40,10 @@ public final class FailoverController {
   private KafkaConsumer<byte[], byte[]> backupConsumer = null;
   private long lastPrimaryRecordNs = -1L;
   private long activationStartNs = -1L;
+  private final Duration recoveryStabilityWindow;
+
+  /** Nanos timestamp of the first primary record observed since the most recent activate(). */
+  private long firstRecoveryRecordNs = -1L;
 
   /** Per-stream last natural key seen from primary (for switchback filter). */
   private final Map<String, Long> lastPrimaryKey = new HashMap<>();
@@ -54,6 +58,7 @@ public final class FailoverController {
       List<String> primaryTopics,
       String backupPrefix,
       Duration silenceTimeout,
+      Duration recoveryStabilityWindow,
       CoverageFilter coverage,
       WriterMetrics metrics,
       ClockSupplier clock) {
@@ -61,6 +66,7 @@ public final class FailoverController {
     this.primaryTopics = primaryTopics;
     this.backupPrefix = backupPrefix;
     this.silenceTimeout = silenceTimeout;
+    this.recoveryStabilityWindow = recoveryStabilityWindow;
     this.coverage = coverage;
     this.metrics = metrics;
     this.clock = clock;
@@ -96,6 +102,7 @@ public final class FailoverController {
             + " the BACKUP collector (failover active). backup_prefix={}",
         backupPrefix);
     isActive = true;
+    firstRecoveryRecordNs = -1L;
     activationStartNs = clock.nowNs();
     metrics.setFailoverActive(true);
     metrics.failoverTotal().increment();
@@ -119,6 +126,7 @@ public final class FailoverController {
         "LIFECYCLE WRITER_NOW_ARCHIVING_FROM=MAIN: Writer is back to archiving data from"
             + " the MAIN collector (failover deactivated).");
     isActive = false;
+    firstRecoveryRecordNs = -1L;
     metrics.setFailoverActive(false);
     metrics.failoverDurationSeconds().record(durationSec);
     metrics.switchbackTotal().increment();
@@ -182,6 +190,45 @@ public final class FailoverController {
       }
       backupConsumer = null;
     }
+  }
+
+  // ── Hysteresis state machine (bug B) ─────────────────────────────────────────────────────────
+
+  /**
+   * Records that a primary record was delivered (called by KafkaConsumerLoop after each primary
+   * record processed). If failover is active and this is the first primary record since activation,
+   * starts the recovery observation window. If primary has been silent longer than the
+   * silence-reset threshold ({@code recoveryStabilityWindow + silenceTimeout}), resets the recovery
+   * window — the controller wants continuous (not flapping) primary delivery before declaring
+   * recovery.
+   *
+   * <p>Always updates {@code lastPrimaryRecordNs} (used by {@code shouldActivate}).
+   */
+  public void markPrimaryDelivered(long nowNs) {
+    if (isActive) {
+      long resetThresholdNs = recoveryStabilityWindow.toNanos() + silenceTimeout.toNanos();
+      if (firstRecoveryRecordNs < 0 || (nowNs - lastPrimaryRecordNs) > resetThresholdNs) {
+        // First record post-activate, or primary went silent again — restart the window.
+        firstRecoveryRecordNs = nowNs;
+      }
+    }
+    lastPrimaryRecordNs = nowNs;
+  }
+
+  /**
+   * Returns {@code true} if failover is active AND primary has been delivering continuously for at
+   * least {@code recoveryStabilityWindow}. The caller is responsible for invoking {@link
+   * #deactivate()} when this returns true.
+   */
+  public boolean shouldDeactivate() {
+    if (!isActive || firstRecoveryRecordNs < 0) {
+      return false;
+    }
+    long now = clock.nowNs();
+    long recoveredFor = now - firstRecoveryRecordNs;
+    long sinceLast = now - lastPrimaryRecordNs;
+    return recoveredFor >= recoveryStabilityWindow.toNanos()
+        && sinceLast < silenceTimeout.toNanos();
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────────────────────
