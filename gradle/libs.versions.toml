@@ -14,6 +14,7 @@ hibernateValidator = "8.0.1.Final"
 junit = "5.11.0"
 assertj = "3.26.3"
 testcontainers = "1.20.1"
+mockito = "5.14.2"
 errorProne = "2.31.0"
 nullaway = "0.11.1"
 spotless = "7.0.0.BETA2"
@@ -38,6 +39,7 @@ assertj              = { module = "org.assertj:assertj-core",                   
 testcontainers-bom   = { module = "org.testcontainers:testcontainers-bom",                      version.ref = "testcontainers" }
 testcontainers-kafka = { module = "org.testcontainers:kafka" }
 testcontainers-postgres = { module = "org.testcontainers:postgresql" }
+mockito-core         = { module = "org.mockito:mockito-core",                                   version.ref = "mockito" }
 commons-compress     = { module = "org.apache.commons:commons-compress",                        version.ref = "commonsCompress" }
 
 [plugins]

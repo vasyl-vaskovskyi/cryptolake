@@ -16,6 +16,7 @@ dependencies {
     testImplementation(platform(libs.testcontainers.bom))
     testImplementation(libs.testcontainers.kafka)
     testImplementation(libs.testcontainers.postgres)
+    testImplementation(libs.mockito.core)
 }
 
 tasks.register<JavaExec>("dumpMetricSkeleton") {

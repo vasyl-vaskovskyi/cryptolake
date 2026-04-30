@@ -197,17 +197,15 @@ public final class FailoverController {
   /**
    * Records that a primary record was delivered (called by KafkaConsumerLoop after each primary
    * record processed). If failover is active and this is the first primary record since activation,
-   * starts the recovery observation window. If primary has been silent longer than the
-   * silence-reset threshold ({@code recoveryStabilityWindow + silenceTimeout}), resets the recovery
-   * window — the controller wants continuous (not flapping) primary delivery before declaring
-   * recovery.
+   * starts the recovery observation window. If primary has been silent longer than {@code
+   * silenceTimeout} (symmetric with {@link #shouldActivate()}), resets the recovery window — the
+   * controller wants continuous (not flapping) primary delivery before declaring recovery.
    *
    * <p>Always updates {@code lastPrimaryRecordNs} (used by {@code shouldActivate}).
    */
   public void markPrimaryDelivered(long nowNs) {
     if (isActive) {
-      long resetThresholdNs = recoveryStabilityWindow.toNanos() + silenceTimeout.toNanos();
-      if (firstRecoveryRecordNs < 0 || (nowNs - lastPrimaryRecordNs) > resetThresholdNs) {
+      if (firstRecoveryRecordNs < 0 || (nowNs - lastPrimaryRecordNs) > silenceTimeout.toNanos()) {
         // First record post-activate, or primary went silent again — restart the window.
         firstRecoveryRecordNs = nowNs;
       }

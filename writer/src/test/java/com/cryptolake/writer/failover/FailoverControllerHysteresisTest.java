@@ -1,6 +1,7 @@
 package com.cryptolake.writer.failover;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -8,11 +9,8 @@ import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Duration;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -27,6 +25,7 @@ import org.junit.jupiter.api.Test;
  * was ≥ recoveryStabilityWindow ago, AND - last primary record is fresh (within silenceTimeout —
  * primary still delivering).
  */
+@SuppressWarnings("unchecked")
 class FailoverControllerHysteresisTest {
 
   private static final Duration SILENCE_TIMEOUT = Duration.ofSeconds(5);
@@ -45,9 +44,7 @@ class FailoverControllerHysteresisTest {
     CoverageFilter coverage = new CoverageFilter(5.0, 10.0, metrics, clock);
     controller =
         new FailoverController(
-            () ->
-                new KafkaConsumer<>(
-                    stubConsumerProps(), new ByteArrayDeserializer(), new ByteArrayDeserializer()),
+            () -> (KafkaConsumer<byte[], byte[]>) mock(KafkaConsumer.class),
             List.of("binance.btcusdt.depth"),
             "backup.",
             SILENCE_TIMEOUT,
@@ -55,15 +52,6 @@ class FailoverControllerHysteresisTest {
             coverage,
             metrics,
             clock);
-  }
-
-  /** Minimal props — KafkaConsumer construction is offline (no broker contact). */
-  private static Properties stubConsumerProps() {
-    Properties p = new Properties();
-    p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:1");
-    p.put(ConsumerConfig.GROUP_ID_CONFIG, "test-hysteresis");
-    p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-    return p;
   }
 
   private void advanceSeconds(long s) {
@@ -100,12 +88,18 @@ class FailoverControllerHysteresisTest {
   void recoveryObserving_afterStabilityWindow_shouldDeactivateIsTrue() {
     controller.activate();
     advanceSeconds(2);
-    long firstRecoveryNs = fakeClockNs.get();
-    controller.markPrimaryDelivered(firstRecoveryNs);
+    controller.markPrimaryDelivered(fakeClockNs.get()); // first record post-activate
 
-    advanceSeconds(11); // 11s after first recovery — window elapsed
-    controller.markPrimaryDelivered(fakeClockNs.get());
+    // Simulate continuous primary delivery at 1 Hz across the 10 s window.
+    // Production calls markPrimaryDelivered for every primary Kafka record (much
+    // faster than 1 Hz), so this is a conservative simulation.
+    for (int i = 0; i < 11; i++) {
+      advanceSeconds(1);
+      controller.markPrimaryDelivered(fakeClockNs.get());
+    }
 
+    // ≥ recoveryStabilityWindow has elapsed since the first post-activate record
+    // AND primary delivered within the last second — fresh.
     assertThat(controller.shouldDeactivate()).isTrue();
   }
 
@@ -115,20 +109,26 @@ class FailoverControllerHysteresisTest {
     advanceSeconds(2);
     controller.markPrimaryDelivered(fakeClockNs.get()); // recovery starts at t=1002s
 
-    advanceSeconds(8); // t=1010s — primary then goes silent
-    // No markPrimaryDelivered between t=1010s and t=1020s (silence > 5s timeout)
-
-    advanceSeconds(15); // t=1025s
-    // Primary delivers again — recovery should restart
-    controller.markPrimaryDelivered(fakeClockNs.get());
-
-    // Even though >10s elapsed since the FIRST mark at t=1002s, the silence
-    // gap reset the recovery clock. Only 0s of fresh recovery — must be false.
+    // Primary delivers continuously for 8 s (still inside the 10 s window).
+    for (int i = 0; i < 8; i++) {
+      advanceSeconds(1);
+      controller.markPrimaryDelivered(fakeClockNs.get());
+    }
+    // recoveredFor=9s, sinceLast=1s — inside both bounds → still false.
     assertThat(controller.shouldDeactivate()).isFalse();
 
-    advanceSeconds(11); // t=1036s — now 11s of fresh continuous recovery
-    controller.markPrimaryDelivered(fakeClockNs.get());
+    // Then primary goes silent for 15 s (> silenceTimeout = 5 s).
+    advanceSeconds(15);
 
+    // Primary resumes — silence > silenceTimeout means the recovery clock resets.
+    controller.markPrimaryDelivered(fakeClockNs.get());
+    assertThat(controller.shouldDeactivate()).isFalse();
+
+    // After the reset, primary needs to deliver continuously for another full window.
+    for (int i = 0; i < 11; i++) {
+      advanceSeconds(1);
+      controller.markPrimaryDelivered(fakeClockNs.get());
+    }
     assertThat(controller.shouldDeactivate()).isTrue();
   }
 
@@ -136,9 +136,13 @@ class FailoverControllerHysteresisTest {
   void afterDeactivate_shouldDeactivateIsFalse() {
     controller.activate();
     advanceSeconds(2);
-    controller.markPrimaryDelivered(fakeClockNs.get());
-    advanceSeconds(11);
-    controller.markPrimaryDelivered(fakeClockNs.get());
+    controller.markPrimaryDelivered(fakeClockNs.get()); // first record post-activate
+
+    // Continuous primary delivery at 1 Hz across the recovery window.
+    for (int i = 0; i < 11; i++) {
+      advanceSeconds(1);
+      controller.markPrimaryDelivered(fakeClockNs.get());
+    }
     assertThat(controller.shouldDeactivate()).isTrue();
 
     controller.deactivate();
