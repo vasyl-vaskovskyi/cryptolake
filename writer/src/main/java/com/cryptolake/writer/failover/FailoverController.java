@@ -88,11 +88,13 @@ public final class FailoverController {
     if (isActive) return;
     log.info("failover_activated", "backup_prefix", backupPrefix);
     log.info(
-        "LIFECYCLE MAIN_FAILURE_DETECTED — silence_timeout={}s reached on MAIN's stream;"
-            + " writer is switching to BACKUP source.",
+        "LIFECYCLE MAIN_FAILURE_DETECTED: Main collector stopped delivering data."
+            + " Silence timeout of {}s reached; failing over to backup.",
         silenceTimeout.toSeconds());
     log.info(
-        "LIFECYCLE WRITER_NOW_ARCHIVING_FROM=BACKUP backup_prefix={}", backupPrefix);
+        "LIFECYCLE WRITER_NOW_ARCHIVING_FROM=BACKUP: Writer is now archiving data from"
+            + " the BACKUP collector (failover active). backup_prefix={}",
+        backupPrefix);
     isActive = true;
     activationStartNs = clock.nowNs();
     metrics.setFailoverActive(true);
@@ -110,10 +112,12 @@ public final class FailoverController {
     double durationSec = durationNs / 1_000_000_000.0;
     log.info("failover_deactivated", "duration_seconds", durationSec);
     log.info(
-        "LIFECYCLE MAIN_RECOVERED — MAIN is delivering again after {}s;"
-            + " writer switching back from BACKUP to MAIN.",
+        "LIFECYCLE MAIN_RECOVERED: Main collector is delivering data again after {}s;"
+            + " writer is switching back from backup to main.",
         durationSec);
-    log.info("LIFECYCLE WRITER_NOW_ARCHIVING_FROM=MAIN");
+    log.info(
+        "LIFECYCLE WRITER_NOW_ARCHIVING_FROM=MAIN: Writer is back to archiving data from"
+            + " the MAIN collector (failover deactivated).");
     isActive = false;
     metrics.setFailoverActive(false);
     metrics.failoverDurationSeconds().record(durationSec);

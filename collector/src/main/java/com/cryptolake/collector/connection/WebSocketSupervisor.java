@@ -255,7 +255,11 @@ public final class WebSocketSupervisor {
     reconnectPolicy.reset();
     log.info("ws_connected", "socket", SOCKET_NAME, "url", url);
     if (wasDisconnected) {
-      log.info("LIFECYCLE COLLECTOR_UPSTREAM_WS_CONNECTED socket={} url={}", SOCKET_NAME, url);
+      log.info(
+          "LIFECYCLE COLLECTOR_UPSTREAM_WS_CONNECTED: WebSocket to the exchange is open"
+              + " — this collector is receiving market data again. socket={} url={}",
+          SOCKET_NAME,
+          url);
     }
 
     // Start FirstFrameWatchdog

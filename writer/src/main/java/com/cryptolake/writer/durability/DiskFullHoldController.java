@@ -164,11 +164,11 @@ public final class DiskFullHoldController {
       holdStartedNs.set(holdStart);
       log.info("disk_full_hold_entered", "error", e.getMessage());
       log.info(
-          "LIFECYCLE WRITER_DISK_FULL_HOLD_ENTERED",
+          "LIFECYCLE WRITER_DISK_FULL_HOLD_ENTERED: Disk is full — writer cannot write"
+              + " archives. Pausing Kafka commits and freezing the archive until disk is"
+              + " freed (real loss begins now).",
           "error",
-          e.getMessage(),
-          "note",
-          "writer paused commits; archive frozen until disk freed (real loss begins)");
+          e.getMessage());
       emitHoldGaps("disk_full_hold_started", holdStart, holdStart);
     }
   }
@@ -184,11 +184,10 @@ public final class DiskFullHoldController {
       long holdEnd = clock.nowNs();
       log.info("disk_full_hold_exited", "hold_duration_ns", holdEnd - holdStart);
       log.info(
-          "LIFECYCLE WRITER_DISK_FULL_HOLD_EXITED",
+          "LIFECYCLE WRITER_DISK_FULL_HOLD_EXITED: Disk space is available again —"
+              + " writer is resuming archive writes and Kafka commits.",
           "hold_duration_ns",
-          holdEnd - holdStart,
-          "note",
-          "disk recovered; writer resuming commits");
+          holdEnd - holdStart);
       emitHoldGaps("disk_full_hold_ended", holdStart, holdEnd);
     }
   }

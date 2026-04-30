@@ -103,9 +103,9 @@ public final class SessionChangeDetector {
         "source",
         source);
     log.info(
-        "LIFECYCLE WITHIN_SOURCE_SESSION_CHANGE source={} stream={} prev_session_id={}"
-            + " new_session_id={} — that specific collector restarted; emitting gap candidate"
-            + " (will be suppressed by CoverageFilter if OTHER source covered).",
+        "LIFECYCLE WITHIN_SOURCE_SESSION_CHANGE: The {} collector itself restarted"
+            + " (its session_id changed) on stream {} — emitting gap candidate; will be"
+            + " discarded if the other collector covered the down window. prev={} new={}",
         source,
         env.stream(),
         prev.sessionId(),

@@ -185,9 +185,8 @@ public final class SilenceInferredGapEmitter {
                     + backupDataAge / 1_000_000L;
             log.info("both_collectors_silent", "symbol", ss.symbol(), "stream", ss.stream());
             log.info(
-                "LIFECYCLE BOTH_COLLECTORS_SILENT — symbol={} stream={};"
-                    + " neither MAIN nor BACKUP delivering data. Emitting gap candidate"
-                    + " (real loss under TWO-COLLECTOR rule).",
+                "LIFECYCLE BOTH_COLLECTORS_SILENT: Neither main nor backup is delivering"
+                    + " data for {} {} — this is real data loss; emitting a gap envelope.",
                 ss.symbol(),
                 ss.stream());
             gapEmitAction.emitWithTimestamps(
@@ -202,8 +201,8 @@ public final class SilenceInferredGapEmitter {
             silenceActive.put(key, false);
             log.info("both_collectors_recovered", "symbol", ss.symbol(), "stream", ss.stream());
             log.info(
-                "LIFECYCLE BOTH_COLLECTORS_RECOVERED — symbol={} stream={};"
-                    + " at least one of MAIN/BACKUP delivering again.",
+                "LIFECYCLE BOTH_COLLECTORS_RECOVERED: Data is flowing again for {} {} —"
+                    + " at least one of main/backup is delivering; gap window closed.",
                 ss.symbol(),
                 ss.stream());
           }

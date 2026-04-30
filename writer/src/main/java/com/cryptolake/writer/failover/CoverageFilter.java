@@ -78,8 +78,9 @@ public final class CoverageFilter {
     if (!filterEnabled && lastDataTs.size() >= 2) {
       filterEnabled = true;
       log.info(
-          "LIFECYCLE COVERAGE_FILTER_ACTIVATED — both MAIN and BACKUP have delivered data;"
-              + " gap suppression by other-source coverage is now enabled.");
+          "LIFECYCLE COVERAGE_FILTER_ACTIVATED: Both main and backup collectors have"
+              + " delivered data — redundancy is now active and spurious gaps will be"
+              + " suppressed when one source covers for the other.");
     }
   }
 
@@ -122,21 +123,23 @@ public final class CoverageFilter {
       metrics.setGapPendingSize(pendingGaps.size());
       log.debug("gap_parked", "key", gapKey, "source", source);
       log.info(
-          "LIFECYCLE GAP_PARKED reason={} source={} — OTHER source ({}) is currently fresh;"
-              + " gap parked for {}s grace period.",
-          gap.reason(),
+          "LIFECYCLE GAP_PARKED: Possible gap detected on {} — but the {} collector is"
+              + " currently delivering data, so the gap is held for {}s before deciding"
+              + " whether to record it. reason={}",
           source,
           otherSource,
-          gracePeriodSeconds);
+          gracePeriodSeconds,
+          gap.reason());
       return false;
     }
 
     // No coverage — accept immediately
     log.info(
-        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE reason={} source={} — OTHER source not fresh;"
-            + " gap will be archived (real loss).",
-        gap.reason(),
-        source);
+        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE: Gap detected on {} and the other collector is"
+            + " also not delivering — recording gap immediately as real data loss."
+            + " reason={}",
+        source,
+        gap.reason());
     return true;
   }
 
@@ -165,18 +168,21 @@ public final class CoverageFilter {
           metrics.gapEnvelopesSuppressed(pg.source(), "covered").increment();
           log.debug("gap_suppressed_by_coverage", "source", pg.source());
           log.info(
-              "LIFECYCLE GAP_SUPPRESSED_BY_COVERAGE reason={} source={} — OTHER source"
-                  + " kept delivering throughout grace period; not archiving (TWO-COLLECTOR rule).",
-              pg.gap().reason(),
-              pg.source());
+              "LIFECYCLE GAP_SUPPRESSED_BY_COVERAGE: The other collector kept delivering"
+                  + " throughout the grace period — no real data loss occurred, so the"
+                  + " parked gap on {} is discarded (this is the TWO-COLLECTOR rule"
+                  + " working). reason={}",
+              pg.source(),
+              pg.gap().reason());
         } else {
           // Archive: grace expired, still no coverage
           toArchive.add(pg.gap());
           log.info(
-              "LIFECYCLE GAP_ARCHIVED reason={} source={} — OTHER source did not cover within"
-                  + " grace period; real loss confirmed.",
-              pg.gap().reason(),
-              pg.source());
+              "LIFECYCLE GAP_ARCHIVED: Grace period expired and the other collector still"
+                  + " has no data — confirmed real data loss; writing gap envelope to"
+                  + " archive. source={} reason={}",
+              pg.source(),
+              pg.gap().reason());
         }
         it.remove();
       }

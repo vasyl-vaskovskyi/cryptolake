@@ -167,11 +167,11 @@ public final class PgOutageHoldController {
       holdStartedNs.set(holdStart);
       log.info("pg_outage_hold_entered", "consecutive_failures", failures);
       log.info(
-          "LIFECYCLE WRITER_PG_OUTAGE_HOLD_ENTERED",
+          "LIFECYCLE WRITER_PG_OUTAGE_HOLD_ENTERED: Postgres is unreachable — pausing"
+              + " Kafka offset commits and lifecycle persistence, but archive flushes"
+              + " continue normally (no data loss, redundancy via Kafka retention).",
           "consecutive_failures",
-          failures,
-          "note",
-          "Kafka commits paused; archive flushes continue (no data loss)");
+          failures);
       emitHoldGaps("pg_outage_hold_started", holdStart, holdStart);
     }
   }
@@ -189,11 +189,10 @@ public final class PgOutageHoldController {
       long holdEnd = clock.nowNs();
       log.info("pg_outage_hold_exited", "hold_duration_ns", holdEnd - holdStart);
       log.info(
-          "LIFECYCLE WRITER_PG_OUTAGE_HOLD_EXITED",
+          "LIFECYCLE WRITER_PG_OUTAGE_HOLD_EXITED: Postgres is reachable again —"
+              + " writer is resuming Kafka offset commits and lifecycle persistence.",
           "hold_duration_ns",
-          holdEnd - holdStart,
-          "note",
-          "PG recovered; writer resuming Kafka commits");
+          holdEnd - holdStart);
       emitHoldGaps("pg_outage_hold_ended", holdStart, holdEnd);
     }
   }

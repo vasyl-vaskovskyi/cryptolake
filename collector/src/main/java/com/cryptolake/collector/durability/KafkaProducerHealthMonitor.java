@@ -184,9 +184,10 @@ public final class KafkaProducerHealthMonitor {
               journal.recordOutageStart(degradedSinceNs);
               log.info("kafka_outage_started", "outage_start_ns", degradedSinceNs);
               log.info(
-                  "LIFECYCLE COLLECTOR_KAFKA_OUTAGE_ENTERED outage_start_ns={} —"
-                      + " this collector cannot publish to Kafka; the OTHER collector should"
-                      + " keep delivering if its producer path is healthy.",
+                  "LIFECYCLE COLLECTOR_KAFKA_OUTAGE_ENTERED: This collector cannot publish"
+                      + " to Kafka — its producer path is broken. The other collector"
+                      + " should keep delivering if its producer is healthy."
+                      + " outage_start_ns={}",
                   degradedSinceNs);
             }
           }
@@ -204,9 +205,10 @@ public final class KafkaProducerHealthMonitor {
             state = State.HEALTHY;
             log.info("kafka_outage_resolved", "gap_end_ns", gapEnd);
             log.info(
-                "LIFECYCLE COLLECTOR_KAFKA_OUTAGE_EXITED gap_end_ns={} —"
-                    + " this collector's producer recovered; KafkaOutageJournal replayed"
-                    + " kafka_producer_outage gap envelopes for the down window.",
+                "LIFECYCLE COLLECTOR_KAFKA_OUTAGE_EXITED: This collector's Kafka producer"
+                    + " is healthy again. Replaying kafka_producer_outage gap envelopes"
+                    + " for the down window so the writer knows what was lost."
+                    + " gap_end_ns={}",
                 gapEnd);
           }
           // If still unhealthy: stay paused, keep probing
