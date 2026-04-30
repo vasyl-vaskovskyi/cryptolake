@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # 18_kafka_consumer_outage.sh
 #
-# Chaos:    Block writer's connection to redpanda for 60s
+# Scenario: writer_kafka_consumer_outage
+# Chaos:    iptables-block writer↔redpanda for 60s; then unblock
 # Expected: gap reason=kafka_consumer_outage (real loss)
-# Why:      Writer is the only consumer; while blocked nothing reaches the archive.
+# Flow:     MAIN+BACKUP both healthy and publishing to redpanda → writer's
+#           consumer link to redpanda blocked → records accumulate on
+#           Kafka topics but writer reads NOTHING → archive frozen for
+#           60s → unblocked, writer resumes consuming from last committed
+#           offset → writer emits a gap envelope for the offsets that
+#           Kafka retention may purge before it caught up (or for the
+#           down window if the consumer outage controller flags it).
+# Why:      The writer is the single consumer. While its link is blocked,
+#           neither MAIN's nor BACKUP's records reach the archive.
+#           Writer-side failure is real loss under the TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

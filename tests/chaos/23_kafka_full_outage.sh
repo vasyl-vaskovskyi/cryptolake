@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 # 23_kafka_full_outage.sh
 #
-# Chaos:    Stop redpanda; collectors accumulate KafkaOutageJournal entries; restart redpanda
+# Scenario: redpanda_full_outage_long
+# Chaos:    Stop redpanda completely; let collectors accumulate
+#           KafkaOutageJournal entries for an extended outage window;
+#           restart redpanda
 # Expected: gap reason=kafka_producer_outage (real loss)
-# Why:      All Kafka traffic blocked for both producers; KafkaOutageJournal replays gap on recovery.
+# Flow:     MAIN+BACKUP both healthy and receiving from Binance →
+#           redpanda fully stopped → both producers' egress fails;
+#           records overflow producer buffers → BOTH collectors append
+#           KafkaOutageJournal entries for the affected streams →
+#           writer's consumer also has nothing to read → redpanda
+#           restarted → on producer-side recovery KafkaOutageJournal
+#           replays one kafka_producer_outage envelope per stream
+#           covering the outage window.
+# Why:      Redpanda outage takes BOTH collectors' delivery paths down
+#           AND blocks the writer's consumer simultaneously. The
+#           TWO-COLLECTOR rule's "BOTH fail" case applies (mediated
+#           by the shared transport). Real loss; gap is correct.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

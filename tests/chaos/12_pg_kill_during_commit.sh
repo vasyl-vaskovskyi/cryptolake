@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # 12_pg_kill_during_commit.sh
 #
-# Chaos:    dc pause postgres for 60s; dc unpause postgres (do NOT kill writer)
+# Scenario: pg_outage_writer_holds
+# Chaos:    docker compose pause postgres for 60s; then unpause (do NOT kill writer)
 # Expected: NO gap (redundancy worked)
-# Why:      Writer enters pg_outage_hold; archives keep flushing; commits resume on PG up.
+# Flow:     MAIN+BACKUP both healthy and delivering → postgres paused →
+#           writer enters pg_outage_hold (Kafka commits paused, archive
+#           flushes continue with in-memory ledger) → archive keeps
+#           growing → postgres resumes → writer re-commits accumulated
+#           offsets → no data lost.
+# Why:      Postgres holds lifecycle state, not data. Both collectors
+#           kept feeding Kafka and the writer kept flushing archives;
+#           no window had zero archived data. No gap under the
+#           TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

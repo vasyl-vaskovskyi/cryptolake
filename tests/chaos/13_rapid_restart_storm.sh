@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # 13_rapid_restart_storm.sh
 #
-# Chaos:    Restart primary collector 5 times in 30s (SIGKILL + restart each time)
+# Scenario: rapid_main_restart_storm
+# Chaos:    Restart MAIN 5× in 30s (SIGKILL + restart each iteration)
 # Expected: NO gap (redundancy worked)
-# Why:      Backup covers continuously through every primary blip.
+# Flow:     Loop ×5: MAIN killed → BACKUP keeps delivering → writer
+#           archives BACKUP → MAIN restarts and starts delivering →
+#           writer briefly switches back to MAIN → MAIN killed again.
+#           BACKUP is never interrupted across the entire 30s storm.
+# Why:      Only MAIN flaps. BACKUP is the steady source the entire
+#           time. No window had zero sources. No gap under the
+#           TWO-COLLECTOR rule — this is exactly what redundancy is for.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

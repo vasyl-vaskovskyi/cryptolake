@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # 01_collector_unclean_exit.sh
 #
-# Chaos:    SIGKILL primary collector; backup collector keeps running
+# Scenario: main_unclean_exit
+# Chaos:    SIGKILL MAIN collector; BACKUP keeps running; restart MAIN
 # Expected: NO gap (redundancy worked)
-# Why:      Backup covers the window. Redundancy worked.
+# Flow:     MAIN dies → BACKUP keeps delivering → writer archives BACKUP →
+#           MAIN restarts and resumes → writer switches back to MAIN.
+# Why:      Only MAIN failed. BACKUP fed the writer throughout, so no
+#           sub-window had zero sources. Under the TWO-COLLECTOR rule
+#           (gap iff BOTH collectors fail simultaneously), no gap is emitted.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

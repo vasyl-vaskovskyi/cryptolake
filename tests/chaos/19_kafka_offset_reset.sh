@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # 19_kafka_offset_reset.sh
 #
+# Scenario: writer_kafka_offset_reset
 # Chaos:    Force OUT_OF_RANGE on writer's consumer (delete + recreate a topic)
 # Expected: gap reason=kafka_offset_reset (real loss)
-# Why:      Range of offsets that existed on the topic is unrecoverable.
+# Flow:     MAIN+BACKUP delivering normally → topic deleted and recreated →
+#           writer's consumer hits OUT_OF_RANGE because its committed
+#           offset no longer exists on the new topic → writer emits a
+#           gap envelope covering the missing offset range and resumes
+#           from the new earliest offset.
+# Why:      The deleted offset range is unrecoverable from EITHER source —
+#           the records that existed there are permanently gone from
+#           Kafka. Even if MAIN+BACKUP would have re-published the same
+#           events, the original committed offsets are unrecoverable.
+#           Real loss under the TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

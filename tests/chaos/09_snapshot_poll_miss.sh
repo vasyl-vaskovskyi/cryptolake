@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # 09_snapshot_poll_miss.sh
 #
-# Chaos:    Block BOTH collectors' egress to fstream.binance.com for 60s simultaneously
+# Scenario: both_ws_disconnect
+# Chaos:    iptables-block BOTH MAIN and BACKUP egress to fstream.binance.com
+#           simultaneously for 60s; then unblock both
 # Expected: gap reason=ws_disconnect OR both_collectors_silent (real loss)
-# Why:      Neither collector receives data for the window; no source covered it.
+# Flow:     MAIN's WS severed AND BACKUP's WS severed at the same time →
+#           neither collector receives data for the 60s window → writer
+#           has no source to archive → both unblocked, both reconnect →
+#           gap envelope emitted for the 60s where neither delivered.
+# Why:      This is the canonical "BOTH collectors fail" scenario from
+#           the TWO-COLLECTOR rule. Both upstream links are dead at the
+#           same time. Real loss; gap is correct.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # 10_planned_collector_restart.sh
 #
-# Chaos:    mark_maintenance + clean stop + start primary collector
+# Scenario: planned_main_restart
+# Chaos:    mark_maintenance + clean stop + start MAIN collector
 # Expected: NO gap (redundancy worked)
-# Why:      Backup covers; planned shutdown is not loss.
+# Flow:     Operator marks MAIN for maintenance → MAIN flushes & exits cleanly →
+#           BACKUP keeps delivering → writer archives BACKUP through the
+#           maintenance window → MAIN restarts and resumes → writer
+#           switches back to MAIN. Planned shutdown is recorded in
+#           LifecycleJournal but does NOT emit a gap.
+# Why:      Only MAIN was down, and intentionally. BACKUP fed the writer
+#           the whole time; no window had zero sources. No gap under the
+#           TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

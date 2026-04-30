@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # 03_writer_crash_before_commit.sh
 #
-# Chaos:    SIGKILL writer mid-batch; restart it
+# Scenario: writer_crash
+# Chaos:    SIGKILL writer mid-batch; restart writer
 # Expected: gap reason=writer_restart (real loss)
-# Why:      Writer is the only writer; while dead nothing is archived.
+# Flow:     MAIN healthy + BACKUP healthy → writer SIGKILL'd → both collectors
+#           still delivering to Kafka, but archive is frozen because the
+#           writer is the SINGLE archiver → writer restarts, resumes consuming.
+# Why:      The writer is the choke point. While it is dead, neither MAIN
+#           nor BACKUP can be archived. Real loss for the down window —
+#           the gap reflects writer-side failure, not collector failure.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

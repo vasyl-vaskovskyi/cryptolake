@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # 04_fill_disk.sh
 #
-# Chaos:    Fill HOST_DATA_DIR to 99%; eventually free
+# Scenario: writer_disk_full
+# Chaos:    Fill HOST_DATA_DIR to 99%; wait for hold; free disk
 # Expected: gap reason=disk_full_hold (real loss)
-# Why:      Writer pauses commits; archive frozen during hold.
+# Flow:     MAIN+BACKUP both delivering normally → writer cannot write
+#           archives because disk is full → writer enters disk_full_hold
+#           and pauses commits → archive frozen → disk freed → writer
+#           emits a gap envelope covering the hold window then resumes.
+# Why:      Both collectors are healthy throughout, but the writer
+#           literally cannot persist. Under the TWO-COLLECTOR rule the
+#           writer-side failure is a real loss because no source's data
+#           reaches the archive.
 #
 # NOTE: This scenario fills /tmp which is typically tmpfs and may affect the
 # host. The teardown_stack trap calls free_disk to clean up even on failure.

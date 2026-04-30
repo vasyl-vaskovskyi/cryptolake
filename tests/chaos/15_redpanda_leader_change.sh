@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # 15_redpanda_leader_change.sh
 #
-# Chaos:    docker compose restart redpanda
-# Expected: gap reason=kafka_producer_outage (transient — real loss if outage >=30s)
-# Why:      Both producer paths blocked; writer consumer paused for the outage window.
+# Scenario: redpanda_brief_restart
+# Chaos:    docker compose restart redpanda (brief Kafka outage)
+# Expected: gap reason=kafka_producer_outage (transient — real loss if outage ≥ 30s)
+# Flow:     MAIN+BACKUP both healthy → redpanda restarted → BOTH producer
+#           paths blocked at the same time → writer consumer also paused
+#           (no broker to read from) → redpanda recovers → both producers
+#           reconnect → KafkaOutageJournal replays a gap envelope ONLY if
+#           the outage window exceeds the in-process buffer capacity.
+# Why:      Redpanda is the single transport between collectors and the
+#           writer; restarting it takes BOTH collectors' delivery paths
+#           offline simultaneously. Whether a gap is emitted depends on
+#           outage length vs producer buffer + linger.ms. Borderline case.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

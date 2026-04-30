@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # 16_collector_failover_to_backup.sh
 #
-# Chaos:    SIGKILL primary collector; observe writer consume backup; restart primary
+# Scenario: main_failover_to_backup
+# Chaos:    SIGKILL MAIN; observe writer's failover to BACKUP; restart MAIN
 # Expected: NO gap (redundancy worked)
-# Why:      This IS the failover working; backup covers. Not a loss event.
+# Flow:     MAIN healthy + BACKUP healthy (writer prefers MAIN) →
+#           MAIN killed → writer's failover controller detects MAIN's
+#           silence → writer switches active source to BACKUP and starts
+#           archiving BACKUP's records → MAIN restarts and resumes →
+#           writer's controller observes MAIN's data flowing again →
+#           writer switches back to MAIN. Test asserts both directions
+#           of the handoff occurred.
+# Why:      This scenario exists specifically to validate the failover
+#           mechanism end-to-end. By definition the redundancy worked,
+#           so under the TWO-COLLECTOR rule no gap is emitted.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # 02_buffer_overflow_recovery.sh
 #
-# Chaos:    Block primary collector's egress to Kafka for 90s; primary buffer overflows
+# Scenario: main_buffer_overflow
+# Chaos:    Block MAIN's egress to Kafka for 90s; MAIN's per-stream buffer overflows
 # Expected: NO gap (redundancy worked)
-# Why:      Backup's Kafka path is unaffected; backup data covers the window.
+# Flow:     MAIN's producer path blocked → MAIN's in-process buffers overflow →
+#           BACKUP's producer path unaffected, BACKUP keeps delivering to Kafka →
+#           writer archives BACKUP throughout → egress restored, MAIN drains
+#           buffer + reconnects → writer switches back to MAIN.
+# Why:      Only MAIN's egress failed. BACKUP fed the writer the whole time;
+#           no window had zero sources, so no gap under the TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

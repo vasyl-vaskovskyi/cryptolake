@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # 21_disk_full_hold.sh
 #
-# Chaos:    Fill HOST_DATA_DIR to 99%; wait for gap; free disk (state-machine variant of #04)
+# Scenario: writer_disk_full_hold (state-machine variant of #04)
+# Chaos:    Fill HOST_DATA_DIR to 99%; wait until a disk_full_hold gap
+#           envelope is emitted; then free disk
 # Expected: gap reason=disk_full_hold (real loss)
-# Why:      Writer pauses commits; archive frozen during hold.
+# Flow:     MAIN+BACKUP both healthy and delivering → writer cannot write
+#           archives because disk is full → writer enters disk_full_hold
+#           and stops committing → wait for the disk_full_hold gap
+#           envelope to be archived (state machine assertion) → free
+#           disk → writer resumes commits → second gap envelope
+#           closes the hold window.
+# Why:      Same root cause as #04, but this scenario specifically
+#           asserts the disk_full_hold state-machine emits the
+#           gap-envelope shape correctly. Writer-side failure under
+#           the TWO-COLLECTOR rule = real loss.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

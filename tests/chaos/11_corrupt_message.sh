@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # 11_corrupt_message.sh
 #
+# Scenario: corrupt_message
 # Chaos:    Produce a malformed envelope to a topic the writer reads
 # Expected: gap reason=deserialization_error (real loss)
-# Why:      The corrupt envelope is unreadable; that record is lost.
+# Flow:     MAIN+BACKUP both healthy and delivering → a single corrupt
+#           envelope lands on a writer-consumed topic → writer cannot
+#           deserialize that one record → writer emits a per-record
+#           gap envelope (deserialization_error) covering ONLY that
+#           record, then resumes.
+# Why:      The corrupt message is itself the lost record. Even if the
+#           parallel collector's record for the same logical event is
+#           fine, the writer's coverage for that specific corrupted
+#           offset is non-existent. Surfaced as a tightly-scoped gap.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # 06_full_stack_restart_gap.sh
 #
-# Chaos:    docker compose down then up
+# Scenario: full_stack_restart
+# Chaos:    docker compose down then up (everything off)
 # Expected: gap reason=collector_restart OR unclean_shutdown (real loss)
-# Why:      All sources off simultaneously; no source covered the window.
+# Flow:     MAIN, BACKUP, writer, redpanda, postgres ALL killed simultaneously →
+#           no process is running, nothing is being delivered or archived →
+#           stack restarts → on recovery the lifecycle journal proves the
+#           down window and a gap envelope is emitted for it.
+# Why:      Both collectors are off at the same time. The TWO-COLLECTOR
+#           rule's exception — "BOTH collectors fail simultaneously" — is
+#           the entire chaos here. Real loss; gap is correct.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

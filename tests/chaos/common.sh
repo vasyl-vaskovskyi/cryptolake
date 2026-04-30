@@ -47,12 +47,52 @@ init_scenario() {
     SCENARIO_MODE="$mode"
     export HOST_DATA_DIR COMPOSE_PROJECT
 
+    print_chaos_header "${BASH_SOURCE[1]:-$0}"
     msg "=== Scenario ${nn} init (mode=${mode}) ==="
     msg "HOST_DATA_DIR=${HOST_DATA_DIR}"
     msg "COMPOSE_PROJECT=${COMPOSE_PROJECT}"
 
     # Guarantee cleanup even on set -e failures
     trap 'teardown_stack' EXIT
+}
+
+# ---------------------------------------------------------------------------
+# print_chaos_header <script_path>
+# Extracts the Scenario/Chaos/Expected/Flow/Why block from a scenario
+# script's leading comment and prints it as a banner so the test log shows
+# the scenario contract (including the TWO-COLLECTOR rule rationale) up
+# front. Multi-line continuation comments (lines starting with "#  ") are
+# preserved.
+# ---------------------------------------------------------------------------
+print_chaos_header() {
+    local script="${1:?print_chaos_header requires a script path}"
+    [[ -f "$script" ]] || return 0
+
+    msg ""
+    msg "============================================================"
+    msg "                  CHAOS SCENARIO HEADER"
+    msg "============================================================"
+    # Capture from "# Scenario:" through the last "# " line before code.
+    # Stop at the first non-comment line.
+    local line
+    local in_block=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^#[[:space:]]*Scenario: ]]; then
+            in_block=1
+        fi
+        if (( in_block )); then
+            if [[ "$line" =~ ^# ]]; then
+                # Strip leading "# " (or just "#"), keep the rest as-is.
+                local stripped="${line#\#}"
+                stripped="${stripped# }"
+                msg "  ${stripped}"
+            else
+                break
+            fi
+        fi
+    done < "$script"
+    msg "============================================================"
+    msg ""
 }
 
 # ---------------------------------------------------------------------------

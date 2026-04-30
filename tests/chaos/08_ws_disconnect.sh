@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # 08_ws_disconnect.sh
 #
-# Chaos:    Block primary collector's egress to fstream.binance.com
+# Scenario: main_ws_disconnect
+# Chaos:    iptables-block MAIN's egress to fstream.binance.com
 # Expected: NO gap (redundancy worked)
-# Why:      Backup's WS still up; backup data covers the window.
+# Flow:     MAIN's WS to Binance severed → MAIN's stream goes silent →
+#           BACKUP's WS still up, BACKUP keeps delivering → writer archives
+#           BACKUP throughout → MAIN's egress restored, MAIN reconnects
+#           and resumes → writer switches back to MAIN.
+# Why:      Only MAIN's upstream link broke. BACKUP fed the writer the
+#           whole time; no window had zero sources. No gap under the
+#           TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

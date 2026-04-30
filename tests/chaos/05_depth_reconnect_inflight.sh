@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # 05_depth_reconnect_inflight.sh
 #
-# Chaos:    Drop primary collector's WS during depth flow; primary recovers via snapshot
+# Scenario: main_depth_resync_inflight
+# Chaos:    Drop MAIN's depth WS mid-flow; MAIN recovers via REST snapshot
 # Expected: NO gap (redundancy worked)
-# Why:      Backup's depth pu-chain bridges the missing diffs.
+# Flow:     MAIN's depth WS broken → MAIN buffers diffs internally and pulls
+#           a fresh snapshot to resync → BACKUP's depth WS unaffected,
+#           BACKUP delivers diffs continuously → writer archives BACKUP's
+#           depth diffs through the gap → MAIN finishes resync and resumes
+#           delivery → CrossSourcePuChainValidator confirms u-chain continuity.
+# Why:      Only MAIN's depth stream broke. BACKUP's depth pu-chain bridged
+#           the missing diffs, so the merged stream had no joint hole.
+#           No gap under the TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

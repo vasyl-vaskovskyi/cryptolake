@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # 07_host_reboot_restart_gap.sh
 #
-# Chaos:    Inject new host_boot_id into LifecycleJournal; restart stack
+# Scenario: host_reboot
+# Chaos:    Simulate host reboot — inject new host_boot_id into LifecycleJournal;
+#           restart full stack
 # Expected: gap reason=host_reboot OR host_unclean_shutdown (real loss)
-# Why:      All sources off; lifecycle journal proves the host reboot gap.
+# Flow:     Host "reboots" → MAIN, BACKUP, writer, all infra processes off →
+#           stack comes back with a new host_boot_id → LifecycleJournal
+#           reconciliation detects the reboot transition and emits a gap
+#           envelope for the down window.
+# Why:      Host loss takes both collectors and the writer down at once.
+#           Under the TWO-COLLECTOR rule this is the legitimate gap case
+#           (BOTH failed simultaneously). Real loss; gap is correct.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

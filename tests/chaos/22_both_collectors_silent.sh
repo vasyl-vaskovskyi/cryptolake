@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # 22_both_collectors_silent.sh
 #
-# Chaos:    iptables-block fstream.binance.com for both collectors while heartbeats keep firing
+# Scenario: both_collectors_silent_inferred
+# Chaos:    iptables-block fstream.binance.com for BOTH MAIN and BACKUP,
+#           leaving heartbeats firing (both processes look "alive" but
+#           are receiving no upstream data)
 # Expected: gap reason=both_collectors_silent (real loss)
-# Why:      SilenceInferredGapEmitter sees both sources stale; no source covered the window.
+# Flow:     MAIN+BACKUP both alive (heartbeats OK) but both are blocked
+#           from Binance → neither produces any market-data records →
+#           SilenceInferredGapEmitter sees both sources stale (no records
+#           for >threshold), confirms via heartbeat+lifecycle that they
+#           are alive-but-silent → emits a both_collectors_silent gap.
+# Why:      Both collectors fail to deliver simultaneously (silently —
+#           they didn't crash, they just have no upstream). This is the
+#           inferred-from-silence variant of the TWO-COLLECTOR rule's
+#           "BOTH fail" case. Real loss; gap is correct.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"

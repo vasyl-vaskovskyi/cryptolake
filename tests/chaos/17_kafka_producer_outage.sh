@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # 17_kafka_producer_outage.sh
 #
-# Chaos:    Block primary collector's egress to redpanda for 60s
+# Scenario: main_kafka_producer_outage
+# Chaos:    iptables-block MAIN→redpanda for 60s; then unblock
 # Expected: NO gap (redundancy worked)
-# Why:      Backup's producer path is unaffected; backup data covers the window.
+# Flow:     MAIN+BACKUP both healthy → MAIN's producer can no longer
+#           reach redpanda → MAIN's records pile up in its in-process
+#           buffer → BACKUP's producer is unaffected, BACKUP keeps
+#           publishing to redpanda → writer consumes BACKUP's records
+#           and archives them → MAIN's egress restored, MAIN drains
+#           buffer → writer switches back to MAIN.
+# Why:      Only MAIN's producer path failed. BACKUP fed Kafka the
+#           whole time; no window had zero archived data. No gap
+#           under the TWO-COLLECTOR rule.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
