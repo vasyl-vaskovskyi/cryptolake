@@ -75,8 +75,11 @@ public final class CoverageFilter {
    */
   public void handleData(String source, DataEnvelope env) {
     lastDataTs.put(source, clock.nowNs());
-    if (lastDataTs.size() >= 2) {
+    if (!filterEnabled && lastDataTs.size() >= 2) {
       filterEnabled = true;
+      log.info(
+          "LIFECYCLE COVERAGE_FILTER_ACTIVATED — both MAIN and BACKUP have delivered data;"
+              + " gap suppression by other-source coverage is now enabled.");
     }
   }
 
@@ -118,10 +121,22 @@ public final class CoverageFilter {
       pendingGaps.put(gapKey, new PendingGap(gap, source, clock.nowNs()));
       metrics.setGapPendingSize(pendingGaps.size());
       log.debug("gap_parked", "key", gapKey, "source", source);
+      log.info(
+          "LIFECYCLE GAP_PARKED reason={} source={} — OTHER source ({}) is currently fresh;"
+              + " gap parked for {}s grace period.",
+          gap.reason(),
+          source,
+          otherSource,
+          gracePeriodSeconds);
       return false;
     }
 
     // No coverage — accept immediately
+    log.info(
+        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE reason={} source={} — OTHER source not fresh;"
+            + " gap will be archived (real loss).",
+        gap.reason(),
+        source);
     return true;
   }
 
@@ -149,9 +164,19 @@ public final class CoverageFilter {
           // Suppress: other source covered
           metrics.gapEnvelopesSuppressed(pg.source(), "covered").increment();
           log.debug("gap_suppressed_by_coverage", "source", pg.source());
+          log.info(
+              "LIFECYCLE GAP_SUPPRESSED_BY_COVERAGE reason={} source={} — OTHER source"
+                  + " kept delivering throughout grace period; not archiving (TWO-COLLECTOR rule).",
+              pg.gap().reason(),
+              pg.source());
         } else {
           // Archive: grace expired, still no coverage
           toArchive.add(pg.gap());
+          log.info(
+              "LIFECYCLE GAP_ARCHIVED reason={} source={} — OTHER source did not cover within"
+                  + " grace period; real loss confirmed.",
+              pg.gap().reason(),
+              pg.source());
         }
         it.remove();
       }

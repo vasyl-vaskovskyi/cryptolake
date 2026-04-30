@@ -126,6 +126,59 @@ start_stack() {
     # First scenario builds images; subsequent scenarios reuse buildkit cache.
     dc up -d "${services[@]}"
     msg "Stack started."
+
+    # Begin streaming LIFECYCLE events so the test log shows MAIN/BACKUP
+    # transitions in real time.
+    start_lifecycle_tail
+}
+
+# ---------------------------------------------------------------------------
+# start_lifecycle_tail
+# Background-tails writer + collector + collector-backup container logs,
+# filters lines containing "LIFECYCLE", and prefixes each with "[lifecycle]"
+# so they interleave with "[chaos]" lines during a chaos run.
+# ---------------------------------------------------------------------------
+start_lifecycle_tail() {
+    [[ -n "${LIFECYCLE_TAIL_PID:-}" ]] && return 0
+    msg "Starting LIFECYCLE event stream (writer + collectors)…"
+
+    # Pick services that exist for this mode.
+    local lc_services=(writer collector)
+    if [[ "${SCENARIO_MODE:-primary+backup}" == "primary+backup" ]]; then
+        lc_services+=(collector-backup)
+    fi
+
+    # Run dc logs -f in the background. The pipeline filters and reformats.
+    # `--no-color` keeps the grep simple. We redirect stderr to /dev/null
+    # because docker emits its own informational lines on stderr that we
+    # don't care to surface.
+    (
+        dc logs -f --no-color --tail=0 "${lc_services[@]}" 2>/dev/null \
+            | grep --line-buffered "LIFECYCLE" \
+            | while IFS= read -r line; do
+                # The compose log format prefixes lines with the service name.
+                # We keep the service name + the LIFECYCLE event for context.
+                # Trim trailing CR (Windows-y stderr) just in case.
+                printf '[lifecycle] %s\n' "${line%$'\r'}" >&2
+              done
+    ) &
+    LIFECYCLE_TAIL_PID=$!
+    # Detach so kill -- doesn't drag our own process group.
+    disown "$LIFECYCLE_TAIL_PID" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# stop_lifecycle_tail
+# Stops the lifecycle log stream. Idempotent.
+# ---------------------------------------------------------------------------
+stop_lifecycle_tail() {
+    [[ -z "${LIFECYCLE_TAIL_PID:-}" ]] && return 0
+    # Kill the whole subshell (and its grep + while) by signalling its PID.
+    # Use SIGTERM first, fall back to SIGKILL only if needed.
+    kill "$LIFECYCLE_TAIL_PID" 2>/dev/null || true
+    # Reap; ignore errors (process may have already exited).
+    wait "$LIFECYCLE_TAIL_PID" 2>/dev/null || true
+    unset LIFECYCLE_TAIL_PID
 }
 
 # ---------------------------------------------------------------------------
@@ -550,6 +603,9 @@ free_disk() {
 # ---------------------------------------------------------------------------
 teardown_stack() {
     msg "=== Teardown: ${COMPOSE_PROJECT:-unknown} ==="
+    # Stop the lifecycle tail BEFORE the containers go away so the background
+    # `dc logs -f` doesn't error noisily on shutdown.
+    stop_lifecycle_tail
     free_disk 2>/dev/null || true
 
     if [[ -n "${COMPOSE_OPTS[*]+set}" ]]; then

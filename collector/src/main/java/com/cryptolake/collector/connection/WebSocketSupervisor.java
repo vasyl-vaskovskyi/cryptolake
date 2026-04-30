@@ -249,10 +249,14 @@ public final class WebSocketSupervisor {
       return;
     }
 
+    boolean wasDisconnected = !wsConnected.getOrDefault(SOCKET_NAME, false);
     wsConnected.put(SOCKET_NAME, true);
     metrics.setWsConnectionsActive(exchange, 1);
     reconnectPolicy.reset();
     log.info("ws_connected", "socket", SOCKET_NAME, "url", url);
+    if (wasDisconnected) {
+      log.info("LIFECYCLE COLLECTOR_UPSTREAM_WS_CONNECTED socket={} url={}", SOCKET_NAME, url);
+    }
 
     // Start FirstFrameWatchdog
     Set<String> expectedTuples = buildExpectedTuples();

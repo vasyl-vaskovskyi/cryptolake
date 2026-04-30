@@ -87,6 +87,12 @@ public final class FailoverController {
   public void activate() {
     if (isActive) return;
     log.info("failover_activated", "backup_prefix", backupPrefix);
+    log.info(
+        "LIFECYCLE MAIN_FAILURE_DETECTED — silence_timeout={}s reached on MAIN's stream;"
+            + " writer is switching to BACKUP source.",
+        silenceTimeout.toSeconds());
+    log.info(
+        "LIFECYCLE WRITER_NOW_ARCHIVING_FROM=BACKUP backup_prefix={}", backupPrefix);
     isActive = true;
     activationStartNs = clock.nowNs();
     metrics.setFailoverActive(true);
@@ -103,6 +109,11 @@ public final class FailoverController {
     long durationNs = clock.nowNs() - activationStartNs;
     double durationSec = durationNs / 1_000_000_000.0;
     log.info("failover_deactivated", "duration_seconds", durationSec);
+    log.info(
+        "LIFECYCLE MAIN_RECOVERED — MAIN is delivering again after {}s;"
+            + " writer switching back from BACKUP to MAIN.",
+        durationSec);
+    log.info("LIFECYCLE WRITER_NOW_ARCHIVING_FROM=MAIN");
     isActive = false;
     metrics.setFailoverActive(false);
     metrics.failoverDurationSeconds().record(durationSec);

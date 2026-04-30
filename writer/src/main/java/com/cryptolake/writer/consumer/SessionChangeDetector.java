@@ -102,6 +102,14 @@ public final class SessionChangeDetector {
         env.collectorSessionId(),
         "source",
         source);
+    log.info(
+        "LIFECYCLE WITHIN_SOURCE_SESSION_CHANGE source={} stream={} prev_session_id={}"
+            + " new_session_id={} — that specific collector restarted; emitting gap candidate"
+            + " (will be suppressed by CoverageFilter if OTHER source covered).",
+        source,
+        env.stream(),
+        prev.sessionId(),
+        env.collectorSessionId());
 
     metrics.sessionGapsDetected(env.exchange(), env.symbol(), env.stream()).increment();
 

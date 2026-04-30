@@ -163,6 +163,12 @@ public final class DiskFullHoldController {
       long holdStart = clock.nowNs();
       holdStartedNs.set(holdStart);
       log.info("disk_full_hold_entered", "error", e.getMessage());
+      log.info(
+          "LIFECYCLE WRITER_DISK_FULL_HOLD_ENTERED",
+          "error",
+          e.getMessage(),
+          "note",
+          "writer paused commits; archive frozen until disk freed (real loss begins)");
       emitHoldGaps("disk_full_hold_started", holdStart, holdStart);
     }
   }
@@ -177,6 +183,12 @@ public final class DiskFullHoldController {
       long holdStart = holdStartedNs.get();
       long holdEnd = clock.nowNs();
       log.info("disk_full_hold_exited", "hold_duration_ns", holdEnd - holdStart);
+      log.info(
+          "LIFECYCLE WRITER_DISK_FULL_HOLD_EXITED",
+          "hold_duration_ns",
+          holdEnd - holdStart,
+          "note",
+          "disk recovered; writer resuming commits");
       emitHoldGaps("disk_full_hold_ended", holdStart, holdEnd);
     }
   }

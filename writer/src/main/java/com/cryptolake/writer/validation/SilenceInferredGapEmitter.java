@@ -184,6 +184,12 @@ public final class SilenceInferredGapEmitter {
                     + " backup_data_age_ms="
                     + backupDataAge / 1_000_000L;
             log.info("both_collectors_silent", "symbol", ss.symbol(), "stream", ss.stream());
+            log.info(
+                "LIFECYCLE BOTH_COLLECTORS_SILENT — symbol={} stream={};"
+                    + " neither MAIN nor BACKUP delivering data. Emitting gap candidate"
+                    + " (real loss under TWO-COLLECTOR rule).",
+                ss.symbol(),
+                ss.stream());
             gapEmitAction.emitWithTimestamps(
                 ss.symbol(), ss.stream(), -1L, "both_collectors_silent", detail, gapStart, now);
           }
@@ -195,6 +201,11 @@ public final class SilenceInferredGapEmitter {
           if (silenceActive.getOrDefault(key, false)) {
             silenceActive.put(key, false);
             log.info("both_collectors_recovered", "symbol", ss.symbol(), "stream", ss.stream());
+            log.info(
+                "LIFECYCLE BOTH_COLLECTORS_RECOVERED — symbol={} stream={};"
+                    + " at least one of MAIN/BACKUP delivering again.",
+                ss.symbol(),
+                ss.stream());
           }
         }
       }

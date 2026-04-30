@@ -166,6 +166,12 @@ public final class PgOutageHoldController {
       long holdStart = clock.nowNs();
       holdStartedNs.set(holdStart);
       log.info("pg_outage_hold_entered", "consecutive_failures", failures);
+      log.info(
+          "LIFECYCLE WRITER_PG_OUTAGE_HOLD_ENTERED",
+          "consecutive_failures",
+          failures,
+          "note",
+          "Kafka commits paused; archive flushes continue (no data loss)");
       emitHoldGaps("pg_outage_hold_started", holdStart, holdStart);
     }
   }
@@ -182,6 +188,12 @@ public final class PgOutageHoldController {
       long holdStart = holdStartedNs.get();
       long holdEnd = clock.nowNs();
       log.info("pg_outage_hold_exited", "hold_duration_ns", holdEnd - holdStart);
+      log.info(
+          "LIFECYCLE WRITER_PG_OUTAGE_HOLD_EXITED",
+          "hold_duration_ns",
+          holdEnd - holdStart,
+          "note",
+          "PG recovered; writer resuming Kafka commits");
       emitHoldGaps("pg_outage_hold_ended", holdStart, holdEnd);
     }
   }

@@ -86,6 +86,11 @@ public final class WebSocketListenerImpl implements WebSocket.Listener {
   @Override
   public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
     log.info("ws_closed", "socket", socketName, "code", statusCode, "reason", reason);
+    log.info(
+        "LIFECYCLE COLLECTOR_UPSTREAM_WS_DISCONNECTED socket={} code={} reason={}",
+        socketName,
+        statusCode,
+        reason);
     onClose.accept(socketName);
     return null;
   }
