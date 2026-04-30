@@ -108,10 +108,16 @@ class CoverageFilterTest {
   // ports: design §4.6 — grace period expiry → archived
   @Test
   void sweepExpired_graceElapsed_noOtherCoverage_archives() {
+    // Both sources deliver at t=1000s; backup's last delivery is now 1000s_ns.
     filter.handleData("primary", makeData("binance", "btcusdt", "trades"));
     filter.handleData("backup", makeData("binance", "btcusdt", "trades"));
+    long backupLastTs = fakeClock.get();
 
-    GapEnvelope gap = makeGap("binance", "btcusdt", "trades", 100L, 200L);
+    // Gap starts AFTER backup's last delivery — backup did not bridge it.
+    long gapStart = backupLastTs + 1_000_000_000L; // gap begins 1s after backup's last
+    long gapEnd = backupLastTs + 2_000_000_000L;
+    GapEnvelope gap = makeGap("binance", "btcusdt", "trades", gapStart, gapEnd);
+    fakeClock.set(gapEnd); // gap arrives at the end of its window
     filter.handleGap("primary", gap);
     assertThat(filter.pendingSize()).isEqualTo(1);
 
@@ -129,12 +135,19 @@ class CoverageFilterTest {
   void handleGap_coalescesSamePendingGap_maxEndTs() {
     filter.handleData("primary", makeData("binance", "btcusdt", "trades"));
     filter.handleData("backup", makeData("binance", "btcusdt", "trades"));
+    long backupLastTs = fakeClock.get();
 
-    GapEnvelope gap1 = makeGap("binance", "btcusdt", "trades", 100L, 200L);
+    // Gap starts AFTER backup's last delivery so it is not auto-suppressed by
+    // the gap-window coverage check; both gaps share gap_start, different gap_ends.
+    long gapStart = backupLastTs + 1_000_000_000L;
+    GapEnvelope gap1 =
+        makeGap("binance", "btcusdt", "trades", gapStart, gapStart + 100L);
     GapEnvelope gap2 =
-        makeGap("binance", "btcusdt", "trades", 100L, 300L); // same start, higher end
+        makeGap("binance", "btcusdt", "trades", gapStart, gapStart + 200L); // same start, higher end
 
+    fakeClock.set(gapStart + 100L);
     filter.handleGap("primary", gap1);
+    fakeClock.set(gapStart + 200L);
     filter.handleGap("primary", gap2);
 
     // Still just 1 pending (coalesced)
@@ -145,7 +158,7 @@ class CoverageFilterTest {
     List<GapEnvelope> expired = filter.sweepExpired();
 
     assertThat(expired).hasSize(1);
-    assertThat(expired.get(0).gapEndTs()).isEqualTo(300L); // max end
+    assertThat(expired.get(0).gapEndTs()).isEqualTo(gapStart + 200L); // max end
   }
 
   // ports: design §3.4 — flushAllPending returns all parked gaps on shutdown
@@ -165,6 +178,51 @@ class CoverageFilterTest {
 
     assertThat(all).hasSize(2);
     assertThat(filter.pendingSize()).isEqualTo(0);
+  }
+
+  // BUG A regression — chaos test 01: a session-change gap from primary on a sparse
+  // stream (open_interest, ~once/min) was being archived as "no coverage" even though
+  // backup delivered that stream during the down window, just because backup's last
+  // open_interest delivery was older than the 5s grace window. The right check is
+  // "did backup deliver on this stream AFTER the gap window began?", not
+  // "is backup's last delivery within grace of NOW?".
+  @Test
+  void handleGap_otherSourceDeliveredDuringGapWindow_parks() {
+    // t=1000s: both sources deliver open_interest (sparse stream).
+    filter.handleData("primary", makeData("binance", "btcusdt", "open_interest"));
+    filter.handleData("backup", makeData("binance", "btcusdt", "open_interest"));
+    long primaryLastDataTs = fakeClock.get();
+
+    // t=1010s: primary stops delivering (simulates SIGKILL primary).
+    fakeClock.addAndGet(10_000_000_000L);
+    // t=1020s: backup delivers open_interest (covers primary's gap).
+    fakeClock.addAndGet(10_000_000_000L);
+    filter.handleData("backup", makeData("binance", "btcusdt", "open_interest"));
+
+    // t=1090s: primary restarts and delivers open_interest. By now backup's last
+    // open_interest delivery is 70s old — well outside the 5s grace window. The OLD
+    // check would say "backup not fresh" and archive. The NEW check looks at whether
+    // backup delivered AFTER the gap began (it did at t=1020s), so it parks instead.
+    fakeClock.addAndGet(70_000_000_000L);
+    filter.handleData("primary", makeData("binance", "btcusdt", "open_interest"));
+
+    // Construct a session-change-style gap: gap_start = primary's last pre-kill
+    // record at t=1000s, gap_end = primary's first post-restart record at t=1090s.
+    GapEnvelope sessionChangeGap =
+        makeGap(
+            "binance",
+            "btcusdt",
+            "open_interest",
+            primaryLastDataTs,
+            fakeClock.get());
+    boolean accepted = filter.handleGap("primary", sessionChangeGap);
+
+    assertThat(accepted)
+        .as(
+            "backup delivered open_interest at t=1020s, AFTER primary's last record at"
+                + " t=1000s — gap window covered, must be parked, not archived")
+        .isFalse();
+    assertThat(filter.pendingSize()).isEqualTo(1);
   }
 
   // TWO-COLLECTOR rule — coverage check is PER STREAM, not per source globally.

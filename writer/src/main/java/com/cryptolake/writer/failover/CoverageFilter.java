@@ -116,8 +116,16 @@ public final class CoverageFilter {
         new StreamSourceKey(gap.exchange(), gap.symbol(), gap.stream(), otherSource);
     Long otherLastTs = lastDataTsByStream.get(otherStreamKey);
     long thresholdNs = (long) (gracePeriodSeconds * 1_000_000_000L);
-    boolean otherCovers =
+    // Coverage = the other collector delivered SOMETHING on this stream after the gap
+    // window began. This is the question that actually matters: "did the other source
+    // bridge the missing window?" — not "is the other source fresh right now?".
+    // The fresh-now grace check is kept as a fallback for gaps with sentinel/unset
+    // gap_start_ts (gapStartTs <= 0).
+    boolean otherDeliveredDuringGapWindow =
+        otherLastTs != null && gap.gapStartTs() > 0 && otherLastTs > gap.gapStartTs();
+    boolean otherFreshNow =
         otherLastTs != null && (clock.nowNs() - otherLastTs) < thresholdNs;
+    boolean otherCovers = otherDeliveredDuringGapWindow || otherFreshNow;
 
     String gapKey =
         gap.exchange() + "|" + gap.symbol() + "|" + gap.stream() + "|" + gap.gapStartTs();
@@ -158,19 +166,18 @@ public final class CoverageFilter {
 
     // No coverage on THIS stream from the other source — archive immediately.
     log.info(
-        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE: Gap detected on {} {} from {} (reason={}); the"
-            + " {} collector has NOT delivered data on this stream within the {}s grace"
-            + " window, so this is treated as real data loss and recorded immediately."
-            + " (Note: this only checks stream {}; data on other streams may still be"
-            + " flowing on {}.)",
+        "LIFECYCLE GAP_ACCEPTED_NO_COVERAGE: Gap detected on {} {} from {} (reason={});"
+            + " the {} collector has not delivered data on this stream during the gap"
+            + " window (gap_start_ts={}, other_last_ts={}) AND is not currently fresh"
+            + " within the {}s grace — treating as real data loss; recording immediately.",
         gap.symbol(),
         gap.stream(),
         source,
         gap.reason(),
         otherSource,
-        gracePeriodSeconds,
-        gap.stream(),
-        otherSource);
+        gap.gapStartTs(),
+        otherLastTs,
+        gracePeriodSeconds);
     return true;
   }
 
@@ -190,13 +197,19 @@ public final class CoverageFilter {
       long ageNs = nowNs - pg.firstSeenNs();
       long thresholdNs = (long) (gracePeriodSeconds * 1_000_000_000L);
       if (ageNs >= thresholdNs) {
-        // Check per-stream coverage from the other source
+        // Check per-stream coverage from the other source. Same semantics as handleGap:
+        // covered if other source delivered on this stream after the gap window began,
+        // OR is currently fresh (fallback for gaps without a populated gap_start_ts).
         GapEnvelope g = pg.gap();
         String otherSource = "primary".equals(pg.source()) ? "backup" : "primary";
         StreamSourceKey otherStreamKey =
             new StreamSourceKey(g.exchange(), g.symbol(), g.stream(), otherSource);
         Long otherLastTs = lastDataTsByStream.get(otherStreamKey);
-        boolean nowCovered = otherLastTs != null && (nowNs - otherLastTs) < thresholdNs;
+        boolean otherDeliveredDuringGapWindow =
+            otherLastTs != null && g.gapStartTs() > 0 && otherLastTs > g.gapStartTs();
+        boolean otherFreshNow =
+            otherLastTs != null && (nowNs - otherLastTs) < thresholdNs;
+        boolean nowCovered = otherDeliveredDuringGapWindow || otherFreshNow;
         if (nowCovered) {
           // Suppress: other source kept delivering on this same stream
           metrics.gapEnvelopesSuppressed(pg.source(), "covered").increment();
