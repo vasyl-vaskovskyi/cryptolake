@@ -124,4 +124,102 @@ class SessionChangeDetectorTest {
 
     assertThat(gap).isEmpty(); // first envelope for okx, not a session change
   }
+
+  // TWO-COLLECTOR rule — primary→backup switch is failover, NOT a session change.
+  // Both collectors have independent sessions; switching between them is the writer's
+  // failover mechanism working as designed. Per the TWO-COLLECTOR rule (gap iff BOTH
+  // collectors fail simultaneously), this MUST NOT produce a gap.
+  @Test
+  void observe_crossSourceSwitchPrimaryToBackup_noGap() {
+    DataEnvelope primaryEnv =
+        makeEnv("binance", "btcusdt", "trades", "binance-collector-01_2026-04-30T05:07:13Z", 1L);
+    DataEnvelope backupEnv =
+        makeEnv(
+            "binance", "btcusdt", "trades", "binance-collector-backup_2026-04-30T05:07:13Z", 1L);
+
+    detector.observe(primaryEnv, "primary");
+    Optional<GapEnvelope> gap = detector.observe(backupEnv, "backup"); // failover
+
+    assertThat(gap).isEmpty();
+  }
+
+  // TWO-COLLECTOR rule — backup→primary switchback is also not a session change.
+  // After primary recovers, the writer switches back. Same logic: not a data event.
+  @Test
+  void observe_crossSourceSwitchBackupToPrimary_noGap() {
+    DataEnvelope backupEnv =
+        makeEnv(
+            "binance", "btcusdt", "trades", "binance-collector-backup_2026-04-30T05:07:13Z", 1L);
+    DataEnvelope primaryEnv =
+        makeEnv("binance", "btcusdt", "trades", "binance-collector-01_2026-04-30T05:09:15Z", 1L);
+
+    detector.observe(backupEnv, "backup");
+    Optional<GapEnvelope> gap = detector.observe(primaryEnv, "primary"); // switchback
+
+    assertThat(gap).isEmpty();
+  }
+
+  // TWO-COLLECTOR rule — full failover-and-recovery loop produces zero gaps from the
+  // session detector. Sequence: primary A → backup B → primary A' (primary actually
+  // restarted with a new session_id while it was down). All three transitions are
+  // either cross-source (1, 2) or within-source-but-covered-by-the-other (3). The
+  // detector emits a gap candidate for transition 3 (within-primary), but per the
+  // unit-test contract here we ONLY assert the cross-source switches return empty.
+  @Test
+  void observe_fullFailoverLoop_crossSourceSwitchesAreNoGap() {
+    DataEnvelope primaryA =
+        makeEnv("binance", "btcusdt", "trades", "binance-collector-01_2026-04-30T05:07:13Z", 1L);
+    DataEnvelope backupB =
+        makeEnv(
+            "binance", "btcusdt", "trades", "binance-collector-backup_2026-04-30T05:07:13Z", 1L);
+    DataEnvelope primaryAPrime =
+        makeEnv("binance", "btcusdt", "trades", "binance-collector-01_2026-04-30T05:09:15Z", 1L);
+
+    detector.observe(primaryA, "primary");
+    Optional<GapEnvelope> gap1 = detector.observe(backupB, "backup"); // primary→backup
+    Optional<GapEnvelope> gap2 = detector.observe(primaryAPrime, "primary"); // backup→primary
+
+    assertThat(gap1).as("primary→backup cross-source switch must not emit a gap").isEmpty();
+    assertThat(gap2)
+        .as(
+            "backup→primary switchback is a within-PRIMARY session change "
+                + "(A → A'), so it IS a gap candidate that the coverage filter "
+                + "decides on. Detector returns it; archival is filtered downstream.")
+        .isPresent();
+    assertThat(gap2.get().reason()).isEqualTo("collector_restart");
+  }
+
+  // TWO-COLLECTOR rule — within-source session change (the SAME source's session_id
+  // changes between two of its envelopes) IS a gap candidate. This is the only case
+  // SessionChangeDetector should fire on.
+  @Test
+  void observe_withinSourcePrimaryRestart_emitsGap() {
+    DataEnvelope before =
+        makeEnv("binance", "btcusdt", "trades", "binance-collector-01_2026-04-30T05:07:13Z", 1L);
+    DataEnvelope after =
+        makeEnv("binance", "btcusdt", "trades", "binance-collector-01_2026-04-30T05:09:15Z", 1L);
+
+    detector.observe(before, "primary");
+    Optional<GapEnvelope> gap = detector.observe(after, "primary"); // primary restarted
+
+    assertThat(gap).isPresent();
+    assertThat(gap.get().reason()).isEqualTo("collector_restart");
+  }
+
+  // Symmetric: backup-only restart also fires a within-backup gap candidate.
+  @Test
+  void observe_withinSourceBackupRestart_emitsGap() {
+    DataEnvelope before =
+        makeEnv(
+            "binance", "btcusdt", "trades", "binance-collector-backup_2026-04-30T05:07:13Z", 1L);
+    DataEnvelope after =
+        makeEnv(
+            "binance", "btcusdt", "trades", "binance-collector-backup_2026-04-30T05:09:15Z", 1L);
+
+    detector.observe(before, "backup");
+    Optional<GapEnvelope> gap = detector.observe(after, "backup"); // backup restarted
+
+    assertThat(gap).isPresent();
+    assertThat(gap.get().reason()).isEqualTo("collector_restart");
+  }
 }
