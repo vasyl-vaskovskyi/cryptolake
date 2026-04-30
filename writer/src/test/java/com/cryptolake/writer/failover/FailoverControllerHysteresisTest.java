@@ -77,10 +77,10 @@ class FailoverControllerHysteresisTest {
     controller.activate();
 
     advanceSeconds(2); // t=1002s
-    controller.markPrimaryDelivered(fakeClockNs.get()); // first record post-activate
+    controller.markPrimaryDelivered(); // first record post-activate
 
     advanceSeconds(5); // t=1007s, only 5s of recovery — window is 10s
-    controller.markPrimaryDelivered(fakeClockNs.get());
+    controller.markPrimaryDelivered();
     assertThat(controller.shouldDeactivate()).isFalse();
   }
 
@@ -88,14 +88,14 @@ class FailoverControllerHysteresisTest {
   void recoveryObserving_afterStabilityWindow_shouldDeactivateIsTrue() {
     controller.activate();
     advanceSeconds(2);
-    controller.markPrimaryDelivered(fakeClockNs.get()); // first record post-activate
+    controller.markPrimaryDelivered(); // first record post-activate
 
     // Simulate continuous primary delivery at 1 Hz across the 10 s window.
     // Production calls markPrimaryDelivered for every primary Kafka record (much
     // faster than 1 Hz), so this is a conservative simulation.
     for (int i = 0; i < 11; i++) {
       advanceSeconds(1);
-      controller.markPrimaryDelivered(fakeClockNs.get());
+      controller.markPrimaryDelivered();
     }
 
     // ≥ recoveryStabilityWindow has elapsed since the first post-activate record
@@ -107,12 +107,12 @@ class FailoverControllerHysteresisTest {
   void recoveryObserving_silenceLongerThanTimeout_resetsRecovery() {
     controller.activate();
     advanceSeconds(2);
-    controller.markPrimaryDelivered(fakeClockNs.get()); // recovery starts at t=1002s
+    controller.markPrimaryDelivered(); // recovery starts at t=1002s
 
     // Primary delivers continuously for 8 s (still inside the 10 s window).
     for (int i = 0; i < 8; i++) {
       advanceSeconds(1);
-      controller.markPrimaryDelivered(fakeClockNs.get());
+      controller.markPrimaryDelivered();
     }
     // recoveredFor=9s, sinceLast=1s — inside both bounds → still false.
     assertThat(controller.shouldDeactivate()).isFalse();
@@ -121,13 +121,13 @@ class FailoverControllerHysteresisTest {
     advanceSeconds(15);
 
     // Primary resumes — silence > silenceTimeout means the recovery clock resets.
-    controller.markPrimaryDelivered(fakeClockNs.get());
+    controller.markPrimaryDelivered();
     assertThat(controller.shouldDeactivate()).isFalse();
 
     // After the reset, primary needs to deliver continuously for another full window.
     for (int i = 0; i < 11; i++) {
       advanceSeconds(1);
-      controller.markPrimaryDelivered(fakeClockNs.get());
+      controller.markPrimaryDelivered();
     }
     assertThat(controller.shouldDeactivate()).isTrue();
   }
@@ -136,12 +136,12 @@ class FailoverControllerHysteresisTest {
   void afterDeactivate_shouldDeactivateIsFalse() {
     controller.activate();
     advanceSeconds(2);
-    controller.markPrimaryDelivered(fakeClockNs.get()); // first record post-activate
+    controller.markPrimaryDelivered(); // first record post-activate
 
     // Continuous primary delivery at 1 Hz across the recovery window.
     for (int i = 0; i < 11; i++) {
       advanceSeconds(1);
-      controller.markPrimaryDelivered(fakeClockNs.get());
+      controller.markPrimaryDelivered();
     }
     assertThat(controller.shouldDeactivate()).isTrue();
 

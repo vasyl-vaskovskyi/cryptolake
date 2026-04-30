@@ -201,9 +201,12 @@ public final class FailoverController {
    * silenceTimeout} (symmetric with {@link #shouldActivate()}), resets the recovery window — the
    * controller wants continuous (not flapping) primary delivery before declaring recovery.
    *
-   * <p>Always updates {@code lastPrimaryRecordNs} (used by {@code shouldActivate}).
+   * <p>Always updates {@code lastPrimaryRecordNs} (used by {@code shouldActivate}). Uses the
+   * controller's injected clock — symmetric with {@link #resetSilenceTimer()}; ensures all
+   * FailoverController state lives in a single clock domain.
    */
-  public void markPrimaryDelivered(long nowNs) {
+  public void markPrimaryDelivered() {
+    long nowNs = clock.nowNs();
     if (isActive) {
       if (firstRecoveryRecordNs < 0 || (nowNs - lastPrimaryRecordNs) > silenceTimeout.toNanos()) {
         // First record post-activate, or primary went silent again — restart the window.

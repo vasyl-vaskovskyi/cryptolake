@@ -127,7 +127,7 @@ public final class KafkaConsumerLoop implements Runnable {
         for (ConsumerRecord<byte[], byte[]> rec : records) { // Tier 5 C2 — batch-first
           recordHandler.handle(rec, false);
           // Bug B: every primary record advances the recovery observation window.
-          failover.markPrimaryDelivered(System.nanoTime());
+          failover.markPrimaryDelivered();
         }
 
         // Bug B: hysteresis deactivation. After processing primary records, ask the

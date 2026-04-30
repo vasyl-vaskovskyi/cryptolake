@@ -1,9 +1,9 @@
 package com.cryptolake.writer.consumer;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,6 +17,7 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -91,12 +92,14 @@ class KafkaConsumerLoopFailoverDeactivateTest {
             gaps,
             metrics);
 
+    AtomicReference<Throwable> error = new AtomicReference<>();
     Thread t =
         new Thread(
             () -> {
               try {
                 loop.run();
-              } catch (Throwable ignored) {
+              } catch (Throwable e) {
+                error.set(e);
               }
             });
     t.start();
@@ -106,14 +109,17 @@ class KafkaConsumerLoopFailoverDeactivateTest {
       Thread.currentThread().interrupt();
     }
     loop.requestShutdown();
-    primary.wakeup();
     try {
       t.join(2000);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
+    if (error.get() != null) {
+      throw new AssertionError("loop.run() threw", error.get());
+    }
 
-    verify(failover, atLeastOnce()).markPrimaryDelivered(anyLong());
+    verify(failover, atLeastOnce()).markPrimaryDelivered();
+    verify(failover, never()).deactivate();
   }
 
   @Test
@@ -137,12 +143,14 @@ class KafkaConsumerLoopFailoverDeactivateTest {
             gaps,
             metrics);
 
+    AtomicReference<Throwable> error = new AtomicReference<>();
     Thread t =
         new Thread(
             () -> {
               try {
                 loop.run();
-              } catch (Throwable ignored) {
+              } catch (Throwable e) {
+                error.set(e);
               }
             });
     t.start();
@@ -152,11 +160,13 @@ class KafkaConsumerLoopFailoverDeactivateTest {
       Thread.currentThread().interrupt();
     }
     loop.requestShutdown();
-    primary.wakeup();
     try {
       t.join(2000);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
+    }
+    if (error.get() != null) {
+      throw new AssertionError("loop.run() threw", error.get());
     }
 
     verify(failover, atLeastOnce()).deactivate();
