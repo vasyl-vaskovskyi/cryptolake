@@ -415,10 +415,38 @@ public class KafkaProducerBridge {
   public boolean probeHealth() {
     try {
       producer.partitionsFor("__health_probe__");
-      return true;
     } catch (Exception e) {
       return false;
     }
+    // partitionsFor() above is satisfied by the producer's cached cluster metadata,
+    // so it doesn't actually round-trip to the broker once metadata is warm. That is
+    // sufficient for "broker fundamentally reachable", but it misses the production-
+    // critical case where the broker is silently unreachable (network drops, GC stall,
+    // partition leader stuck): records pile up in the producer's accumulator and
+    // buffer-available-bytes drops toward zero. Fail the probe when the buffer is
+    // critically depleted — that is the actual back-pressure signal we care about.
+    try {
+      for (java.util.Map.Entry<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric>
+          entry : producer.metrics().entrySet()) {
+        if ("buffer-available-bytes".equals(entry.getKey().name())) {
+          Object v = entry.getValue().metricValue();
+          if (v instanceof Number n) {
+            double availableBytes = n.doubleValue();
+            // Threshold: 5% of configured buffer free → treat as exhausted.
+            // Below this, send() is on the verge of blocking on max.block.ms or
+            // throwing BufferExhaustedException.
+            if (availableBytes < BUFFER_MEMORY_BYTES * 0.05) {
+              return false;
+            }
+          }
+          break;
+        }
+      }
+    } catch (Exception ignored) {
+      // Metric lookup is best-effort; if it throws, fall through to "healthy"
+      // (don't false-positive a degraded state due to a JMX/metrics quirk).
+    }
+    return true;
   }
 
   /** Closes the underlying producer on shutdown. */
