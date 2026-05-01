@@ -41,8 +41,30 @@ public class KafkaProducerBridge {
 
   private static final StructuredLogger log = StructuredLogger.of(KafkaProducerBridge.class);
 
-  /** Buffer memory = 1 GB (matches Python's {@code queue.buffering.max.kbytes=1048576}). */
-  private static final long BUFFER_MEMORY_BYTES = 1_073_741_824L;
+  /**
+   * Buffer memory in bytes for Kafka producer. Default 1 GB (matches Python's {@code
+   * queue.buffering.max.kbytes=1048576}). Override via env var {@code
+   * KAFKA_PRODUCER_BUFFER_MEMORY} — used by chaos test 02 to provoke real buffer-overflow
+   * conditions with a small (~2 MB) buffer instead of waiting hours for a 1 GB buffer
+   * to fill under realistic WS rates.
+   */
+  private static final long BUFFER_MEMORY_BYTES = readBufferMemoryFromEnv();
+
+  private static long readBufferMemoryFromEnv() {
+    String v = System.getenv("KAFKA_PRODUCER_BUFFER_MEMORY");
+    if (v == null || v.isBlank()) {
+      return 1_073_741_824L;
+    }
+    try {
+      long n = Long.parseLong(v.trim());
+      if (n > 0) {
+        return n;
+      }
+    } catch (NumberFormatException ignored) {
+      // fall through to default
+    }
+    return 1_073_741_824L;
+  }
 
   /** Buffer healthy-threshold: 80% of BUFFER_MEMORY_BYTES. */
   private static final double HEALTHY_BUFFER_FRACTION = 0.80;

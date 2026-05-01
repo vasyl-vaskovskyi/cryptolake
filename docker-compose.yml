@@ -70,6 +70,10 @@ services:
     networks:
       - cryptolake_internal
       - collector_egress
+    cap_add:
+      # Required by chaos test 02 to add an iptables rule blocking the Kafka port.
+      # Inert at runtime unless invoked.
+      - NET_ADMIN
     volumes:
       - ./config/config.yaml:/etc/cryptolake/config.yml:ro
       - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
@@ -78,6 +82,10 @@ services:
       - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
       - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
+      # Override Kafka producer buffer.memory from env (default 1 GB if unset).
+      # Chaos test 02 sets this to ~2 MB to provoke real buffer-overflow conditions
+      # within a 90 s window instead of waiting hours at production rates.
+      - KAFKA_PRODUCER_BUFFER_MEMORY=${KAFKA_PRODUCER_BUFFER_MEMORY:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
       interval: 15s
@@ -103,6 +111,10 @@ services:
     networks:
       - cryptolake_internal
       - backup_egress
+    cap_add:
+      # Same rationale as the primary collector — granted symmetrically so
+      # future chaos scenarios can target either side.
+      - NET_ADMIN
     volumes:
       - ./config/config.yaml:/etc/cryptolake/config.yml:ro
       - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
@@ -113,6 +125,8 @@ services:
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
       - COLLECTOR_ID=binance-collector-backup
       - TOPIC_PREFIX=backup.
+      # Same env passthrough as the primary collector — left empty by default.
+      - KAFKA_PRODUCER_BUFFER_MEMORY=${KAFKA_PRODUCER_BUFFER_MEMORY:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
       interval: 15s

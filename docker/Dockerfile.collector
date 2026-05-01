@@ -7,6 +7,13 @@ COPY . /src/
 RUN ./gradlew :collector:installDist --no-daemon
 
 FROM eclipse-temurin:21-jre
+# iptables: required by chaos tests (e.g. scenario 02 — main_buffer_overflow) to
+# block egress to the Kafka port without disconnecting the container's networks.
+# NET_ADMIN cap is granted in docker-compose.yml so the rule can be applied at
+# runtime. Production deployments don't use the cap until invoked.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends iptables \
+ && rm -rf /var/lib/apt/lists/*
 ENV JAVA_OPTS="-XX:+UseZGC -XX:+ZGenerational"
 WORKDIR /app
 COPY --from=build /src/collector/build/install/collector /app/
