@@ -53,16 +53,19 @@ public class KafkaProducerBridge {
   private static long readBufferMemoryFromEnv() {
     String v = System.getenv("KAFKA_PRODUCER_BUFFER_MEMORY");
     if (v == null || v.isBlank()) {
+      log.info("kafka_producer_buffer_memory_default", "bytes", 1_073_741_824L);
       return 1_073_741_824L;
     }
     try {
       long n = Long.parseLong(v.trim());
       if (n > 0) {
+        log.info("kafka_producer_buffer_memory_override", "bytes", n);
         return n;
       }
     } catch (NumberFormatException ignored) {
       // fall through to default
     }
+    log.info("kafka_producer_buffer_memory_default_after_invalid", "bytes", 1_073_741_824L);
     return 1_073_741_824L;
   }
 
@@ -413,40 +416,76 @@ public class KafkaProducerBridge {
    * <p>This is a cheap metadata-only call — it does NOT produce any message.
    */
   public boolean probeHealth() {
+    boolean partitionsForOk = true;
     try {
       producer.partitionsFor("__health_probe__");
     } catch (Exception e) {
-      return false;
+      partitionsForOk = false;
     }
+
     // partitionsFor() above is satisfied by the producer's cached cluster metadata,
     // so it doesn't actually round-trip to the broker once metadata is warm. That is
     // sufficient for "broker fundamentally reachable", but it misses the production-
     // critical case where the broker is silently unreachable (network drops, GC stall,
     // partition leader stuck): records pile up in the producer's accumulator and
-    // buffer-available-bytes drops toward zero. Fail the probe when the buffer is
-    // critically depleted — that is the actual back-pressure signal we care about.
+    // back-pressure metrics start moving. We sample three of them and fail the probe
+    // when ANY indicates back-pressure.
+    Double availableBytes = null;
+    Double exhaustedTotal = null;
+    Double waitRatio = null;
+    Double recordErrorRate = null;
     try {
       for (java.util.Map.Entry<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric>
           entry : producer.metrics().entrySet()) {
-        if ("buffer-available-bytes".equals(entry.getKey().name())) {
-          Object v = entry.getValue().metricValue();
-          if (v instanceof Number n) {
-            double availableBytes = n.doubleValue();
-            // Threshold: 5% of configured buffer free → treat as exhausted.
-            // Below this, send() is on the verge of blocking on max.block.ms or
-            // throwing BufferExhaustedException.
-            if (availableBytes < BUFFER_MEMORY_BYTES * 0.05) {
-              return false;
-            }
+        var key = entry.getKey();
+        if (!"producer-metrics".equals(key.group())) continue;
+        Object v = entry.getValue().metricValue();
+        if (!(v instanceof Number n)) continue;
+        double d = n.doubleValue();
+        switch (key.name()) {
+          case "buffer-available-bytes" -> availableBytes = d;
+          case "buffer-exhausted-total" -> exhaustedTotal = d;
+          case "bufferpool-wait-ratio" -> waitRatio = d;
+          case "record-error-rate" -> recordErrorRate = d;
+          default -> {
+            /* ignore */
           }
-          break;
         }
       }
     } catch (Exception ignored) {
-      // Metric lookup is best-effort; if it throws, fall through to "healthy"
-      // (don't false-positive a degraded state due to a JMX/metrics quirk).
+      // Metric lookup is best-effort.
     }
-    return true;
+
+    boolean bufferDepleted =
+        availableBytes != null && Double.isFinite(availableBytes)
+            && availableBytes < BUFFER_MEMORY_BYTES * 0.05;
+    boolean appenderBlocking = waitRatio != null && Double.isFinite(waitRatio) && waitRatio > 0.10;
+    boolean producerErroring =
+        recordErrorRate != null && Double.isFinite(recordErrorRate) && recordErrorRate > 0.0;
+
+    boolean healthy = partitionsForOk && !bufferDepleted && !appenderBlocking && !producerErroring;
+
+    // Diagnostic — ALWAYS log, so the chaos-test logs show whether the probe saw
+    // the back-pressure signals it expected. INFO level so it surfaces in normal
+    // collector output without DEBUG flags.
+    log.info(
+        "kafka_probe_health",
+        "healthy",
+        healthy,
+        "partitionsFor_ok",
+        partitionsForOk,
+        "buffer_available_bytes",
+        String.valueOf(availableBytes),
+        "buffer_total_bytes",
+        BUFFER_MEMORY_BYTES,
+        "buffer_exhausted_total",
+        String.valueOf(exhaustedTotal),
+        "bufferpool_wait_ratio",
+        String.valueOf(waitRatio),
+        "record_error_rate",
+        String.valueOf(recordErrorRate));
+
+    return healthy;
   }
 
   /** Closes the underlying producer on shutdown. */
