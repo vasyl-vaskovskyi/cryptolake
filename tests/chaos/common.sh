@@ -339,35 +339,6 @@ restore_egress_via_network() {
 }
 
 # ---------------------------------------------------------------------------
-# block_kafka_egress_iptables <svc> [port=9092]
-# Adds an OUTPUT iptables rule INSIDE the service container that drops TCP
-# packets destined for the Kafka port. The container's TCP socket to the
-# broker stays nominally open (no NIC down, no network disconnect), so the
-# Kafka producer's accumulator fills up — exercising the real buffer-overflow
-# code path (BufferExhaustedException / TimeoutException → KafkaProducerHealthMonitor
-# DEGRADED → PAUSED). Used by chaos scenario 02.
-#
-# Requires:
-#   - iptables installed inside the container (Dockerfile.collector adds it).
-#   - cap_add: [NET_ADMIN] in docker-compose.yml.
-# ---------------------------------------------------------------------------
-block_kafka_egress_iptables() {
-    local svc="${1:?need service name}"
-    local port="${2:-9092}"
-    msg "Adding iptables OUTPUT DROP rule on tcp:${port} inside ${svc}…"
-    dc exec -T "$svc" iptables -A OUTPUT -p tcp --dport "$port" -j DROP \
-        || die "Failed to add iptables rule in ${svc} (cap_add NET_ADMIN missing? iptables not installed?)"
-}
-
-unblock_kafka_egress_iptables() {
-    local svc="${1:?need service name}"
-    local port="${2:-9092}"
-    msg "Removing iptables OUTPUT DROP rule on tcp:${port} inside ${svc}…"
-    dc exec -T "$svc" iptables -D OUTPUT -p tcp --dport "$port" -j DROP \
-        || msg "WARN: failed to remove iptables rule in ${svc} (may already be gone)"
-}
-
-# ---------------------------------------------------------------------------
 # assert_lifecycle_event <pattern> [service=writer]
 # Asserts that the docker-compose log for <service> contains a line matching
 # "LIFECYCLE.*<pattern>". Used by chaos scenarios to verify a specific

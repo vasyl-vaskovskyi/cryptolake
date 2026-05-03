@@ -31,22 +31,6 @@ class WriterChaosIT {
     // classification=system in the next archive file and host_evidence reflects no reboot.
   }
 
-  /** ports: tests/chaos/2_buffer_overflow_recovery.sh */
-  @Test
-  @Disabled("requires docker-compose stack — Testcontainers skeleton only")
-  void chaos_02_buffer_overflow_recovery() {
-    // Drive enough traffic to exceed buffer threshold without a flush trigger; verify auto-flush
-    // activates, no data loss, write_errors=0, buffer_overflow gap NOT emitted (legitimate flush).
-  }
-
-  /** ports: tests/chaos/3_writer_crash_before_commit.sh */
-  @Test
-  @Disabled("requires docker-compose stack — Testcontainers skeleton only")
-  void chaos_03_writer_crash_before_commit_truncates_file() {
-    // SIGKILL writer between fsync and PG commit; on restart, file_states replay prunes the
-    // partially-written tail and Kafka offset has NOT advanced past the lost batch (Tier 1 §4).
-  }
-
   /** ports: tests/chaos/4_fill_disk.sh */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")

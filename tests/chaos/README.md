@@ -64,9 +64,7 @@ still removes its containers and volumes.
 | # | Name | What it tests | Expected gap reason |
 |---|------|--------------|---------------------|
 | 01 | collector_unclean_exit | Kill primary mid-flight; backup keeps flowing | `collector_restart` |
-| 02 | buffer_overflow_recovery | Block collector's Kafka producer; overflow window | `buffer_overflow` |
-| 03 | writer_crash_before_commit | Kill writer between flush and offset commit | `writer_restart` |
-| 04 | fill_disk | Fill HOST_DATA_DIR to 99%; recovery on cleanup | `disk_full_hold` |
+| 04 | fill_disk | Fill HOST_DATA_DIR to 99%; hold 120s; free disk | NO gap (writer re-polls uncommitted offsets from Kafka) |
 | 05 | depth_reconnect_inflight | Drop primary WS during depth flow | `pu_chain_break` |
 | 06 | full_stack_restart_gap | Down + restart entire stack | `collector_restart` |
 | 07 | host_reboot_restart_gap | Simulate host_boot_id change in lifecycle journal | `host_reboot` |

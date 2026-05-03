@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # 04_fill_disk.sh
 #
-# Scenario: writer_disk_full
-# Chaos:    Fill HOST_DATA_DIR to 99%; wait for hold; free disk
-# Expected: gap reason=disk_full_hold (real loss)
-# Flow:     MAIN+BACKUP both delivering normally → writer cannot write
-#           archives because disk is full → writer enters disk_full_hold
-#           and pauses commits → archive frozen → disk freed → writer
-#           emits a gap envelope covering the hold window then resumes.
-# Why:      Both collectors are healthy throughout, but the writer
-#           literally cannot persist. Under the TWO-COLLECTOR rule the
-#           writer-side failure is a real loss because no source's data
-#           reaches the archive.
+# Scenario: writer_disk_full_brief
+# Chaos:    Fill HOST_DATA_DIR to 99%; hold ~120s; free disk
+# Expected: NO gap (writer recovers from Kafka after disk freed)
+# Flow:     MAIN+BACKUP both delivering normally → writer's appendAndFsync
+#           hits IOException on disk-full → writeErrors metric increments,
+#           Kafka offsets are NOT committed (PG-then-Kafka ordering in
+#           OffsetCommitCoordinator) → MAIN+BACKUP keep producing to Kafka,
+#           records remain durable for 48h → disk freed → writer's next
+#           flushAndCommit succeeds → consumer re-reads uncommitted
+#           offsets → archive completes with no missing data.
+# Why:      Under TWO-COLLECTOR + Kafka 48h retention + commit-after-fsync
+#           invariant, a brief disk-full episode is fully recoverable.
+#           Both MAIN and BACKUP records during the held window are
+#           durable in Kafka and replayed on recovery. No real data loss,
+#           no gap envelope. (A SUSTAINED hold exceeding 48h would lose
+#           data — that case is operationally surfaced via writer_write_errors
+#           rate alerting, not via a gap envelope, since chaos-testing it
+#           reliably is impractical.)
 #
 # NOTE: This scenario fills /tmp which is typically tmpfs and may affect the
 # host. The teardown_stack trap calls free_disk to clean up even on failure.
@@ -31,19 +38,30 @@ wait_data_flowing "bookticker" 30
 msg "=== CHAOS: Filling HOST_DATA_DIR to 99% ==="
 fill_disk "$HOST_DATA_DIR" 99
 
-# Wait for the writer to hit ENOSPC and emit disk_full_hold gap
-# DiskFullHoldController retries every 30s; allow up to 3 cycles
-msg "Waiting 120s for disk_full_hold gap to appear…"
+# Hold the disk-full state long enough for the writer to attempt several
+# flush cycles and accumulate writeErrors. Default flush interval is 5s,
+# so 120s gives ~24 failed-flush attempts.
+msg "Holding disk-full state for 120s (writer's flushAndCommit will fail repeatedly)…"
 sleep 120
 
 msg "Freeing disk…"
 free_disk
 
-# Wait for recovery
-msg "Waiting 60s for writer recovery after disk freed…"
-sleep 60
+# After the disk is freed, the writer's next flushAndCommit succeeds. The
+# Kafka consumer position is unchanged (no commits happened during the
+# hold), so the next poll re-reads the records published during the hold
+# from BOTH topics. They get archived now, completing the gap.
+msg "Waiting 90s for writer recovery (re-poll uncommitted offsets, archive backlog)…"
+sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "disk_full_hold" "$HOST_DATA_DIR"
+
+# Assertion 1: archive verifier reports zero errors (data integrity intact).
+# (run_verify already enforces ERRORS=0 via the existing PASS gate.)
+
+# Assertion 2: NO disk_full_hold gap was emitted. Under the TWO-COLLECTOR
+# rule + Kafka retention invariant, brief disk-full is recoverable and
+# does NOT mark real data loss.
+assert_gap_absent "disk_full_hold" "$HOST_DATA_DIR"
 
 scenario_pass
