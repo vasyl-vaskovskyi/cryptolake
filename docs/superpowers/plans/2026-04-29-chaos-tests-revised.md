@@ -81,9 +81,7 @@ A scenario that asserts the wrong outcome is itself wrong.
 | #  | Scenario name (doc)              | Filename                              | Chaos action                                                                         | Expected             | Why (under TWO-COLLECTOR rule)                                                                                          |
 |----|----------------------------------|---------------------------------------|--------------------------------------------------------------------------------------|----------------------|--------------------------------------------------------------------------------------------------------------------------|
 | 01 | main_unclean_exit                | `01_collector_unclean_exit.sh`        | SIGKILL MAIN; BACKUP keeps running; restart MAIN                                     | **NO gap**           | Only MAIN failed. BACKUP delivers throughout. Writer archives BACKUP, then switches back to MAIN on recovery.            |
-| 02 | main_buffer_overflow             | `02_buffer_overflow_recovery.sh`      | Block MAIN's egress to Kafka 90s; MAIN's per-stream buffer overflows                 | **NO gap**           | Only MAIN's producer path is blocked. BACKUP's producer is unaffected; BACKUP feeds the writer. MAIN recovers when egress restored. |
-| 03 | writer_crash                     | `03_writer_crash_before_commit.sh`    | SIGKILL writer mid-batch; restart writer                                             | **gap, reason=writer_restart** | Writer is the **only** writer. While dead, neither MAIN nor BACKUP can be archived. Real loss for the down window.       |
-| 04 | writer_disk_full                 | `04_fill_disk.sh`                     | Fill `$HOST_DATA_DIR` to 99%; wait; free disk                                        | **gap, reason=disk_full_hold** | Writer enters disk-full hold and pauses commits. MAIN+BACKUP both deliver to Kafka, but writer cannot archive.            |
+| 04 | writer_disk_full_brief           | `04_fill_disk.sh`                     | Fill `$HOST_DATA_DIR` to 99%; hold 120s; free disk                                   | **NO gap**           | Writer's `appendAndFsync` fails → `writeErrors` increments, Kafka offsets NOT committed (PG-then-Kafka ordering). MAIN+BACKUP keep producing to Kafka (48h retention). On disk-free, writer re-polls uncommitted offsets and archives the backlog. No real loss. |
 | 05 | main_depth_resync_inflight       | `05_depth_reconnect_inflight.sh`      | Drop MAIN's depth WS mid-flow; MAIN snapshots and resyncs                            | **NO gap**           | Only MAIN's depth stream broke. BACKUP's depth pu-chain bridges the missing diffs. Cross-source pu-chain validator confirms continuity. |
 | 06 | full_stack_restart               | `06_full_stack_restart_gap.sh`        | `docker compose down` then `up`                                                      | **gap, reason=collector_restart OR unclean_shutdown** | Both MAIN and BACKUP off simultaneously. Writer also off. No source covered the window. Real loss.                       |
 | 07 | host_reboot                      | `07_host_reboot_restart_gap.sh`       | Inject new `host_boot_id` into LifecycleJournal; restart full stack                  | **gap, reason=host_reboot OR host_unclean_shutdown** | All processes off; lifecycle journal proves the host reboot gap. Real loss.                                              |
@@ -104,18 +102,92 @@ A scenario that asserts the wrong outcome is itself wrong.
 | 22 | both_collectors_silent_inferred  | `22_both_collectors_silent.sh`        | iptables-block `fstream.binance.com` for BOTH collectors while heartbeats keep firing | **gap, reason=both_collectors_silent** | SilenceInferredGapEmitter sees both sources stale via heartbeat absence. Neither delivered data. Real loss.              |
 | 23 | redpanda_full_outage_long        | `23_kafka_full_outage.sh`             | Stop redpanda; collectors accumulate KafkaOutageJournal entries; restart redpanda    | **gap, reason=kafka_producer_outage** | All Kafka traffic blocked for both producers. KafkaOutageJournal replays one gap envelope per affected stream on recovery. |
 
+### 2026-05-03 update: dual-source tailing fix
+
+The chaos catalog's NO-gap scenarios (01, 04, 05, 08, 10, 12, 13, 16, 17)
+all implicitly required the writer to know whether the OTHER source
+covered a disrupted stream. Prior to the dual-source-tailing fix (plan
+`2026-05-03-continuous-dual-source-tailing.md`), the writer only polled
+the backup topic during failover, so coverage data for the backup source
+was unreliable and brief MAIN flaps leaked false-positive `pu_chain_break`
+gaps. After the fix, both topics are tailed continuously and the
+coverage check has correct data at all times.
+
+Chaos re-verification (running 04, 05, 08, 16, 17, 20 against the
+post-fix binaries) is deferred to a separate session; the regression is
+covered at unit level by `CoverageFilterFailoverFlapTest`.
+
 ## 3. Summary by expected outcome
 
-- **NO-gap scenarios (redundancy worked, MAIN failed alone OR BACKUP failed alone OR both healthy)**:
-  01, 02, 05, 08, 10, 12, 13, 16, 17 — **9 scenarios**.
-- **Gap-required scenarios (real loss: both collectors silent OR writer-side failure)**:
-  03, 04, 06, 07, 09, 11, 14, 15, 18, 19, 20, 21, 22, 23 — **14 scenarios**.
+- **NO-gap scenarios (redundancy worked, MAIN failed alone OR BACKUP failed alone OR both healthy OR brief writer-side failure recoverable from Kafka)**:
+  01, 04, 05, 08, 10, 12, 13, 16, 17 — **9 scenarios**.
+- **Gap-required scenarios (real loss: both collectors silent OR sustained writer-side failure exceeding Kafka retention OR validator-detected hole)**:
+  06, 07, 09, 11, 14, 15, 18, 19, 20, 21, 22, 23 — **12 scenarios**.
 
-The 9-vs-14 split is the empirical proof that the redundancy is doing
-useful work: in 9 of 23 disruptions, the failure is invisible to the
-archive. In the remaining 14, the failure was either truly unrecoverable
-(both collectors blocked, or writer-side failure) or surfaced as a
-correctly-shaped gap envelope.
+The 9-vs-12 split is the empirical proof that the redundancy is doing
+useful work: in 9 of 21 disruptions, the failure is invisible to the
+archive. In the remaining 12, the failure was either truly unrecoverable
+(both collectors blocked) or surfaced as a correctly-shaped gap envelope.
+
+### Reframed: scenario 04 (writer_disk_full)
+
+Originally specified to assert `gap reason=disk_full_hold` on a 99% fill,
+based on a single-source design where writer downtime = data loss.
+
+**Why reframed:** under TWO-COLLECTOR + Kafka 48h retention + the
+PG-then-Kafka commit ordering in `OffsetCommitCoordinator.flushAndCommit`,
+a brief disk-full episode is fully recoverable. When `appendAndFsync`
+throws IOException, the writer does NOT commit Kafka offsets. MAIN and
+BACKUP keep producing to their topics (durable for 48h). On disk-free,
+the writer's next flush succeeds and the consumer re-polls uncommitted
+offsets → both topics' records during the held window are archived.
+No real data loss, no gap envelope.
+
+A SUSTAINED hold exceeding Kafka retention (48h) would lose data — but
+that case is operationally surfaced via `writer_write_errors` rate
+alerting, not via a gap envelope, since chaos-testing 48h+ holds is
+impractical. The scenario now asserts NO gap + verify-clean.
+
+### Removed: scenario 03 (writer_crash)
+
+Originally specified to SIGKILL the writer mid-batch and assert a gap
+envelope with `reason=writer_restart`.
+
+**Why removed:** under the TWO-COLLECTOR rule + Redpanda log retention
+(`redpanda.log_retention_ms=172800000` = 48h) + Kafka consumer offset
+resume on restart, a writer crash does NOT lose data:
+
+- MAIN and BACKUP keep producing to their topics while the writer is dead.
+- Kafka retains 48h of records — vastly longer than any reasonable writer
+  outage.
+- On restart, the writer's consumer resumes from the last committed offset
+  and replays everything published during downtime from BOTH topics.
+
+The archive is complete after restart. Emitting a `writer_restart` gap
+contradicts the spec's invariant that gaps mark REAL data loss. The
+defensive emission path in `RecoveryCoordinator.checkOnFirstEnvelope` is
+now wired to be suppressed by `CoverageFilter` whenever the other source
+covers the restart window (which it always does under our config).
+
+### Removed: scenario 02 (main_buffer_overflow)
+
+Originally specified to block MAIN's Kafka egress until the producer's
+in-process buffer (`buffer.memory`) filled and `BufferExhaustedException`
+fired, transitioning `KafkaProducerHealthMonitor` HEALTHY → DEGRADED → PAUSED.
+
+**Why removed:** under production buffer sizing (`buffer.memory=1 GB`),
+buffer-overflow is not a realistic failure mode. When the broker is
+unreachable, kafka-clients does not back-pressure on the BufferPool —
+batches leave the pool quickly into the kernel send-buffer, and stuck
+in-flight batches only terminally fail after `delivery.timeout.ms` (120s
+default). The buffer never fills; the lifecycle event never fires. Realistic
+broker-trouble failure modes are either connection failure (covered by
+scenario 17) or slow acks (recycled by `delivery.timeout.ms` with no
+buffer pressure and no archive impact under the TWO-COLLECTOR rule).
+
+The `BufferExhaustedException` defense path in the producer code is kept
+as misconfiguration safety (small `buffer.memory` overrides) but is not
+chaos-tested.
 
 ## 4. Header format for every chaos script
 

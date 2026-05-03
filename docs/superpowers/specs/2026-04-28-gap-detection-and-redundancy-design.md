@@ -168,6 +168,56 @@ which routes through the existing `_other_covers` check. Writer-emitted
 gaps (collector_restart etc.) MUST go through the same path; today some
 bypass it (the bug exposed by chaos scenario 01).
 
+### 3.4a Continuous dual-source tailing
+
+Implementation: see `docs/superpowers/plans/2026-05-03-continuous-dual-source-tailing.md`.
+
+The §3.4 rule depends on `CoverageFilter` having an up-to-date
+`lastDataTsByStream[(stream, source)]` for BOTH sources at all times. The
+writer therefore maintains two long-lived Kafka consumers — a primary
+consumer over `binance.{stream}` topics and a backup-tail consumer over
+`backup.binance.{stream}` topics — and polls both every iteration of
+`KafkaConsumerLoop.run()` regardless of failover state.
+
+**Backup-tail consumer config.** Distinct `group.id` of the form
+`writer-backup-tail-<UUID>`, `auto.offset.reset=latest`,
+`enable.auto.commit=false`. The tail never commits offsets: on writer
+restart it resumes at LATEST. Replay is unnecessary because the primary
+topic family is the archive source of truth; the tail exists solely to
+feed `CoverageFilter` liveness data for the backup source. Poll timeout
+`BACKUP_TAIL_POLL_TIMEOUT = 100ms` is shorter than the primary poll's so
+that backup-side liveness work cannot stall the primary consume path.
+
+**Tailing decoupled from archiving.** `RecordHandler` calls
+`coverageFilter.handleData(source, env)` for every record from either
+source unconditionally. This restores the invariant: at any moment,
+`lastDataTsByStream[(stream, source)]` reflects the most recent record
+observed from that source on that stream. Records from the backup tail
+are written to the archive buffer ONLY when `failover.isActive() == true`.
+When inactive, backup records update `CoverageFilter`, increment the
+counter `writer_backup_tail_records_seen`, and return without
+buffer-add or offset-commit.
+
+**FailoverController is state-machine only.** Activate is driven by
+primary-source silence; deactivate by primary recovery plus the
+recovery-stability window. Activate/deactivate signals no longer create
+or close consumer instances — the backup tail is owned for the lifetime
+of the writer process. The switchback filter continues to gate ARCHIVING
+from the backup source after a deactivate, but never gates TAILING.
+
+**Tail-error isolation.** Any exception from the backup poll or its
+per-record dispatch is caught at loop level, logged at WARN, and
+increments `writer_backup_tail_errors_total`. The primary consume path
+is never affected by backup-tail failure.
+
+**Invariant restored.** Brief MAIN flaps — silence for 5–10s long enough
+to activate failover, MAIN recovers, deactivate fires — no longer leak
+false-positive `pu_chain_break` envelopes. Because `CoverageFilter` has
+continuous backup-source liveness data throughout the flap, the
+post-switchback chain-hole query against the backup source returns a
+fresh `lastDataTs` and the gap is correctly parked or suppressed per
+§3.4. The unit-level proof is `CoverageFilterFailoverFlapTest`.
+
 ## 4. The four "rulers" of gap detection
 
 Gap detection layers four independent mechanisms. Each catches a different
