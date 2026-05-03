@@ -1,7 +1,6 @@
 package com.cryptolake.writer.failover;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -10,7 +9,6 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +34,6 @@ class FailoverControllerHysteresisTest {
   private FailoverController controller;
 
   @BeforeEach
-  @SuppressWarnings("unchecked")
   void setUp() {
     fakeClockNs = new AtomicLong(1_000_000_000_000L); // t = 1000s
     clock = fakeClockNs::get;
@@ -44,7 +41,6 @@ class FailoverControllerHysteresisTest {
     CoverageFilter coverage = new CoverageFilter(5.0, 10.0, metrics, clock);
     controller =
         new FailoverController(
-            () -> (KafkaConsumer<byte[], byte[]>) mock(KafkaConsumer.class),
             List.of("binance.btcusdt.depth"),
             "backup.",
             SILENCE_TIMEOUT,

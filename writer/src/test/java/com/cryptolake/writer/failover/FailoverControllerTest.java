@@ -16,6 +16,11 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Ports: Python's {@code test_failover_controller.py} — silence detection, activation,
  * switchback (design §4.6; design §2.7).
+ *
+ * <p>After plan 2026-05-03 (Task 4) the controller is state-only — it no longer owns a backup
+ * consumer, so the previous {@code pollBackup}/{@code cleanup} consumer-ownership tests were
+ * removed; backup-topic delivery is now covered by {@code KafkaConsumerLoopDualPollTest} and
+ * {@code KafkaConsumerLoopBackupTailIsolationTest}.
  */
 class FailoverControllerTest {
 
@@ -30,12 +35,8 @@ class FailoverControllerTest {
     metrics = new WriterMetrics(registry);
     fakeClock = new AtomicLong(1_000_000_000_000L);
     coverage = new CoverageFilter(5.0, 10.0, metrics, fakeClock::get);
-    // Use factory that throws since we do NOT call activate() in most tests
     controller =
         new FailoverController(
-            () -> {
-              throw new IllegalStateException("no backup consumer in unit test");
-            },
             List.of("binance.trades"),
             "backup.",
             Duration.ofSeconds(5),
@@ -93,26 +94,12 @@ class FailoverControllerTest {
     assertThat(controller.shouldActivate()).isFalse();
   }
 
-  // ports: design §4.6 — pollBackup returns empty when not active
-  @Test
-  void pollBackup_notActive_returnsEmpty() {
-    var records = controller.pollBackup(Duration.ofMillis(100));
-    assertThat(records.isEmpty()).isTrue();
-  }
-
   // ports: design §4.6 — deactivate on already inactive is no-op
   @Test
   void deactivate_whenNotActive_noOp() {
     // Should not throw
     controller.deactivate();
     assertThat(controller.isActive()).isFalse();
-  }
-
-  // ports: design §4.6 — cleanup safe to call when no backup consumer
-  @Test
-  void cleanup_whenNoBackupConsumer_noException() {
-    // Should not throw
-    controller.cleanup();
   }
 
   // ports: design §4.6 — checkSwitchbackFilter returns false when not in switchback

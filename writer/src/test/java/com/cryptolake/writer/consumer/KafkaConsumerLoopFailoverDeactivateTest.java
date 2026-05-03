@@ -76,7 +76,6 @@ class KafkaConsumerLoopFailoverDeactivateTest {
         .thenAnswer(invocation -> ConsumerRecords.empty());
 
     when(failover.shouldDeactivate()).thenReturn(false);
-    when(failover.pollBackup(any(Duration.class))).thenReturn(ConsumerRecords.empty());
 
     KafkaConsumerLoop loop =
         new KafkaConsumerLoop(
@@ -128,7 +127,6 @@ class KafkaConsumerLoopFailoverDeactivateTest {
   void shouldDeactivateTrue_callsDeactivateOnce() {
     when(primary.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
     when(failover.shouldDeactivate()).thenReturn(true).thenReturn(false);
-    when(failover.pollBackup(any(Duration.class))).thenReturn(ConsumerRecords.empty());
 
     KafkaConsumerLoop loop =
         new KafkaConsumerLoop(

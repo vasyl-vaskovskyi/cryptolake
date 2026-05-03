@@ -107,7 +107,6 @@ class KafkaConsumerLoopDualPollTest {
     when(failover.isActive()).thenReturn(false);
     when(failover.shouldActivate()).thenReturn(false);
     when(failover.shouldDeactivate()).thenReturn(false);
-    when(failover.pollBackup(any(Duration.class))).thenReturn(ConsumerRecords.empty());
 
     // ── Real RecordHandler so a backup record routes through coverage.handleData ──────────
     SessionChangeDetector sessionDetector = mock(SessionChangeDetector.class);

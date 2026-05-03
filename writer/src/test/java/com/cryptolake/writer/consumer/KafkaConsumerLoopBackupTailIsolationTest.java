@@ -94,7 +94,6 @@ class KafkaConsumerLoopBackupTailIsolationTest {
     when(failover.isActive()).thenReturn(false);
     when(failover.shouldActivate()).thenReturn(false);
     when(failover.shouldDeactivate()).thenReturn(false);
-    when(failover.pollBackup(any(Duration.class))).thenReturn(ConsumerRecords.empty());
 
     RecordHandler recordHandler = mock(RecordHandler.class);
     OffsetCommitCoordinator committer = mock(OffsetCommitCoordinator.class);

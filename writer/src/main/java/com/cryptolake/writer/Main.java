@@ -230,11 +230,11 @@ public final class Main {
     // adds the backup tail to the same lifecycle.)
     try {
     // ── Failover controller ──────────────────────────────────────────────────────────────────
+    // After plan 2026-05-03 (Task 4): state-only. Backup topic is tailed continuously by
+    // BackupTailConsumer (constructed above); FailoverController no longer owns a backup
+    // consumer.
     FailoverController failover =
         new FailoverController(
-            () ->
-                new KafkaConsumer<>(
-                    consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer()),
             enabledTopics,
             BACKUP_PREFIX,
             Duration.ofSeconds(5),

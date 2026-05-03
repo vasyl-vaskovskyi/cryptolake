@@ -7,20 +7,18 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
-import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
-import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Manages the failover lifecycle: primary silence detection → backup activation → switchback.
  *
- * <p>Ports Python's {@code FailoverManager} (design §2.7; design §4.6). Owns the BACKUP {@link
- * KafkaConsumer} lifecycle (created lazily on activate; closed on deactivate).
+ * <p>Ports Python's {@code FailoverManager} (design §2.7; design §4.6). After plan
+ * 2026-05-03-continuous-dual-source-tailing (Task 4), this class is STATE-ONLY: it tracks the
+ * activation/deactivation hysteresis state machine and the switchback boundary filter. The backup
+ * topic is now tailed continuously by {@link com.cryptolake.writer.consumer.BackupTailConsumer} —
+ * the on-demand backup consumer (along with the seek-to-replay rebalance listener) was removed in
+ * the same task.
  *
  * <p>Thread safety: consume-loop thread only (T1). {@code _isActive} is {@code volatile} so the
  * Ready thread reads a coherent value for {@code isConnected()} checks (design §3.3).
@@ -29,10 +27,6 @@ public final class FailoverController {
 
   private static final Logger log = LoggerFactory.getLogger(FailoverController.class);
 
-  /** How far back (in addition to silenceTimeout) to seek backup on activation. */
-  private static final long SEEK_BACK_BUFFER_MS = 5_000L;
-
-  private final Supplier<KafkaConsumer<byte[], byte[]>> backupFactory;
   private final List<String> primaryTopics;
   private final String backupPrefix;
   private final Duration silenceTimeout;
@@ -44,7 +38,6 @@ public final class FailoverController {
   /** Volatile so the Ready thread reads a coherent value. */
   private volatile boolean isActive = false;
 
-  private KafkaConsumer<byte[], byte[]> backupConsumer = null;
   private long lastPrimaryRecordNs = -1L;
   private long activationStartNs = -1L;
 
@@ -60,7 +53,6 @@ public final class FailoverController {
   private boolean switchbackInProgress = false;
 
   public FailoverController(
-      Supplier<KafkaConsumer<byte[], byte[]>> backupFactory,
       List<String> primaryTopics,
       String backupPrefix,
       Duration silenceTimeout,
@@ -68,7 +60,6 @@ public final class FailoverController {
       CoverageFilter coverage,
       WriterMetrics metrics,
       ClockSupplier clock) {
-    this.backupFactory = backupFactory;
     this.primaryTopics = primaryTopics;
     this.backupPrefix = backupPrefix;
     this.silenceTimeout = silenceTimeout;
@@ -95,7 +86,12 @@ public final class FailoverController {
 
   // ── Activation / deactivation ─────────────────────────────────────────────────────────────────
 
-  /** Activates backup consumer. Creates the consumer lazily and subscribes to backup topics. */
+  /**
+   * Marks failover ACTIVE. State-only: the backup topic is tailed continuously by {@link
+   * com.cryptolake.writer.consumer.BackupTailConsumer} regardless of this flag; this method only
+   * controls whether the writer ARCHIVES backup records (via {@code RecordHandler}'s failover
+   * check) and whether the LIFECYCLE log lines fire.
+   */
   public void activate() {
     if (isActive) return;
     log.info("failover_activated", "backup_prefix", backupPrefix);
@@ -112,13 +108,9 @@ public final class FailoverController {
     activationStartNs = clock.nowNs();
     metrics.setFailoverActive(true);
     metrics.failoverTotal().increment();
-
-    backupConsumer = backupFactory.get();
-    List<String> backupTopics = primaryTopics.stream().map(t -> backupPrefix + t).toList();
-    backupConsumer.subscribe(backupTopics, new SeekToReplayListener());
   }
 
-  /** Deactivates backup consumer. Records failover duration. */
+  /** Marks failover INACTIVE and records failover duration. */
   public void deactivate() {
     if (!isActive) return;
     long durationNs = clock.nowNs() - activationStartNs;
@@ -136,7 +128,6 @@ public final class FailoverController {
     metrics.setFailoverActive(false);
     metrics.failoverDurationSeconds().record(durationSec);
     metrics.switchbackTotal().increment();
-    cleanup();
     switchbackInProgress = false;
   }
 
@@ -174,28 +165,6 @@ public final class FailoverController {
   /** Returns {@code true} if the switchback filter should drop this backup envelope. */
   public boolean checkSwitchbackFilter(DataEnvelope env) {
     return shouldFilter(env);
-  }
-
-  // ── Backup polling ────────────────────────────────────────────────────────────────────────────
-
-  /** Polls the backup consumer if active. Returns empty if not active. */
-  public ConsumerRecords<byte[], byte[]> pollBackup(Duration timeout) {
-    if (!isActive || backupConsumer == null) {
-      return ConsumerRecords.empty();
-    }
-    return backupConsumer.poll(timeout);
-  }
-
-  /** Closes the backup consumer (called on deactivate or shutdown). */
-  public void cleanup() {
-    if (backupConsumer != null) {
-      try {
-        backupConsumer.close(Duration.ofSeconds(5));
-      } catch (Exception ignored) {
-        // best-effort shutdown; never block main shutdown path
-      }
-      backupConsumer = null;
-    }
   }
 
   // ── Hysteresis state machine (bug B) ─────────────────────────────────────────────────────────
@@ -242,54 +211,5 @@ public final class FailoverController {
 
   private static String streamId(DataEnvelope env) {
     return env.exchange() + "|" + env.symbol() + "|" + env.stream();
-  }
-
-  /**
-   * On partition assignment, seeks each assigned backup partition to the offset corresponding to
-   * (now − silenceTimeout − SEEK_BACK_BUFFER_MS). This ensures the backup consumer replays records
-   * that bridge primary's last delivered u to backup's current head, preventing a spurious
-   * cross_source_pu_chain_break at the failover boundary (bug C from chaos test 01).
-   */
-  private final class SeekToReplayListener implements ConsumerRebalanceListener {
-    @Override
-    public void onPartitionsRevoked(java.util.Collection<TopicPartition> partitions) {
-      // No-op: nothing to flush; consumer drains naturally on revoke.
-    }
-
-    @Override
-    public void onPartitionsAssigned(java.util.Collection<TopicPartition> partitions) {
-      if (partitions.isEmpty()) return;
-      long seekTargetMs =
-          (clock.nowNs() / 1_000_000L) - silenceTimeout.toMillis() - SEEK_BACK_BUFFER_MS;
-      Map<TopicPartition, Long> request = new HashMap<>();
-      for (TopicPartition tp : partitions) {
-        request.put(tp, seekTargetMs);
-      }
-      Map<TopicPartition, OffsetAndTimestamp> offsets;
-      try {
-        offsets = backupConsumer.offsetsForTimes(request);
-      } catch (Exception e) {
-        log.warn("backup_seek_offsets_for_times_failed", "error", e.getMessage());
-        return;
-      }
-      for (Map.Entry<TopicPartition, OffsetAndTimestamp> e : offsets.entrySet()) {
-        OffsetAndTimestamp ot = e.getValue();
-        if (ot != null) {
-          try {
-            backupConsumer.seek(e.getKey(), ot.offset());
-          } catch (Exception ex) {
-            log.warn(
-                "backup_seek_failed",
-                "partition",
-                e.getKey().toString(),
-                "offset",
-                ot.offset(),
-                "error",
-                ex.getMessage());
-          }
-        }
-        // If ot == null: no record old enough; let consumer's auto.offset.reset apply.
-      }
-    }
   }
 }

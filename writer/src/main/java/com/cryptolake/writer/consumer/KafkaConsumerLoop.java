@@ -25,8 +25,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Owns the {@link KafkaConsumer} for the primary topic set. Runs the single consume loop on a
- * virtual thread. Dispatches records to {@link RecordHandler}. Delegates backup-consumer drain to
- * {@link FailoverController}.
+ * virtual thread. Dispatches records to {@link RecordHandler}. Polls the continuous {@link
+ * BackupTailConsumer} every iteration for backup-source liveness (plan 2026-05-03).
  *
  * <p>Ports Python's {@code WriterConsumer.consume_loop()} (design §2.2; design §4.2).
  *
@@ -323,14 +323,9 @@ public final class KafkaConsumerLoop implements Runnable {
     // (Python's _rotate_hour scans all *.jsonl.zst at shutdown; Tier 5 I6).
     rotator.writeMissingSidecarsOnShutdown();
 
-    // Close backup consumer
-    try {
-      failover.cleanup();
-    } catch (Exception ignored) {
-      // best-effort shutdown; never block main shutdown path
-    }
-
     // Close backup tail consumer (plan 2026-05-03 — continuous dual-source tailing)
+    // NOTE: FailoverController no longer owns a backup consumer (Task 4); the only
+    // backup-topic consumer to close here is the continuous BackupTailConsumer below.
     if (backupTail != null) {
       try {
         backupTail.close();
