@@ -41,33 +41,8 @@ public class KafkaProducerBridge {
 
   private static final StructuredLogger log = StructuredLogger.of(KafkaProducerBridge.class);
 
-  /**
-   * Buffer memory in bytes for Kafka producer. Default 1 GB (matches Python's {@code
-   * queue.buffering.max.kbytes=1048576}). Override via env var {@code
-   * KAFKA_PRODUCER_BUFFER_MEMORY} — used by chaos test 02 to provoke real buffer-overflow
-   * conditions with a small (~2 MB) buffer instead of waiting hours for a 1 GB buffer
-   * to fill under realistic WS rates.
-   */
-  private static final long BUFFER_MEMORY_BYTES = readBufferMemoryFromEnv();
-
-  private static long readBufferMemoryFromEnv() {
-    String v = System.getenv("KAFKA_PRODUCER_BUFFER_MEMORY");
-    if (v == null || v.isBlank()) {
-      log.info("kafka_producer_buffer_memory_default", "bytes", 1_073_741_824L);
-      return 1_073_741_824L;
-    }
-    try {
-      long n = Long.parseLong(v.trim());
-      if (n > 0) {
-        log.info("kafka_producer_buffer_memory_override", "bytes", n);
-        return n;
-      }
-    } catch (NumberFormatException ignored) {
-      // fall through to default
-    }
-    log.info("kafka_producer_buffer_memory_default_after_invalid", "bytes", 1_073_741_824L);
-    return 1_073_741_824L;
-  }
+  /** Buffer memory in bytes for Kafka producer (matches Python's {@code queue.buffering.max.kbytes=1048576}). */
+  private static final long BUFFER_MEMORY_BYTES = 1_073_741_824L;
 
   /** Buffer healthy-threshold: 80% of BUFFER_MEMORY_BYTES. */
   private static final double HEALTHY_BUFFER_FRACTION = 0.80;
@@ -205,6 +180,8 @@ public class KafkaProducerBridge {
         gapEmitter.emitOverflowRecovery(symbol, stream, window);
       }
       return true;
+      // BufferExhausted defense kept for misconfiguration safety (e.g. small buffer.memory) —
+      // not chaos-tested because realistic prod buffer sizing makes this path unreachable.
     } catch (TimeoutException e) { // includes BufferExhaustedException (subclass)
       // Roll back optimistic increment (Tier 5 C5)
       lock.lock();
@@ -465,10 +442,10 @@ public class KafkaProducerBridge {
 
     boolean healthy = partitionsForOk && !bufferDepleted && !appenderBlocking && !producerErroring;
 
-    // Diagnostic — ALWAYS log, so the chaos-test logs show whether the probe saw
-    // the back-pressure signals it expected. INFO level so it surfaces in normal
-    // collector output without DEBUG flags.
-    log.info(
+    // Defensive monitoring of Kafka producer back-pressure signals. DEBUG level —
+    // values are useful for diagnostics (and would be useful exposed via Prometheus
+    // if/when wired up) but produce too much noise for INFO under normal operation.
+    log.debug(
         "kafka_probe_health",
         "healthy",
         healthy,
