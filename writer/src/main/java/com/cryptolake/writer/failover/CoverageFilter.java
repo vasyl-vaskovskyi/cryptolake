@@ -107,7 +107,18 @@ public final class CoverageFilter {
    * <p>Ports {@code CoverageFilter.handle_gap(source, gap)}.
    */
   public boolean handleGap(String source, GapEnvelope gap) {
-    if (!filterEnabled) {
+    // restart_gap is a writer-side recovery marker emitted on the FIRST envelope per stream
+    // after writer restart. Under TWO-COLLECTOR + Kafka offset-resume + 48h retention, the
+    // other source's records during the writer downtime are durable in Kafka and re-read on
+    // restart — so the "gap" is never real data loss. We therefore ALWAYS park it: by the
+    // time the grace period expires, the writer will have polled both topics and
+    // lastDataTsByStream for the other source will exceed gap.gapStartTs (which is the old
+    // checkpoint's last_received_at, far in the past). sweepExpired then suppresses it.
+    // The restart_gap is preserved as a per-stream operational marker only when the other
+    // source genuinely failed to cover (e.g. both collectors down through the window).
+    boolean isRestartGap = "restart_gap".equals(gap.reason());
+
+    if (!filterEnabled && !isRestartGap) {
       return true; // No coverage filter when only one source seen
     }
 
@@ -142,7 +153,11 @@ public final class CoverageFilter {
       return false; // Still parked
     }
 
-    if (otherCovers) {
+    // Always park restart_gap for the grace period — at emission time the writer has just
+    // started and may not have polled the other topic yet, so otherCovers can be falsely
+    // false. By grace expiry the writer will have read from both topics and sweepExpired
+    // sees the up-to-date lastDataTsByStream.
+    if (otherCovers || isRestartGap) {
       // Park for grace period
       pendingGaps.put(gapKey, new PendingGap(gap, source, clock.nowNs()));
       metrics.setGapPendingSize(pendingGaps.size());
