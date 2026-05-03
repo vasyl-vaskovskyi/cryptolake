@@ -11,6 +11,7 @@ import com.cryptolake.common.identity.SystemIdentity;
 import com.cryptolake.common.logging.LogInit;
 import com.cryptolake.common.util.Clocks;
 import com.cryptolake.writer.buffer.BufferManager;
+import com.cryptolake.writer.consumer.BackupTailConsumer;
 import com.cryptolake.writer.consumer.DepthRecoveryGapFilter;
 import com.cryptolake.writer.consumer.HourRotationScheduler;
 import com.cryptolake.writer.consumer.KafkaConsumerLoop;
@@ -194,6 +195,18 @@ public final class Main {
         new KafkaConsumer<>(
             consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
 
+    // ── Backup tail Kafka consumer (plan 2026-05-03 — continuous dual-source tailing) ─────────
+    // Distinct group.id so it does not share the primary's offsets; auto.offset.reset=latest
+    // (the tail tracks live liveness — there is no value in re-reading historical backup
+    // records); enable.auto.commit=false (this consumer never commits offsets).
+    Properties backupTailProps =
+        buildBackupTailConsumerProps(config, "writer-backup-tail-" + UUID.randomUUID());
+    KafkaConsumer<byte[], byte[]> backupTailKafka =
+        new KafkaConsumer<>(
+            backupTailProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    List<String> backupTailTopics = enabledTopics.stream().map(t -> BACKUP_PREFIX + t).toList();
+    BackupTailConsumer backupTail = new BackupTailConsumer(backupTailKafka, backupTailTopics);
+
     // ── Failover controller ──────────────────────────────────────────────────────────────────
     FailoverController failover =
         new FailoverController(
@@ -289,6 +302,7 @@ public final class Main {
     KafkaConsumerLoop consumerLoop =
         new KafkaConsumerLoop(
             primaryConsumer,
+            backupTail,
             enabledTopics,
             recordHandler,
             failover,
@@ -408,6 +422,29 @@ public final class Main {
     p.put(ConsumerConfig.GROUP_ID_CONFIG, "cryptolake-writer");
     p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false"); // manual commit (Tier 1 §4)
     p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+    p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 500);
+    return p;
+  }
+
+  /**
+   * Builds Kafka consumer properties for the continuous backup-topic tail (plan 2026-05-03).
+   *
+   * <p>Differences from {@link #buildConsumerProps(AppConfig)}:
+   *
+   * <ul>
+   *   <li>Distinct, unique {@code group.id} per writer instance — the tail must not share the
+   *       primary writer's consumer group state; we never commit offsets here.
+   *   <li>{@code auto.offset.reset=latest} — the tail tracks live liveness only; there is no
+   *       value in re-reading historical backup records on first connect.
+   *   <li>{@code enable.auto.commit=false} — already the default but stated explicitly for clarity.
+   * </ul>
+   */
+  private static Properties buildBackupTailConsumerProps(AppConfig config, String groupId) {
+    Properties p = new Properties();
+    p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, String.join(",", config.redpanda().brokers()));
+    p.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+    p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+    p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
     p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 500);
     return p;
   }

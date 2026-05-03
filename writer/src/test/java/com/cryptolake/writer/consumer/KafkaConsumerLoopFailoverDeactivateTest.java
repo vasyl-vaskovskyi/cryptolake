@@ -81,6 +81,7 @@ class KafkaConsumerLoopFailoverDeactivateTest {
     KafkaConsumerLoop loop =
         new KafkaConsumerLoop(
             primary,
+            /* backupTail */ null,
             List.of("binance.btcusdt.depth"),
             recordHandler,
             failover,
@@ -132,6 +133,7 @@ class KafkaConsumerLoopFailoverDeactivateTest {
     KafkaConsumerLoop loop =
         new KafkaConsumerLoop(
             primary,
+            /* backupTail */ null,
             List.of("binance.btcusdt.depth"),
             recordHandler,
             failover,

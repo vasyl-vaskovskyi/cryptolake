@@ -45,6 +45,7 @@ public final class KafkaConsumerLoop implements Runnable {
   private static final Logger log = LoggerFactory.getLogger(KafkaConsumerLoop.class);
 
   private final KafkaConsumer<byte[], byte[]> primary;
+  private final BackupTailConsumer backupTail;
   private final List<String> enabledTopics;
   private final RecordHandler recordHandler;
   private final FailoverController failover;
@@ -77,6 +78,7 @@ public final class KafkaConsumerLoop implements Runnable {
 
   public KafkaConsumerLoop(
       KafkaConsumer<byte[], byte[]> primary,
+      BackupTailConsumer backupTail,
       List<String> enabledTopics,
       RecordHandler recordHandler,
       FailoverController failover,
@@ -88,6 +90,7 @@ public final class KafkaConsumerLoop implements Runnable {
       GapEmitter gaps,
       WriterMetrics metrics) {
     this.primary = primary;
+    this.backupTail = backupTail;
     this.enabledTopics = List.copyOf(enabledTopics);
     this.recordHandler = recordHandler;
     this.failover = failover;
@@ -113,6 +116,13 @@ public final class KafkaConsumerLoop implements Runnable {
         new PartitionAssignmentListener(primary, recovery, committer, assignedSink);
     primary.subscribe(enabledTopics, listener);
     log.info("consume_loop_started", "topics", enabledTopics.toString());
+
+    // Continuous dual-source tailing (plan 2026-05-03): always tail the backup topic so
+    // CoverageFilter has fresh per-source liveness data even when failover is inactive.
+    if (backupTail != null) {
+      backupTail.start();
+      log.info("backup_tail_started");
+    }
 
     long lastLagUpdateNs = System.nanoTime(); // Tier 5 F4
 
@@ -144,14 +154,16 @@ public final class KafkaConsumerLoop implements Runnable {
           assignedPartitions = Collections.unmodifiableSet(new HashSet<>(assignedSink));
         }
 
-        // Poll backup if failover is active
-        if (failover.isActive()) {
-          ConsumerRecords<byte[], byte[]> backupRecords =
-              failover.pollBackup(Duration.ofMillis(500));
+        // Continuous backup-topic tailing (plan 2026-05-03). Poll the backup tail
+        // unconditionally so CoverageFilter sees backup records regardless of failover state;
+        // RecordHandler decides whether to archive vs. drop based on failover.isActive().
+        if (backupTail != null) {
+          ConsumerRecords<byte[], byte[]> backupRecords = backupTail.poll(Duration.ofMillis(100));
           for (ConsumerRecord<byte[], byte[]> rec : backupRecords) {
             recordHandler.handle(rec, true);
           }
-        } else if (failover.shouldActivate()) {
+        }
+        if (!failover.isActive() && failover.shouldActivate()) {
           failover.activate();
         }
 
@@ -297,6 +309,15 @@ public final class KafkaConsumerLoop implements Runnable {
       failover.cleanup();
     } catch (Exception ignored) {
       // best-effort shutdown; never block main shutdown path
+    }
+
+    // Close backup tail consumer (plan 2026-05-03 — continuous dual-source tailing)
+    if (backupTail != null) {
+      try {
+        backupTail.close();
+      } catch (Exception ignored) {
+        // best-effort shutdown
+      }
     }
 
     // Close primary consumer

@@ -76,6 +76,10 @@ class KafkaConsumerLoopDualPollTest {
     BackupTailConsumer tail = new BackupTailConsumer(backupKafka, List.of(backupTopic));
     tail.start();
     backupKafka.rebalance(List.of(backupTp));
+    // OffsetResetStrategy.LATEST would seek to endOffsets[tp]=1L, skipping our record at offset 0.
+    // Explicitly seek to 0 so the test record is delivered on the next poll. (Production runs
+    // with LATEST too, but production doesn't pre-seed records before the consumer is alive.)
+    backupKafka.seek(backupTp, 0L);
 
     EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
     DataEnvelope backupEnv =
@@ -134,15 +138,10 @@ class KafkaConsumerLoopDualPollTest {
     OffsetCommitCoordinator committer = mock(OffsetCommitCoordinator.class);
     HourRotationScheduler rotator = mock(HourRotationScheduler.class);
 
-    // NOTE: the production KafkaConsumerLoop constructor does NOT yet take a BackupTailConsumer
-    // — that's exactly the gap the dual-tailing fix will close. We construct the loop with the
-    // CURRENT signature; the BackupTailConsumer is created above and held by this test only.
-    // Pre-fix the loop has no path to consume from `tail`, so coverage stays at zero for the
-    // backup source. Post-fix the loop will own a BackupTailConsumer and poll it every
-    // iteration, and this test will be re-wired (Task 3) to pass `tail` to the constructor.
     KafkaConsumerLoop loop =
         new KafkaConsumerLoop(
             primaryKafka,
+            tail,
             List.of("binance.trades"),
             recordHandler,
             failover,

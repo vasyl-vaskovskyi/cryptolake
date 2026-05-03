@@ -201,6 +201,14 @@ public final class RecordHandler {
     metrics.messagesConsumed(env.exchange(), env.symbol(), env.stream()).increment();
 
     if (fromBackup) {
+      // Continuous dual-source tailing (plan 2026-05-03): when failover is INACTIVE the backup
+      // tail consumer is still running for liveness/coverage tracking, but its records must NOT
+      // be archived (primary is healthy and owns the archive write path). Coverage was already
+      // updated above; just bump the tail-only counter and return.
+      if (!failover.isActive()) {
+        metrics.backupTailRecordsSeen().increment();
+        return;
+      }
       metrics.failoverRecordsTotal().increment();
       // Switchback filter: if primary has caught up, drop backup records
       if (failover.checkSwitchbackFilter(env)) {

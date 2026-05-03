@@ -158,6 +158,18 @@ public final class WriterMetrics {
         .register(registry);
   }
 
+  /**
+   * Backup-topic records consumed by the continuous tail for coverage tracking only — i.e. while
+   * failover is INACTIVE so the records are NOT archived (plan 2026-05-03 — continuous dual-source
+   * tailing). Distinct from {@link #failoverRecordsTotal()} which counts records consumed AND
+   * archived during an active failover episode.
+   */
+  public Counter backupTailRecordsSeen() {
+    return Counter.builder("writer_backup_tail_records_seen")
+        .description("Backup-topic records consumed for coverage tracking only (not archived)")
+        .register(registry);
+  }
+
   /** Metric #21: total switchback events (backup → primary). */
   public Counter switchbackTotal() {
     return Counter.builder("writer_switchback")
