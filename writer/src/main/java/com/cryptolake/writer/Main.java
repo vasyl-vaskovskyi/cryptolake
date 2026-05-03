@@ -199,14 +199,36 @@ public final class Main {
     // Distinct group.id so it does not share the primary's offsets; auto.offset.reset=latest
     // (the tail tracks live liveness — there is no value in re-reading historical backup
     // records); enable.auto.commit=false (this consumer never commits offsets).
+    //
+    // Both consumers above are constructed BEFORE the SIGTERM hook is installed below; if any
+    // subsequent stage of wiring throws (recovery, health server, etc.), the consumers leak —
+    // their internal threads keep running. We track them in `startupConsumers` and close both
+    // best-effort in a single catch on the wiring path (Issue #4).
+    KafkaConsumer<byte[], byte[]> backupTailKafka;
     Properties backupTailProps =
         buildBackupTailConsumerProps(config, "writer-backup-tail-" + UUID.randomUUID());
-    KafkaConsumer<byte[], byte[]> backupTailKafka =
-        new KafkaConsumer<>(
-            backupTailProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    try {
+      backupTailKafka =
+          new KafkaConsumer<>(
+              backupTailProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    } catch (RuntimeException e) {
+      // Backup-tail constructor failed; primary consumer is already alive — close it before
+      // propagating so its background threads do not leak.
+      try {
+        primaryConsumer.close(Duration.ofSeconds(5));
+      } catch (Exception suppressed) {
+        // best-effort cleanup on failed startup
+      }
+      throw e;
+    }
     List<String> backupTailTopics = enabledTopics.stream().map(t -> BACKUP_PREFIX + t).toList();
     BackupTailConsumer backupTail = new BackupTailConsumer(backupTailKafka, backupTailTopics);
 
+    // From here through executor.submit(consumerLoop), if any wiring stage throws we must close
+    // BOTH consumers — primary AND backup-tail — before propagating; their internal threads
+    // would otherwise leak. (Issue #4: the leak was pre-existing for the primary; this commit
+    // adds the backup tail to the same lifecycle.)
+    try {
     // ── Failover controller ──────────────────────────────────────────────────────────────────
     FailoverController failover =
         new FailoverController(
@@ -386,6 +408,22 @@ public final class Main {
         Thread.currentThread().interrupt();
       }
     }
+    } catch (RuntimeException | Error startupErr) {
+      // Issue #4: any failure during wiring (recovery, health server bind, etc.) leaks both
+      // consumer threads. Close both best-effort, suppressing exceptions, then rethrow so the
+      // process exits with the original error.
+      try {
+        primaryConsumer.close(Duration.ofSeconds(5));
+      } catch (Exception suppressed) {
+        // best-effort
+      }
+      try {
+        backupTailKafka.close(Duration.ofSeconds(5));
+      } catch (Exception suppressed) {
+        // best-effort
+      }
+      throw startupErr;
+    }
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────────────────────
@@ -429,23 +467,24 @@ public final class Main {
   /**
    * Builds Kafka consumer properties for the continuous backup-topic tail (plan 2026-05-03).
    *
-   * <p>Differences from {@link #buildConsumerProps(AppConfig)}:
+   * <p>Delegates to {@link #buildConsumerProps(AppConfig)} for the shared keys (one source of
+   * truth for {@code bootstrap.servers}, {@code max.poll.records}, etc.) and overrides only the
+   * keys that differ:
    *
    * <ul>
    *   <li>Distinct, unique {@code group.id} per writer instance — the tail must not share the
    *       primary writer's consumer group state; we never commit offsets here.
    *   <li>{@code auto.offset.reset=latest} — the tail tracks live liveness only; there is no
    *       value in re-reading historical backup records on first connect.
-   *   <li>{@code enable.auto.commit=false} — already the default but stated explicitly for clarity.
+   *   <li>{@code enable.auto.commit=false} — already set by {@code buildConsumerProps}, restated
+   *       here for clarity since this consumer never commits offsets.
    * </ul>
    */
   private static Properties buildBackupTailConsumerProps(AppConfig config, String groupId) {
-    Properties p = new Properties();
-    p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, String.join(",", config.redpanda().brokers()));
+    Properties p = buildConsumerProps(config);
     p.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-    p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
     p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
-    p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 500);
+    p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
     return p;
   }
 

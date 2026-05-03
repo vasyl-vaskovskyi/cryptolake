@@ -170,6 +170,18 @@ public final class WriterMetrics {
         .register(registry);
   }
 
+  /**
+   * Backup-tail poll errors — incremented every time the continuous backup-topic tail throws
+   * during {@code poll()} or per-record dispatch (plan 2026-05-03). The tail is an isolation
+   * boundary; primary archiving never blocks on tail health. This counter exists so operators can
+   * alert on tail-error rate independent of writer liveness.
+   */
+  public Counter backupTailErrors() {
+    return Counter.builder("writer_backup_tail_errors")
+        .description("Errors caught while polling the continuous backup-topic tail")
+        .register(registry);
+  }
+
   /** Metric #21: total switchback events (backup → primary). */
   public Counter switchbackTotal() {
     return Counter.builder("writer_switchback")

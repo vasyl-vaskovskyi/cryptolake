@@ -44,6 +44,9 @@ public final class KafkaConsumerLoop implements Runnable {
 
   private static final Logger log = LoggerFactory.getLogger(KafkaConsumerLoop.class);
 
+  // shorter than primary poll: tail is liveness-only, must not stall the loop
+  private static final Duration BACKUP_TAIL_POLL_TIMEOUT = Duration.ofMillis(100);
+
   private final KafkaConsumer<byte[], byte[]> primary;
   private final BackupTailConsumer backupTail;
   private final List<String> enabledTopics;
@@ -157,10 +160,26 @@ public final class KafkaConsumerLoop implements Runnable {
         // Continuous backup-topic tailing (plan 2026-05-03). Poll the backup tail
         // unconditionally so CoverageFilter sees backup records regardless of failover state;
         // RecordHandler decides whether to archive vs. drop based on failover.isActive().
+        //
+        // ISOLATION BOUNDARY: the tail is best-effort liveness — primary archiving MUST NOT
+        // be coupled to its health. Wrap the poll + per-record handle loop in its own
+        // try/catch so a WakeupException, broker disconnect, auth failure, or any other
+        // exception on the tail does not stop the writer from continuing to consume the
+        // primary topic. Increment the writer_backup_tail_errors_total counter on each caught
+        // exception so we can alert on tail health without losing the writer.
         if (backupTail != null) {
-          ConsumerRecords<byte[], byte[]> backupRecords = backupTail.poll(Duration.ofMillis(100));
-          for (ConsumerRecord<byte[], byte[]> rec : backupRecords) {
-            recordHandler.handle(rec, true);
+          try {
+            ConsumerRecords<byte[], byte[]> backupRecords = backupTail.poll(BACKUP_TAIL_POLL_TIMEOUT);
+            for (ConsumerRecord<byte[], byte[]> rec : backupRecords) {
+              recordHandler.handle(rec, true);
+            }
+          } catch (Exception backupErr) {
+            // Broad on purpose: this is an isolation boundary. Log at WARN and continue.
+            metrics.backupTailErrors().increment();
+            log.warn(
+                "backup_tail_poll_error",
+                "error",
+                backupErr.getClass().getSimpleName() + ": " + backupErr.getMessage());
           }
         }
         if (!failover.isActive() && failover.shouldActivate()) {
