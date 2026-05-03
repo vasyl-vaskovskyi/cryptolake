@@ -619,7 +619,14 @@ free_disk() {
 
 # ---------------------------------------------------------------------------
 # teardown_stack
-# Called by trap EXIT. Cleans up containers, volumes, and HOST_DATA_DIR.
+# Called by trap EXIT. Cleans up containers, volumes, networks, locally-built
+# images, and HOST_DATA_DIR for this scenario's compose project.
+#
+# `--rmi local` deletes the per-project images that compose tags as
+# "<project>-<service>" when a service has a `build:` directive but no
+# explicit `image:` field (collector, collector-backup, writer, backfill,
+# consolidation, whatsapp-bridge in docker-compose.yml). Without it, every
+# chaos run leaves a fresh set of tagged images in Docker Desktop.
 # ---------------------------------------------------------------------------
 teardown_stack() {
     msg "=== Teardown: ${COMPOSE_PROJECT:-unknown} ==="
@@ -629,7 +636,7 @@ teardown_stack() {
     free_disk 2>/dev/null || true
 
     if [[ -n "${COMPOSE_OPTS[*]+set}" ]]; then
-        dc down -v --remove-orphans 2>/dev/null || true
+        dc down -v --remove-orphans --rmi local 2>/dev/null || true
     fi
 
     if [[ -n "${HOST_DATA_DIR:-}" && -d "$HOST_DATA_DIR" ]]; then
@@ -647,16 +654,61 @@ today() { date -u +%Y-%m-%d; }
 # ---------------------------------------------------------------------------
 # scenario_pass / scenario_fail
 # Call at end of scenario to produce a clear result line for the runner.
+#
+# Prints a multi-line color banner so the verdict is unmissable when reading
+# a single-scenario log directly. The exact "RESULT: PASS"/"RESULT: FAIL"
+# token (no color codes) is preserved so the suite runner and the JUnit
+# harness can still grep for it.
 # ---------------------------------------------------------------------------
+_scenario_color() {
+    # ANSI only when stderr is a TTY and NO_COLOR is unset. Scenario output
+    # goes to stderr (msg), so we test fd 2.
+    if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+        case "$1" in
+            green) printf '\033[1;37;42m' ;;
+            red)   printf '\033[1;37;41m' ;;
+            off)   printf '\033[0m' ;;
+        esac
+    fi
+}
+
+_scenario_banner() {
+    local color="$1"
+    local headline="$2"
+    local on off bar pad body
+    on="$(_scenario_color "$color")"
+    off="$(_scenario_color off)"
+    bar="##########################################################"
+    pad="#                                                        #"
+    # Bar is 58 cols: "#" + 3 spaces + 50-char headline + 3 spaces + "#".
+    local text="${headline:0:50}"
+    body=$(printf "#   %-50s   #" "$text")
+    {
+        echo ""
+        printf '%s%s%s\n' "$on" "$bar" "$off"
+        printf '%s%s%s\n' "$on" "$pad" "$off"
+        printf '%s%s%s\n' "$on" "$body" "$off"
+        printf '%s%s%s\n' "$on" "$pad" "$off"
+        printf '%s%s%s\n' "$on" "$bar" "$off"
+        echo ""
+    } >&2
+}
+
 scenario_pass() {
     local nn="${SCENARIO_NUM:-??}"
+    _scenario_banner green "SCENARIO ${nn}: PASS"
+    # Plain token below the banner so the suite runner / JUnit harness can
+    # grep for it without dealing with ANSI escape codes.
     msg "RESULT: PASS [scenario ${nn}]"
     exit 0
 }
 
 scenario_fail() {
     local nn="${SCENARIO_NUM:-??}"
-    msg "RESULT: FAIL [scenario ${nn}] — $*"
+    local reason="${*:-unspecified}"
+    _scenario_banner red "SCENARIO ${nn}: FAIL"
+    msg "Reason: ${reason}"
+    msg "RESULT: FAIL [scenario ${nn}] — ${reason}"
     exit 1
 }
 
