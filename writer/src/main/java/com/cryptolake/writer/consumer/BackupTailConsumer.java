@@ -4,6 +4,8 @@ import java.time.Duration;
 import java.util.List;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Long-lived tail consumer for the backup topic prefix. Owns its own KafkaConsumer with a
@@ -14,9 +16,13 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
  */
 public final class BackupTailConsumer {
 
+  private static final Logger log = LoggerFactory.getLogger(BackupTailConsumer.class);
+
   private final Consumer<byte[], byte[]> consumer;
   private final List<String> topics;
-  private boolean started = false;
+
+  /** Volatile: T1 polls; SIGTERM shutdown hook (T3) calls close(). */
+  private volatile boolean started = false;
 
   public BackupTailConsumer(Consumer<byte[], byte[]> consumer, List<String> topics) {
     this.consumer = consumer;
@@ -29,6 +35,7 @@ public final class BackupTailConsumer {
     }
     consumer.subscribe(topics);
     started = true;
+    log.info("backup_tail_started", "topics", topics.toString());
   }
 
   public ConsumerRecords<byte[], byte[]> poll(Duration timeout) {
@@ -48,5 +55,6 @@ public final class BackupTailConsumer {
       // best-effort
     }
     started = false;
+    log.info("backup_tail_closed");
   }
 }
