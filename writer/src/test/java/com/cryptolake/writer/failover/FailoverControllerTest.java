@@ -6,7 +6,6 @@ import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +25,6 @@ class FailoverControllerTest {
 
   private WriterMetrics metrics;
   private AtomicLong fakeClock;
-  private CoverageFilter coverage;
   private FailoverController controller;
 
   @BeforeEach
@@ -34,14 +32,11 @@ class FailoverControllerTest {
     PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
     metrics = new WriterMetrics(registry);
     fakeClock = new AtomicLong(1_000_000_000_000L);
-    coverage = new CoverageFilter(5.0, 10.0, metrics, fakeClock::get);
     controller =
         new FailoverController(
-            List.of("binance.trades"),
             "backup.",
             Duration.ofSeconds(5),
             Duration.ofSeconds(10),
-            coverage,
             metrics,
             fakeClock::get);
   }

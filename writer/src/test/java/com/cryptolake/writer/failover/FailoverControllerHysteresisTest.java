@@ -7,7 +7,6 @@ import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,14 +37,11 @@ class FailoverControllerHysteresisTest {
     fakeClockNs = new AtomicLong(1_000_000_000_000L); // t = 1000s
     clock = fakeClockNs::get;
     metrics = new WriterMetrics(new PrometheusMeterRegistry(PrometheusConfig.DEFAULT));
-    CoverageFilter coverage = new CoverageFilter(5.0, 10.0, metrics, clock);
     controller =
         new FailoverController(
-            List.of("binance.btcusdt.depth"),
             "backup.",
             SILENCE_TIMEOUT,
             RECOVERY_WINDOW,
-            coverage,
             metrics,
             clock);
   }

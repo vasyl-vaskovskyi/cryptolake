@@ -5,7 +5,6 @@ import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import java.time.Duration;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,11 +26,9 @@ public final class FailoverController {
 
   private static final Logger log = LoggerFactory.getLogger(FailoverController.class);
 
-  private final List<String> primaryTopics;
   private final String backupPrefix;
   private final Duration silenceTimeout;
   private final Duration recoveryStabilityWindow;
-  private final CoverageFilter coverage;
   private final WriterMetrics metrics;
   private final ClockSupplier clock;
 
@@ -53,18 +50,14 @@ public final class FailoverController {
   private boolean switchbackInProgress = false;
 
   public FailoverController(
-      List<String> primaryTopics,
       String backupPrefix,
       Duration silenceTimeout,
       Duration recoveryStabilityWindow,
-      CoverageFilter coverage,
       WriterMetrics metrics,
       ClockSupplier clock) {
-    this.primaryTopics = primaryTopics;
     this.backupPrefix = backupPrefix;
     this.silenceTimeout = silenceTimeout;
     this.recoveryStabilityWindow = recoveryStabilityWindow;
-    this.coverage = coverage;
     this.metrics = metrics;
     this.clock = clock;
     this.lastPrimaryRecordNs = clock.nowNs(); // Initialize to now (no silence at startup)

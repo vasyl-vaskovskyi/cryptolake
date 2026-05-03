@@ -48,11 +48,9 @@ class RecordHandlerGapRoutingTest {
     // Minimal FailoverController — only resetSilenceTimer() is called in the gap path.
     failover =
         new FailoverController(
-            List.of("binance.trades"),
             "backup_",
             Duration.ofSeconds(30),
             Duration.ofSeconds(10),
-            coverage,
             metrics,
             clock);
 

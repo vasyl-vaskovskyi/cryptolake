@@ -323,9 +323,7 @@ public final class KafkaConsumerLoop implements Runnable {
     // (Python's _rotate_hour scans all *.jsonl.zst at shutdown; Tier 5 I6).
     rotator.writeMissingSidecarsOnShutdown();
 
-    // Close backup tail consumer (plan 2026-05-03 — continuous dual-source tailing)
-    // NOTE: FailoverController no longer owns a backup consumer (Task 4); the only
-    // backup-topic consumer to close here is the continuous BackupTailConsumer below.
+    // Close backup tail consumer.
     if (backupTail != null) {
       try {
         backupTail.close();

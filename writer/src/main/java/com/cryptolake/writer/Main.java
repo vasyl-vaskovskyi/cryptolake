@@ -235,11 +235,9 @@ public final class Main {
     // consumer.
     FailoverController failover =
         new FailoverController(
-            enabledTopics,
             BACKUP_PREFIX,
             Duration.ofSeconds(5),
             Duration.ofSeconds(10), // recoveryStabilityWindow — bug B hysteresis
-            coverage,
             metrics,
             Clocks.systemNanoClock());
 
