@@ -2,17 +2,20 @@
 # 11_corrupt_message.sh
 #
 # Scenario: corrupt_message
-# Chaos:    Produce a malformed envelope to a topic the writer reads
-# Expected: gap reason=deserialization_error (real loss)
-# Flow:     MAIN+BACKUP both healthy and delivering → a single corrupt
-#           envelope lands on a writer-consumed topic → writer cannot
-#           deserialize that one record → writer emits a per-record
-#           gap envelope (deserialization_error) covering ONLY that
-#           record, then resumes.
-# Why:      The corrupt message is itself the lost record. Even if the
-#           parallel collector's record for the same logical event is
-#           fine, the writer's coverage for that specific corrupted
-#           offset is non-existent. Surfaced as a tightly-scoped gap.
+# Chaos:    Produce 3 malformed envelopes to a writer-consumed topic
+# Expected: writer logs `corrupt_message_skipped` ERROR per record and
+#           skips them WITHOUT halting and WITHOUT emitting a gap envelope.
+# Flow:     MAIN+BACKUP both healthy and delivering → 3 corrupt envelopes
+#           land on binance.bookticker → writer's RecordHandler hits
+#           JsonParseException → emits an ERROR-level corrupt_message_skipped
+#           per record and continues consuming → archive remains valid →
+#           verify reports 0 errors.
+# Why:      The current contract is "be robust to corrupt input — log
+#           loudly so monitoring catches it, but don't halt and don't
+#           pollute the archive with synthetic gaps for what may be a
+#           producer bug rather than data loss". This test pins down that
+#           behavior and will fail if the system either crashes on bad
+#           input or silently swallows the failure without an audit log.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -53,9 +56,9 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — corrupt message itself is the lost record.
-expect_lifecycle_event        "gap was archived"                "GAP_ARCHIVED"
-expect_gap_present_check      "deserialization_error gap recorded" "deserialization_error"
-expect_only_these_gaps_check  deserialization_error
+# Assertions — corrupt input is logged at ERROR and skipped; archive stays clean.
+expect_log_event             "corrupt records logged at ERROR"   "corrupt_message_skipped"
+expect_lifecycle_event_absent "writer did NOT crash (failover not triggered)" "MAIN_FAILURE_DETECTED"
+expect_no_gaps_check          "no gap envelopes archived for corrupt records"
 
 verdict

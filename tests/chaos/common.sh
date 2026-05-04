@@ -788,6 +788,19 @@ expect_gap_present_check() {
     local label="${1:?need label}" reason="${2:?need reason}"
     _register_expect "[gap=${reason}] ${label}" _check_gap_present_inline "$HOST_DATA_DIR" "$reason"
 }
+
+# expect_log_event <label> <pattern> [svc=writer]
+# Generic log-grep expectation. Unlike expect_lifecycle_event this does
+# NOT prepend "LIFECYCLE.*", so it matches any log line in the service's
+# compose log. Useful for verifying ERROR-level events that aren't
+# emitted as LIFECYCLE markers (e.g. corrupt_message_skipped).
+expect_log_event() {
+    local label="${1:?need label}" pattern="${2:?need pattern}" svc="${3:-writer}"
+    _register_expect "[log:${pattern}] ${label}" _check_log_event "$pattern" "$svc"
+}
+_check_log_event() {
+    dc logs --no-color "$2" 2>/dev/null | grep -q "$1"
+}
 _check_gap_present_inline() {
     _list_gap_reasons "$1" 2>/dev/null | grep -qx "$2"
 }
