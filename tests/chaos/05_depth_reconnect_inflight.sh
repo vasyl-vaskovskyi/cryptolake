@@ -2,16 +2,24 @@
 # 05_depth_reconnect_inflight.sh
 #
 # Scenario: main_depth_resync_inflight
-# Chaos:    Drop MAIN's depth WS mid-flow; MAIN recovers via REST snapshot
-# Expected: NO gap (redundancy worked)
-# Flow:     MAIN's depth WS broken → MAIN buffers diffs internally and pulls
-#           a fresh snapshot to resync → BACKUP's depth WS unaffected,
-#           BACKUP delivers diffs continuously → writer archives BACKUP's
-#           depth diffs through the gap → MAIN finishes resync and resumes
-#           delivery → CrossSourcePuChainValidator confirms u-chain continuity.
-# Why:      Only MAIN's depth stream broke. BACKUP's depth pu-chain bridged
-#           the missing diffs, so the merged stream had no joint hole.
-#           No gap under the TWO-COLLECTOR rule.
+# Chaos:    Drop MAIN's egress (depth WS dies, REST snapshot blocked) for 45s
+# Expected: only `snapshot_poll_miss` on depth_snapshot may slip through;
+#           the live depth diff stream (continuous WS) is fully covered
+#           by BACKUP, so no other gap reason is permitted.
+# Flow:     MAIN's depth WS broken → MAIN stops publishing → BACKUP keeps
+#           publishing diffs → egress restored → MAIN reconnects, fetches
+#           a fresh depth snapshot, resumes. The snapshot resync RESETS
+#           the pu-chain so no pu_chain_break is reported, and MAIN's
+#           session_id is unchanged so no WITHIN_SOURCE_SESSION_CHANGE
+#           fires either.
+# Why:      depth_snapshot is polled every 30s (btcusdt override) but the
+#           gap-filter grace window is 10s, so when MAIN misses a
+#           snapshot poll during the egress block, BACKUP may not have
+#           produced a snapshot within the 10s grace and the gap is
+#           legitimately recorded with reason `snapshot_poll_miss`. This
+#           is the same poll-cadence-vs-grace-window fact that test 01
+#           handles for open_interest. Live depth/bookticker diffs ARE
+#           fully covered by backup and must show no gap envelopes.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -41,11 +49,10 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — only MAIN's depth was disturbed; BACKUP covered.
-expect_lifecycle_event        "redundancy active before chaos"   "COVERAGE_FILTER_ACTIVATED"
-expect_lifecycle_event        "depth gap parked under coverage"  "GAP_PARKED"
-expect_lifecycle_event        "parked gap suppressed by backup"  "GAP_SUPPRESSED_BY_COVERAGE"
-expect_lifecycle_event_absent "no uncovered gap accepted"        "GAP_ACCEPTED_NO_COVERAGE"
-expect_no_gaps_check          "no gap envelopes archived"
+# Assertions — primary's WS reconnect + snapshot resync is transparent for
+# live diffs; the only legitimate gap reason is `snapshot_poll_miss` on the
+# 30s-polled depth_snapshot stream.
+expect_lifecycle_event       "redundancy active before chaos"   "COVERAGE_FILTER_ACTIVATED"
+expect_only_these_gaps_check "snapshot_poll_miss"
 
 verdict

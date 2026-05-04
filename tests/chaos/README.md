@@ -65,7 +65,7 @@ still removes its containers and volumes.
 |---|------|--------------|---------------------|
 | 01 | collector_unclean_exit | Kill primary mid-flight; backup keeps flowing | `collector_restart` (only on polled streams; high-freq fully covered) |
 | 04 | fill_disk | Fill HOST_DATA_DIR to 99%; hold 120s; free disk | NO gap (writer re-polls uncommitted offsets from Kafka) — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
-| 05 | depth_reconnect_inflight | Drop primary WS during depth flow | `pu_chain_break` |
+| 05 | depth_reconnect_inflight | Drop primary egress for 45s; primary self-heals via snapshot resync | `snapshot_poll_miss` (only on the 30s-polled depth_snapshot stream; live diffs fully covered) |
 | 06 | full_stack_restart_gap | Down + restart entire stack | `collector_restart` |
 | 07 | host_reboot_restart_gap | Simulate host_boot_id change in lifecycle journal | `host_reboot` |
 | 08 | ws_disconnect | Block primary egress to fstream | `ws_disconnect` |
