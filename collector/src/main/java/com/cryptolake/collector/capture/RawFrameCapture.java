@@ -147,11 +147,16 @@ public final class RawFrameCapture {
    *
    * @param subscribeAckAtNs timestamp when the SUBSCRIBE ack was received; {@code 0} if not known
    */
-  public void onDisconnect(String socketName, List<String> symbols, long subscribeAckAtNs) {
-    // Tell each handler to reset per-symbol state so that the next connection's first diffs are
-    // buffered (synced=false) until the post-reconnect snapshot resync establishes a fresh sync
-    // point — without this, the depth detector still has lastU from the closed socket and emits
-    // a spurious pu_chain_break on the very first depth diff after reconnect.
+  /**
+   * Resets stateful per-symbol handler state (e.g. {@code DepthStreamHandler}'s pu-chain detector
+   * and pending-diff buffer). Safe to call repeatedly. Used both from {@link #onDisconnect} (when
+   * the JDK listener's {@code onClose} fires) AND from {@link
+   * com.cryptolake.collector.connection.WebSocketSupervisor} at the start of each new connection
+   * loop iteration — because {@code WebSocket.abort()} (called from the ping loop on a dead socket)
+   * bypasses {@code Listener.onClose}, so {@code onDisconnect} would otherwise be missed for that
+   * path.
+   */
+  public void resetStatefulHandlers(List<String> symbols) {
     for (StreamHandler h : handlers.values()) {
       try {
         h.onDisconnect(symbols);
@@ -159,6 +164,14 @@ public final class RawFrameCapture {
         log.warn("handler_on_disconnect_error", "error", e.getMessage());
       }
     }
+  }
+
+  public void onDisconnect(String socketName, List<String> symbols, long subscribeAckAtNs) {
+    // Tell each handler to reset per-symbol state so that the next connection's first diffs are
+    // buffered (synced=false) until the post-reconnect snapshot resync establishes a fresh sync
+    // point — without this, the depth detector still has lastU from the closed socket and emits
+    // a spurious pu_chain_break on the very first depth diff after reconnect.
+    resetStatefulHandlers(symbols);
     long now = clock.nowNs();
     for (String symbol : symbols) {
       for (String stream : enabledStreams) {

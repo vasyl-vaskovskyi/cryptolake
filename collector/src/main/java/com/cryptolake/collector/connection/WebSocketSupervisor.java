@@ -190,6 +190,12 @@ public final class WebSocketSupervisor {
   }
 
   private void connectionLoop() throws Exception {
+    // Reset stateful handlers (e.g. depth detector) at the START of every connection iteration.
+    // This is the abort()-path safety net: ws.abort() in pingLoop bypasses Listener.onClose, so
+    // capture.onDisconnect would not fire on socket-death cleanup — leaving the depth detector
+    // with stale lastU from the previous connection and producing a false pu_chain_break gap on
+    // the very first diff after reconnect.
+    capture.resetStatefulHandlers(symbols);
     Map<String, String> urls = adapter.getWsUrls(symbols, enabledStreams);
     if (urls.isEmpty()) {
       log.info("ws_no_subscriptions");
