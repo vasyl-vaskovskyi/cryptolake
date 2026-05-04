@@ -88,7 +88,7 @@ still removes its containers and volumes.
      accepted in tests 01 and 05. -->
 | 10 | planned_collector_restart | Clean stop + start with maintenance marker | `restart_gap` planned=true |
 | 11 | corrupt_message | Produce 3 malformed envelopes to a writer-consumed topic | NO gap; writer logs `corrupt_message_skipped` ERROR per record and continues |
-| 12 | pg_kill_during_commit | Pause postgres mid-commit | `pg_outage_hold` |
+| 12 | pg_kill_during_commit | Pause postgres for 120s | NO gap; writer logs `pg_save_failed`, archive flushes continue uninterrupted |
 | 13 | rapid_restart_storm | Restart primary 5× in 30s | `collector_restart` ×5 |
 | 14 | pg_outage_then_crash | Kill postgres + writer simultaneously | `pg_outage_hold` |
 | 15 | redpanda_leader_change | Brief redpanda restart | `kafka_consumer_outage` |
