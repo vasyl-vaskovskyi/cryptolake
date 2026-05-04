@@ -22,6 +22,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERIFY_BIN="${REPO_ROOT}/verify/build/install/verify/bin/verify"
 COMPOSE_FILE="${REPO_ROOT}/docker-compose.yml"
+COMPOSE_DEBUG_WRITER_FILE="${REPO_ROOT}/docker-compose.debug-writer.yml"
+
+# WRITER_MODE: "internal" (default) runs the writer as a compose service.
+# "external" skips the writer container, layers in the debug-writer override
+# (publishes postgres on host port 5432; redpanda already publishes 9092),
+# and lets you run com.cryptolake.writer.Main from your IDE pointed at the
+# host-published Kafka and Postgres. Lifecycle tail and healthcheck wait
+# adapt accordingly.
+WRITER_MODE="${WRITER_MODE:-internal}"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -44,6 +53,13 @@ init_scenario() {
         --project-name "$COMPOSE_PROJECT"
         --file "$COMPOSE_FILE"
     )
+    if [[ "$WRITER_MODE" == "external" ]]; then
+        if [[ ! -f "$COMPOSE_DEBUG_WRITER_FILE" ]]; then
+            die "WRITER_MODE=external but ${COMPOSE_DEBUG_WRITER_FILE} not found."
+        fi
+        COMPOSE_OPTS+=(--file "$COMPOSE_DEBUG_WRITER_FILE")
+        msg "WRITER_MODE=external — writer service will not be started; run it from your IDE."
+    fi
     SCENARIO_MODE="$mode"
     export HOST_DATA_DIR COMPOSE_PROJECT
 
@@ -54,6 +70,25 @@ init_scenario() {
 
     # Guarantee cleanup even on set -e failures
     trap 'teardown_stack' EXIT
+    # Make assertion / command failures unmissable: any non-zero exit under
+    # `set -e` lands in the red FAIL banner BEFORE teardown noise scrolls
+    # past, instead of silently dropping out to "[chaos] === Teardown ===".
+    # ERR fires before EXIT, so the banner is the last thing the user sees
+    # above the teardown lines.
+    trap '_chaos_on_error $? $LINENO "${BASH_COMMAND:-}"' ERR
+}
+
+# ---------------------------------------------------------------------------
+# _chaos_on_error <exit_code> <line> <command>
+# ERR-trap handler. Disables itself (so scenario_fail's own exit doesn't
+# re-enter), then prints the red FAIL banner with diagnostic context.
+# ---------------------------------------------------------------------------
+_chaos_on_error() {
+    local exit_code="${1:-1}"
+    local line="${2:-?}"
+    local cmd="${3:-}"
+    trap - ERR
+    scenario_fail "exit=${exit_code} at line ${line}: ${cmd}"
 }
 
 # ---------------------------------------------------------------------------
@@ -122,6 +157,16 @@ start_stack() {
             ;;
     esac
 
+    # External writer: drop the writer service from the start list.
+    if [[ "$WRITER_MODE" == "external" ]]; then
+        local pruned=()
+        for s in "${services[@]}"; do
+            [[ "$s" == "writer" ]] && continue
+            pruned+=("$s")
+        done
+        services=("${pruned[@]}")
+    fi
+
     # Pull only core services, exclude monitoring/alerting for speed.
     # First scenario builds images; subsequent scenarios reuse buildkit cache.
     dc up -d "${services[@]}"
@@ -143,7 +188,10 @@ start_lifecycle_tail() {
     msg "Starting LIFECYCLE event stream (writer + collectors)…"
 
     # Pick services that exist for this mode.
-    local lc_services=(writer collector)
+    local lc_services=(collector)
+    if [[ "$WRITER_MODE" != "external" ]]; then
+        lc_services=(writer collector)
+    fi
     if [[ "${SCENARIO_MODE:-primary+backup}" == "primary+backup" ]]; then
         lc_services+=(collector-backup)
     fi
@@ -191,7 +239,10 @@ wait_healthy() {
     msg "Waiting for collector + writer to be healthy (timeout=${timeout}s)…"
 
     # Determine which collector services we expect based on mode
-    local required_services=("writer")
+    local required_services=()
+    if [[ "$WRITER_MODE" != "external" ]]; then
+        required_services+=("writer")
+    fi
     case "$SCENARIO_MODE" in
         primary)
             required_services+=("collector")
@@ -200,6 +251,13 @@ wait_healthy() {
             required_services+=("collector" "collector-backup")
             ;;
     esac
+
+    # Nothing to wait for (e.g., writer external + only collector services
+    # the caller already considers ready). Treat as healthy immediately.
+    if (( ${#required_services[@]} == 0 )); then
+        msg "No services to wait on (WRITER_MODE=external)."
+        return 0
+    fi
 
     while true; do
         local all_healthy=true
@@ -557,6 +615,85 @@ assert_gap_absent() {
 }
 
 # ---------------------------------------------------------------------------
+# _list_gap_reasons <base_dir>
+# Emits every gap-envelope reason found in zstd archives, one per line.
+# Sorted+deduped is up to the caller.
+# ---------------------------------------------------------------------------
+_list_gap_reasons() {
+    local base_dir="${1:?need base_dir}"
+    find "$base_dir" -name "*.jsonl.zst" -print0 2>/dev/null \
+        | xargs -0 -I{} sh -c 'zstd -d -c "$1" 2>/dev/null | python3 -c "
+import sys,json
+for l in sys.stdin:
+  l=l.strip()
+  if not l: continue
+  try:
+    d=json.loads(l)
+    if d.get(\"type\")==\"gap\": print(d.get(\"reason\",\"?\"))
+  except: pass
+"' _ {} 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# assert_no_gaps <archive_base_dir>
+# Whitelist assertion: fails if ANY gap envelope is present, regardless of
+# reason. Use this for scenarios whose contract is "no data loss occurred"
+# (e.g., redundancy worked, the TWO-COLLECTOR rule fully covered).
+# ---------------------------------------------------------------------------
+assert_no_gaps() {
+    local base_dir="${1:?assert_no_gaps requires a base directory}"
+    msg "Asserting NO gap envelopes of any reason are present…"
+
+    local reasons
+    reasons=$(_list_gap_reasons "$base_dir" | sort | uniq -c | sort -rn)
+    if [[ -z "$reasons" ]]; then
+        msg "PASS: no gap envelopes in archive."
+        return 0
+    fi
+
+    msg "FAIL: archive contains gap envelopes (count reason):"
+    while IFS= read -r line; do msg "  ${line}"; done <<< "$reasons"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# assert_only_these_gaps <archive_base_dir> <allowed_reason>...
+# Whitelist assertion: fails if any gap with a reason NOT in the allowed
+# list appears. With zero allowed reasons this is identical to
+# assert_no_gaps. Use this for scenarios whose contract is "exactly these
+# gap reasons may appear".
+# ---------------------------------------------------------------------------
+assert_only_these_gaps() {
+    local base_dir="${1:?assert_only_these_gaps requires a base directory}"
+    shift
+    local -a allowed=("$@")
+    msg "Asserting archive contains ONLY gaps with reason in: [${allowed[*]:-<none>}]"
+
+    local present
+    present=$(_list_gap_reasons "$base_dir" | sort -u)
+
+    local unexpected=()
+    while IFS= read -r r; do
+        [[ -z "$r" ]] && continue
+        local ok=false
+        for a in "${allowed[@]}"; do
+            [[ "$r" == "$a" ]] && { ok=true; break; }
+        done
+        $ok || unexpected+=("$r")
+    done <<< "$present"
+
+    if (( ${#unexpected[@]} == 0 )); then
+        msg "PASS: archive contains only allowed gap reasons (present: [${present//$'\n'/, }])."
+        return 0
+    fi
+    msg "FAIL: archive contains unexpected gap reasons: [${unexpected[*]}]"
+    msg "  All gap reasons present (count reason):"
+    _list_gap_reasons "$base_dir" | sort | uniq -c | sort -rn \
+        | while IFS= read -r l; do msg "    ${l}"; done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # wait_for_gap <reason> <timeout_secs>
 # Polls the live archive until a gap with the given reason appears.
 # ---------------------------------------------------------------------------
@@ -634,6 +771,20 @@ teardown_stack() {
     # `dc logs -f` doesn't error noisily on shutdown.
     stop_lifecycle_tail
     free_disk 2>/dev/null || true
+
+    # Dump full per-service logs to ${REPO_ROOT}/build/chaos-logs/<NN>/<svc>.log
+    # before tearing down. The lifecycle tail filters to LIFECYCLE-tagged
+    # lines only; deep investigations need the FULL collector/writer log
+    # (resync state-machine, snapshot fetcher retries, kafka consumer
+    # rebalances, etc.). Best-effort; never blocks teardown.
+    if [[ -n "${COMPOSE_PROJECT:-}" ]]; then
+        local log_dir="${REPO_ROOT}/build/chaos-logs/${SCENARIO_NUM:-XX}"
+        mkdir -p "$log_dir" 2>/dev/null || true
+        for svc in writer collector collector-backup; do
+            dc logs --no-color "$svc" > "${log_dir}/${svc}.log" 2>&1 || true
+        done
+        msg "Per-service logs captured under ${log_dir}/"
+    fi
 
     if [[ -n "${COMPOSE_OPTS[*]+set}" ]]; then
         dc down -v --remove-orphans --rmi local 2>/dev/null || true

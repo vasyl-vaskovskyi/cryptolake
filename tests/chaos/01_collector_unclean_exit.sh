@@ -42,7 +42,12 @@ wait_healthy 120
 warm_up 30
 
 # Assertions
+# Contract: TWO-COLLECTOR rule held — backup covered for the entire window
+# the primary was down, so the archive must contain ZERO gap envelopes,
+# regardless of reason. This is a whitelist check (assert_no_gaps), not the
+# narrower "collector_restart absent" blacklist that previously masked
+# unrelated pu_chain_break gaps as PASS.
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
+assert_no_gaps "$HOST_DATA_DIR"
 
 scenario_pass

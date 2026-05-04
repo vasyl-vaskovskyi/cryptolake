@@ -1,0 +1,31 @@
+# Compose override for WRITER_MODE=external (chaos suite local-writer debugging).
+#
+# Layered onto docker-compose.yml when the chaos common.sh detects
+# WRITER_MODE=external. Effects:
+#   - publishes postgres:5432 on host 127.0.0.1:5432 (redpanda already
+#     publishes 9092)
+#   - sets writer replicas to 0 so a stray "dc up writer" cannot start it
+#
+# To use:
+#   1. ./gradlew :writer:installDist           # ensure classes are compiled
+#   2. WRITER_MODE=external bash tests/chaos/01_collector_unclean_exit.sh
+#   3. In IDEA, Run/Debug com.cryptolake.writer.Main with:
+#        Program args : config/config.yaml
+#        Working dir  : $ProjectFileDir$
+#        Env vars     :
+#          DATABASE__URL=jdbc:postgresql://127.0.0.1:5432/cryptolake?user=cryptolake&password=postgres
+#          REDPANDA__BROKERS=127.0.0.1:9092
+#          HOST_DATA_DIR=/tmp/cryptolake-chaos-01-data
+#          LOG_LEVEL=INFO
+#
+# The scenario script will print "WRITER_MODE=external — writer service
+# will not be started" so you know to launch the IDE side yourself.
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  writer:
+    deploy:
+      replicas: 0
