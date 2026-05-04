@@ -80,7 +80,12 @@ still removes its containers and volumes.
      MAIN_FAILURE_DETECTED (5s topic silence) never trips. The "primary
      dies, backup covers" failover path is reliably exercised by test 01
      via SIGKILL, which actually severs the producer. -->
-| 09 | snapshot_poll_miss | Block primary REST endpoint | `snapshot_poll_miss` |
+<!-- 09 removed: misnamed — its chaos was identical to test 22 (block egress
+     for BOTH collectors, not "primary REST endpoint"). Test 22 is the
+     stricter version (adds expect_gap_present_check for
+     both_collectors_silent and a narrower gap whitelist). The
+     `snapshot_poll_miss` reason on polled streams is observed and
+     accepted in tests 01 and 05. -->
 | 10 | planned_collector_restart | Clean stop + start with maintenance marker | `restart_gap` planned=true |
 | 11 | corrupt_message | Produce malformed envelope to topic | `deserialization_error` |
 | 12 | pg_kill_during_commit | Pause postgres mid-commit | `pg_outage_hold` |
