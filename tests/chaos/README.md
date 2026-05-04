@@ -67,7 +67,12 @@ still removes its containers and volumes.
 | 04 | fill_disk | Fill HOST_DATA_DIR to 99%; hold 120s; free disk | NO gap (writer re-polls uncommitted offsets from Kafka) — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
 | 05 | depth_reconnect_inflight | Drop primary egress for 45s; primary self-heals via snapshot resync | `snapshot_poll_miss` (only on the 30s-polled depth_snapshot stream; live diffs fully covered) |
 | 06 | full_stack_restart_gap | Down + restart entire stack after 60s | `restart_gap` parked then suppressed by mutual coverage; only `pu_chain_break` may survive (real loss case for "both silent" lives in test 22) |
-| 07 | host_reboot_restart_gap | Simulate host_boot_id change in lifecycle journal | `host_reboot` |
+<!-- 07 removed: identical chaos to 06 (full stack down + restart) and its boot_id
+     injection had no effect — it wrote to the per-collector lifecycle.jsonl,
+     but host_reboot classification reads /proc/sys/kernel/random/boot_id
+     (overridable only via CRYPTOLAKE_TEST_BOOT_ID, which isn't propagated
+     through compose). The host_reboot path itself is unit-tested in
+     writer/.../RestartGapClassifierTest.java. -->
 | 08 | ws_disconnect | Block primary egress to fstream | `ws_disconnect` |
 | 09 | snapshot_poll_miss | Block primary REST endpoint | `snapshot_poll_miss` |
 | 10 | planned_collector_restart | Clean stop + start with maintenance marker | `restart_gap` planned=true |
