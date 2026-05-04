@@ -41,7 +41,10 @@ public class KafkaProducerBridge {
 
   private static final StructuredLogger log = StructuredLogger.of(KafkaProducerBridge.class);
 
-  /** Buffer memory in bytes for Kafka producer (matches Python's {@code queue.buffering.max.kbytes=1048576}). */
+  /**
+   * Buffer memory in bytes for Kafka producer (matches Python's {@code
+   * queue.buffering.max.kbytes=1048576}).
+   */
   private static final long BUFFER_MEMORY_BYTES = 1_073_741_824L;
 
   /** Buffer healthy-threshold: 80% of BUFFER_MEMORY_BYTES. */
@@ -412,7 +415,8 @@ public class KafkaProducerBridge {
     Double waitRatio = null;
     Double recordErrorRate = null;
     try {
-      for (java.util.Map.Entry<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric>
+      for (java.util.Map.Entry<
+              org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric>
           entry : producer.metrics().entrySet()) {
         var key = entry.getKey();
         if (!"producer-metrics".equals(key.group())) continue;
@@ -434,7 +438,8 @@ public class KafkaProducerBridge {
     }
 
     boolean bufferDepleted =
-        availableBytes != null && Double.isFinite(availableBytes)
+        availableBytes != null
+            && Double.isFinite(availableBytes)
             && availableBytes < BUFFER_MEMORY_BYTES * 0.05;
     boolean appenderBlocking = waitRatio != null && Double.isFinite(waitRatio) && waitRatio > 0.10;
     boolean producerErroring =

@@ -62,8 +62,13 @@ public final class WebSocketListenerImpl implements WebSocket.Listener {
     if (last) {
       String frame = accumulator.complete();
       dispatchFrame(webSocket, frame);
+    } else {
+      // Mid-message continuation: each onText invocation decrements the JDK's request budget
+      // (independent of `last`). If we only requested on `last=true`, multi-part messages would
+      // gradually deplete the budget and the JDK would stop delivering frames after ~N split
+      // messages — symptom: ~1s of depth/bookticker then 30+s of silence on every connect.
+      webSocket.request(1);
     }
-    // request(1) called inside dispatchFrame after capture accepts the frame (Tier 5 D2)
     return null;
   }
 
@@ -73,7 +78,20 @@ public final class WebSocketListenerImpl implements WebSocket.Listener {
     if (last) {
       String frame = accumulator.complete();
       dispatchFrame(webSocket, frame);
+    } else {
+      // Same continuation rule as onText — see the comment above.
+      webSocket.request(1);
     }
+    return null;
+  }
+
+  @Override
+  public CompletionStage<?> onPing(WebSocket webSocket, ByteBuffer message) {
+    // The JDK auto-replies a pong for the server's ping; we still must request(1) to refill the
+    // budget consumed by this onPing invocation. Overriding the default is required because the
+    // default `Listener.onPing` returns null without calling request(1) — leaving the budget
+    // permanently down by 1 each time the server pings (Binance: every 3 min).
+    webSocket.request(1);
     return null;
   }
 
