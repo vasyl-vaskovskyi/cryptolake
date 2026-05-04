@@ -73,7 +73,13 @@ still removes its containers and volumes.
      (overridable only via CRYPTOLAKE_TEST_BOOT_ID, which isn't propagated
      through compose). The host_reboot path itself is unit-tested in
      writer/.../RestartGapClassifierTest.java. -->
-| 08 | ws_disconnect | Block primary egress to fstream | `ws_disconnect` |
+<!-- 08 removed: duplicate chaos with test 05 (block_egress_via_network "collector"
+     for 45s) and asserted a failover that never fires. Egress block cuts the
+     upstream WS but leaves the collector's Kafka producer alive — primary
+     keeps publishing heartbeats/state to Kafka so the writer's
+     MAIN_FAILURE_DETECTED (5s topic silence) never trips. The "primary
+     dies, backup covers" failover path is reliably exercised by test 01
+     via SIGKILL, which actually severs the producer. -->
 | 09 | snapshot_poll_miss | Block primary REST endpoint | `snapshot_poll_miss` |
 | 10 | planned_collector_restart | Clean stop + start with maintenance marker | `restart_gap` planned=true |
 | 11 | corrupt_message | Produce malformed envelope to topic | `deserialization_error` |
