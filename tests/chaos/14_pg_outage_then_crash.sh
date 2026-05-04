@@ -39,6 +39,13 @@ msg "Waiting 90s for gap classification…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "collector_restart" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — both collectors killed simultaneously; expect real loss.
+expect_lifecycle_event   "BOTH collectors silent observed"  "BOTH_COLLECTORS_SILENT"
+expect_lifecycle_event   "BOTH collectors recovered"        "BOTH_COLLECTORS_RECOVERED"
+expect_lifecycle_event   "uncovered gap accepted"           "GAP_ACCEPTED_NO_COVERAGE"
+expect_lifecycle_event   "gap was archived"                 "GAP_ARCHIVED"
+expect_gap_present_check "collector_restart gap recorded"   "collector_restart"
+expect_only_these_gaps_check collector_restart
+
+verdict

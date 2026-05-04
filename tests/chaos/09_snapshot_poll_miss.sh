@@ -41,12 +41,11 @@ sleep 120
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Both collectors were blocked — expect a gap (either ws_disconnect or both_collectors_silent)
-if assert_gap_present "ws_disconnect" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "both_collectors_silent" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: both-collector outage gap detected"
-else
-    scenario_fail "No ws_disconnect or both_collectors_silent gap found — real loss was not recorded"
-fi
+# Assertions — both collectors were blocked; expect "real loss" gap, no failover.
+expect_lifecycle_event        "BOTH collectors silent observed"    "BOTH_COLLECTORS_SILENT"
+expect_lifecycle_event        "BOTH collectors recovered"          "BOTH_COLLECTORS_RECOVERED"
+expect_lifecycle_event        "gap was archived"                   "GAP_ARCHIVED"
+expect_lifecycle_event_absent "no failover to BACKUP"              "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_only_these_gaps_check  ws_disconnect both_collectors_silent
 
-scenario_pass
+verdict

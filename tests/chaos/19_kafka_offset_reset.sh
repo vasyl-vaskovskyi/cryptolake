@@ -55,18 +55,9 @@ sleep 120
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-if assert_gap_present "kafka_offset_reset" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: kafka_offset_reset gap detected"
-else
-    # The offset reset may manifest as a consumer restart or be absorbed by
-    # the rebalance listener without emitting if the topic simply had no data
-    msg "NOTE: kafka_offset_reset gap not found — checking for any gap evidence"
-    if assert_gap_present "kafka_consumer_outage" "$HOST_DATA_DIR" 2>/dev/null || \
-       assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null; then
-        msg "PASS: related outage gap detected"
-    else
-        msg "PASS: verify ERRORS=0 (offset reset may be below detection threshold)"
-    fi
-fi
+# Assertions — offset reset; deleted offset range is unrecoverable from
+# either source. Lenient gap whitelist (manifestations vary).
+expect_lifecycle_event       "gap was archived"   "GAP_ARCHIVED"
+expect_only_these_gaps_check kafka_offset_reset kafka_consumer_outage collector_restart
 
-scenario_pass
+verdict

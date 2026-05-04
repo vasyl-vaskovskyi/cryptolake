@@ -41,6 +41,11 @@ msg "Waiting 90s for PG recovery and archive flush to complete…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_absent "pg_outage_hold" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — pg outage is recoverable; data uninterrupted.
+expect_lifecycle_event        "writer enters pg-outage hold"   "WRITER_PG_OUTAGE_HOLD_ENTERED"
+expect_lifecycle_event        "writer exits pg-outage hold"    "WRITER_PG_OUTAGE_HOLD_EXITED"
+expect_lifecycle_event_absent "no uncovered gap accepted"      "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
+
+verdict

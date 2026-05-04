@@ -40,12 +40,10 @@ sleep 120
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-if assert_gap_present "kafka_producer_outage" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "kafka_consumer_outage" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: Kafka outage gap detected"
-else
-    msg "PASS: verify ERRORS=0 (gap may be below threshold or was suppressed by backup)"
-fi
+# Assertions — kafka briefly out; collectors should have entered/exited
+# kafka outage. Gap may or may not fire depending on timing — be lenient.
+expect_lifecycle_event       "MAIN collector enters kafka outage"   "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector
+expect_lifecycle_event       "MAIN collector exits kafka outage"    "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector
+expect_only_these_gaps_check kafka_producer_outage kafka_consumer_outage collector_restart
 
-scenario_pass
+verdict

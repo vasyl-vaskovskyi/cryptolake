@@ -39,6 +39,15 @@ msg "Waiting 90s for ws_disconnect gap to appear…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_absent "ws_disconnect" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — only MAIN's upstream broke; BACKUP covered.
+expect_lifecycle_event "MAIN ws disconnect observed"        "COLLECTOR_UPSTREAM_WS_DISCONNECTED" collector
+expect_lifecycle_event "MAIN ws reconnected"               "COLLECTOR_UPSTREAM_WS_CONNECTED"    collector
+expect_lifecycle_event "writer detects MAIN failure"       "MAIN_FAILURE_DETECTED"
+expect_lifecycle_event "writer fails over to BACKUP"       "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_lifecycle_event "MAIN comes back online"            "MAIN_RECOVERED"
+expect_lifecycle_event "writer switches back to MAIN"      "WRITER_NOW_ARCHIVING_FROM=MAIN"
+expect_lifecycle_event_absent "no uncovered gap accepted"  "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
+
+verdict

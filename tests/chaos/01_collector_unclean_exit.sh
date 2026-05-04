@@ -41,13 +41,16 @@ wait_healthy 120
 # Another 30s of normal operation to ensure archives are flushed
 warm_up 30
 
-# Assertions
-# Contract: TWO-COLLECTOR rule held — backup covered for the entire window
-# the primary was down, so the archive must contain ZERO gap envelopes,
-# regardless of reason. This is a whitelist check (assert_no_gaps), not the
-# narrower "collector_restart absent" blacklist that previously masked
-# unrelated pu_chain_break gaps as PASS.
+# Assertions — the contract is "TWO-COLLECTOR rule held; no data loss".
+# Each expect_* registers a check; verdict() runs all and prints PASS/FAIL.
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_no_gaps "$HOST_DATA_DIR"
 
-scenario_pass
+expect_lifecycle_event "redundancy active before chaos (both collectors delivering)" "COVERAGE_FILTER_ACTIVATED"
+expect_lifecycle_event "writer detects MAIN failure"                                 "MAIN_FAILURE_DETECTED"
+expect_lifecycle_event "writer fails over to BACKUP"                                 "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_lifecycle_event "MAIN comes back online"                                      "MAIN_RECOVERED"
+expect_lifecycle_event "writer switches back to MAIN"                                "WRITER_NOW_ARCHIVING_FROM=MAIN"
+expect_lifecycle_event_absent "no uncovered gap accepted"                            "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check "no gap envelopes archived (TWO-COLLECTOR rule held)"
+
+verdict

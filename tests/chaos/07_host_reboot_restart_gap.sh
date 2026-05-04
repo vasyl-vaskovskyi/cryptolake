@@ -55,12 +55,8 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-if assert_gap_present "host_reboot" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "host_unclean_shutdown" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: restart/reboot gap detected"
-else
-    msg "PASS: verify ERRORS=0 (lifecycle gap may not reach minimum window threshold)"
-fi
+# Assertions — host went down; expect a reboot-class gap, no others.
+expect_lifecycle_event "writer detects session change after reboot" "WITHIN_SOURCE_SESSION_CHANGE"
+expect_only_these_gaps_check host_reboot host_unclean_shutdown collector_restart unclean_shutdown
 
-scenario_pass
+verdict

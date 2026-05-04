@@ -40,6 +40,12 @@ msg "Waiting 90s for reconnect and resync…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_absent "ws_disconnect" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — only MAIN's depth was disturbed; BACKUP covered.
+expect_lifecycle_event        "redundancy active before chaos"   "COVERAGE_FILTER_ACTIVATED"
+expect_lifecycle_event        "depth gap parked under coverage"  "GAP_PARKED"
+expect_lifecycle_event        "parked gap suppressed by backup"  "GAP_SUPPRESSED_BY_COVERAGE"
+expect_lifecycle_event_absent "no uncovered gap accepted"        "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
+
+verdict

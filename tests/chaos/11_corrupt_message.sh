@@ -53,6 +53,9 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-assert_gap_present "deserialization_error" "$HOST_DATA_DIR"
+# Assertions — corrupt message itself is the lost record.
+expect_lifecycle_event        "gap was archived"                "GAP_ARCHIVED"
+expect_gap_present_check      "deserialization_error gap recorded" "deserialization_error"
+expect_only_these_gaps_check  deserialization_error
 
-scenario_pass
+verdict

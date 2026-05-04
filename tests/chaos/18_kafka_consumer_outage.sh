@@ -42,6 +42,10 @@ msg "Waiting 90s for kafka_consumer_outage gap…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "kafka_consumer_outage" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — writer is the single consumer; outage means real loss.
+expect_lifecycle_event       "gap was archived"                      "GAP_ARCHIVED"
+expect_gap_present_check     "kafka_consumer_outage gap recorded"    "kafka_consumer_outage"
+expect_only_these_gaps_check kafka_consumer_outage
+
+verdict

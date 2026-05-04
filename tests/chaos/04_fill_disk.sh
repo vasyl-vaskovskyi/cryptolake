@@ -56,12 +56,10 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertion 1: archive verifier reports zero errors (data integrity intact).
-# (run_verify already enforces ERRORS=0 via the existing PASS gate.)
+# Assertions — brief disk-full is recoverable; no real data loss.
+expect_lifecycle_event        "writer enters disk-full hold"     "WRITER_DISK_FULL_HOLD_ENTERED"
+expect_lifecycle_event        "writer exits disk-full hold"      "WRITER_DISK_FULL_HOLD_EXITED"
+expect_lifecycle_event_absent "no uncovered gap accepted"        "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
 
-# Assertion 2: NO disk_full_hold gap was emitted. Under the TWO-COLLECTOR
-# rule + Kafka retention invariant, brief disk-full is recoverable and
-# does NOT mark real data loss.
-assert_gap_absent "disk_full_hold" "$HOST_DATA_DIR"
-
-scenario_pass
+verdict

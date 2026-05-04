@@ -41,17 +41,10 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Any restart-class gap is acceptable
-if assert_gap_present "collector_restart" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "unclean_shutdown" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "writer_restart" "$HOST_DATA_DIR" 2>/dev/null || \
-   assert_gap_present "host_unclean_shutdown" "$HOST_DATA_DIR" 2>/dev/null; then
-    msg "PASS: restart gap detected"
-else
-    msg "WARNING: no explicit restart gap found — checking for any gap envelope"
-    # If the downtime was short enough that no gap was emitted, that's also
-    # acceptable (the verify invariant is no ERRORS, not gap count)
-    msg "PASS: verify ERRORS=0 (restart gap may be below detection threshold)"
-fi
+# Assertions — both collectors went down at once; expect a restart-class gap
+# of one of these reasons, no others. (Tolerant: gap may be below the
+# minimum-window threshold, in which case the gap whitelist still passes.)
+expect_lifecycle_event "writer detects session change after restart" "WITHIN_SOURCE_SESSION_CHANGE"
+expect_only_these_gaps_check collector_restart unclean_shutdown writer_restart host_unclean_shutdown
 
-scenario_pass
+verdict

@@ -42,6 +42,13 @@ msg "Waiting 90s for kafka_producer_outage gap to be emitted and archived…"
 sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_absent "kafka_producer_outage" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — only MAIN's producer path failed; BACKUP covered.
+expect_lifecycle_event        "MAIN collector enters kafka outage"  "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector
+expect_lifecycle_event        "MAIN collector exits kafka outage"   "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector
+expect_lifecycle_event        "writer fails over to BACKUP"         "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_lifecycle_event        "writer switches back to MAIN"        "WRITER_NOW_ARCHIVING_FROM=MAIN"
+expect_lifecycle_event_absent "no uncovered gap accepted"           "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
+
+verdict

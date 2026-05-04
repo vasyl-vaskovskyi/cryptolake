@@ -46,6 +46,12 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-assert_gap_present "both_collectors_silent" "$HOST_DATA_DIR"
+# Assertions — both collectors went silent at once; expect inferred gap, no failover.
+expect_lifecycle_event        "BOTH collectors silent observed"  "BOTH_COLLECTORS_SILENT"
+expect_lifecycle_event        "BOTH collectors recovered"        "BOTH_COLLECTORS_RECOVERED"
+expect_lifecycle_event        "gap was archived"                 "GAP_ARCHIVED"
+expect_lifecycle_event_absent "no failover to BACKUP"            "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_gap_present_check      "both_collectors_silent recorded"  "both_collectors_silent"
+expect_only_these_gaps_check  both_collectors_silent
 
-scenario_pass
+verdict

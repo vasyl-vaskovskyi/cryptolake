@@ -48,13 +48,20 @@ ARCHIVE_COUNT_AFTER=$(find "$HOST_DATA_DIR" -name "*.jsonl.zst" 2>/dev/null | wc
 msg "Archive files after recovery: ${ARCHIVE_COUNT_AFTER}"
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
 
-# Confirm archive continued during primary outage (backup kept writing)
+# Assertions — failover scenario; BACKUP must cover.
+expect_lifecycle_event        "writer detects MAIN failure"      "MAIN_FAILURE_DETECTED"
+expect_lifecycle_event        "writer fails over to BACKUP"      "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_lifecycle_event        "MAIN comes back online"           "MAIN_RECOVERED"
+expect_lifecycle_event        "writer switches back to MAIN"     "WRITER_NOW_ARCHIVING_FROM=MAIN"
+expect_lifecycle_event_absent "no uncovered gap accepted"        "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
+
+# Plus: backup actually wrote archive files during the outage.
 if (( ARCHIVE_COUNT_BEFORE > 0 )); then
     msg "PASS: archive data present during primary outage (backup kept flowing)"
 else
     msg "WARNING: no archive data during primary outage — backup may not have been active"
 fi
 
-scenario_pass
+verdict

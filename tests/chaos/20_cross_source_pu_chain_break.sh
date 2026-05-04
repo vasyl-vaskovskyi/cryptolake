@@ -46,6 +46,12 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-assert_gap_present "cross_source_pu_chain_break" "$HOST_DATA_DIR"
+# Assertions — cross-source pu-chain break: real loss expected.
+expect_lifecycle_event   "writer detects MAIN failure"           "MAIN_FAILURE_DETECTED"
+expect_lifecycle_event   "writer fails over to BACKUP"           "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_lifecycle_event   "uncovered gap accepted"                "GAP_ACCEPTED_NO_COVERAGE"
+expect_lifecycle_event   "gap was archived"                      "GAP_ARCHIVED"
+expect_gap_present_check "cross_source_pu_chain_break recorded"  "cross_source_pu_chain_break"
+expect_only_these_gaps_check cross_source_pu_chain_break
 
-scenario_pass
+verdict

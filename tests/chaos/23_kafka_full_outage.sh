@@ -61,6 +61,15 @@ msg "Waiting 120s for kafka_producer_outage gap envelopes to be replayed and arc
 sleep 120
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "kafka_producer_outage" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — full kafka outage: both collectors must enter+exit kafka outage
+# state, and kafka_producer_outage gap must be recorded.
+expect_lifecycle_event   "MAIN collector enters kafka outage"      "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector
+expect_lifecycle_event   "MAIN collector exits kafka outage"       "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector
+expect_lifecycle_event   "BACKUP collector enters kafka outage"    "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector-backup
+expect_lifecycle_event   "BACKUP collector exits kafka outage"     "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector-backup
+expect_lifecycle_event   "gap was archived"                        "GAP_ARCHIVED"
+expect_gap_present_check "kafka_producer_outage gap recorded"      "kafka_producer_outage"
+expect_only_these_gaps_check kafka_producer_outage
+
+verdict

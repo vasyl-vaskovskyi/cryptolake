@@ -694,6 +694,142 @@ assert_only_these_gaps() {
 }
 
 # ---------------------------------------------------------------------------
+# Expectation framework — scenarios declare expected outcomes during the run
+# (lifecycle events that must / must not fire, allowed/forbidden gap reasons)
+# and call `verdict` at the end. verdict() runs every registered expectation,
+# prints an itemized PASS/FAIL checklist, and exits PASS only if all passed.
+#
+# This replaces the previous pattern of "first failed assertion aborts via
+# set -e" — with the framework you see ALL failures in one go.
+#
+# Usage example:
+#     expect_lifecycle_event "writer fails over to backup" "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+#     expect_lifecycle_event "main back online"            "MAIN_RECOVERED"
+#     expect_no_gaps
+#     verdict
+#
+# Args are stored TAB-separated in a parallel string array; verdict() splits
+# them back when calling the check function. Don't put TABs in labels.
+# ---------------------------------------------------------------------------
+_EXPECT_LABELS=()
+_EXPECT_FNS=()
+_EXPECT_ARGS=()
+
+_register_expect() {
+    local label="$1" fn="$2"
+    shift 2
+    local IFS=$'\t'
+    _EXPECT_LABELS+=("$label")
+    _EXPECT_FNS+=("$fn")
+    _EXPECT_ARGS+=("$*")
+}
+
+# expect_lifecycle_event <label> <pattern> [svc=writer]
+expect_lifecycle_event() {
+    local label="${1:?need label}" pattern="${2:?need pattern}" svc="${3:-writer}"
+    _register_expect "$label" _check_lifecycle_event "$pattern" "$svc"
+}
+_check_lifecycle_event() {
+    dc logs --no-color "$2" 2>/dev/null | grep -q "LIFECYCLE.*$1"
+}
+
+# expect_lifecycle_event_count <label> <pattern> <min_count> [svc=writer]
+expect_lifecycle_event_count() {
+    local label="${1:?need label}" pattern="${2:?need pattern}" min="${3:?need min}" svc="${4:-writer}"
+    _register_expect "$label" _check_lifecycle_count "$pattern" "$min" "$svc"
+}
+_check_lifecycle_count() {
+    local count
+    count=$(dc logs --no-color "$3" 2>/dev/null | grep -c "LIFECYCLE.*$1" || true)
+    (( count >= $2 ))
+}
+
+# expect_lifecycle_event_absent <label> <pattern> [svc=writer]
+expect_lifecycle_event_absent() {
+    local label="${1:?need label}" pattern="${2:?need pattern}" svc="${3:-writer}"
+    _register_expect "$label" _check_lifecycle_absent "$pattern" "$svc"
+}
+_check_lifecycle_absent() {
+    ! dc logs --no-color "$2" 2>/dev/null | grep -q "LIFECYCLE.*$1"
+}
+
+# expect_no_gaps [label]
+expect_no_gaps_check() {
+    local label="${1:-no gap envelopes archived}"
+    _register_expect "$label" _check_no_gaps "$HOST_DATA_DIR"
+}
+_check_no_gaps() {
+    [[ -z "$(_list_gap_reasons "$1" 2>/dev/null)" ]]
+}
+
+# expect_only_these_gaps_check <reason>...
+expect_only_these_gaps_check() {
+    local reasons=("$@")
+    local label="archive contains only allowed gap reasons: [${reasons[*]:-<none>}]"
+    _register_expect "$label" _check_only_these_gaps_args "$HOST_DATA_DIR" "${reasons[@]}"
+}
+_check_only_these_gaps_args() {
+    local base_dir="$1"; shift
+    local -a allowed=("$@")
+    local present
+    present=$(_list_gap_reasons "$base_dir" 2>/dev/null | sort -u)
+    while IFS= read -r r; do
+        [[ -z "$r" ]] && continue
+        local ok=false
+        local a
+        for a in "${allowed[@]}"; do [[ "$r" == "$a" ]] && { ok=true; break; }; done
+        $ok || return 1
+    done <<< "$present"
+    return 0
+}
+
+# expect_gap_present_check <label> <reason>
+expect_gap_present_check() {
+    local label="${1:?need label}" reason="${2:?need reason}"
+    _register_expect "$label" _check_gap_present_inline "$HOST_DATA_DIR" "$reason"
+}
+_check_gap_present_inline() {
+    _list_gap_reasons "$1" 2>/dev/null | grep -qx "$2"
+}
+
+# verdict — runs all registered expectations, prints a checklist, then
+# scenario_pass/scenario_fail. Disables ERR trap during the run so a failed
+# expectation doesn't short-circuit the loop.
+verdict() {
+    msg ""
+    msg "============================================================"
+    msg "             SCENARIO ${SCENARIO_NUM:-??} VERDICT"
+    msg "============================================================"
+    trap - ERR
+    local pass=0 fail=0 total=0
+    local i
+    for ((i=0; i < ${#_EXPECT_LABELS[@]}; i++)); do
+        local label="${_EXPECT_LABELS[$i]}"
+        local fn="${_EXPECT_FNS[$i]}"
+        local raw="${_EXPECT_ARGS[$i]}"
+        local IFS=$'\t'
+        local -a argv
+        read -r -a argv <<< "$raw"
+        IFS=$' \t\n'
+        if "$fn" "${argv[@]}"; then
+            msg "  [PASS] ${label}"
+            pass=$((pass + 1))
+        else
+            msg "  [FAIL] ${label}"
+            fail=$((fail + 1))
+        fi
+        total=$((total + 1))
+    done
+    msg "  ---"
+    msg "  Total: ${pass} passed, ${fail} failed (of ${total})"
+    msg "============================================================"
+    if (( fail > 0 )); then
+        scenario_fail "${fail} of ${total} expectation(s) failed"
+    fi
+    scenario_pass
+}
+
+# ---------------------------------------------------------------------------
 # wait_for_gap <reason> <timeout_secs>
 # Polls the live archive until a gap with the given reason appears.
 # ---------------------------------------------------------------------------

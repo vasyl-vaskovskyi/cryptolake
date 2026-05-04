@@ -51,8 +51,13 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Planned restart must not produce any gap — backup covered the window.
-assert_gap_absent "collector_restart" "$HOST_DATA_DIR"
-msg "PASS: planned restart — verify ERRORS=0, no gap"
+# Assertions — planned restart, BACKUP covered, no real loss.
+expect_lifecycle_event        "writer detects MAIN session change"     "WITHIN_SOURCE_SESSION_CHANGE"
+expect_lifecycle_event        "writer fails over to BACKUP"            "WRITER_NOW_ARCHIVING_FROM=BACKUP"
+expect_lifecycle_event        "writer switches back to MAIN"           "WRITER_NOW_ARCHIVING_FROM=MAIN"
+expect_lifecycle_event        "gap parked under coverage"              "GAP_PARKED"
+expect_lifecycle_event        "parked gap suppressed by backup"        "GAP_SUPPRESSED_BY_COVERAGE"
+expect_lifecycle_event_absent "no uncovered gap accepted"              "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived"
 
-scenario_pass
+verdict

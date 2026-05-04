@@ -54,6 +54,12 @@ msg "Waiting 60s for writer recovery after disk freed…"
 sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
-assert_gap_present "disk_full_hold" "$HOST_DATA_DIR"
 
-scenario_pass
+# Assertions — sustained disk-full hold should produce a disk_full_hold gap.
+expect_lifecycle_event   "writer enters disk-full hold"      "WRITER_DISK_FULL_HOLD_ENTERED"
+expect_lifecycle_event   "writer exits disk-full hold"       "WRITER_DISK_FULL_HOLD_EXITED"
+expect_lifecycle_event   "gap was archived"                  "GAP_ARCHIVED"
+expect_gap_present_check "disk_full_hold gap recorded"       "disk_full_hold"
+expect_only_these_gaps_check disk_full_hold
+
+verdict
