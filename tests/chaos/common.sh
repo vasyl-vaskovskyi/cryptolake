@@ -727,7 +727,7 @@ _register_expect() {
 # expect_lifecycle_event <label> <pattern> [svc=writer]
 expect_lifecycle_event() {
     local label="${1:?need label}" pattern="${2:?need pattern}" svc="${3:-writer}"
-    _register_expect "$label" _check_lifecycle_event "$pattern" "$svc"
+    _register_expect "[${pattern}] ${label}" _check_lifecycle_event "$pattern" "$svc"
 }
 _check_lifecycle_event() {
     dc logs --no-color "$2" 2>/dev/null | grep -q "LIFECYCLE.*$1"
@@ -736,7 +736,7 @@ _check_lifecycle_event() {
 # expect_lifecycle_event_count <label> <pattern> <min_count> [svc=writer]
 expect_lifecycle_event_count() {
     local label="${1:?need label}" pattern="${2:?need pattern}" min="${3:?need min}" svc="${4:-writer}"
-    _register_expect "$label" _check_lifecycle_count "$pattern" "$min" "$svc"
+    _register_expect "[${pattern} ×≥${min}] ${label}" _check_lifecycle_count "$pattern" "$min" "$svc"
 }
 _check_lifecycle_count() {
     local count
@@ -747,7 +747,7 @@ _check_lifecycle_count() {
 # expect_lifecycle_event_absent <label> <pattern> [svc=writer]
 expect_lifecycle_event_absent() {
     local label="${1:?need label}" pattern="${2:?need pattern}" svc="${3:-writer}"
-    _register_expect "$label" _check_lifecycle_absent "$pattern" "$svc"
+    _register_expect "[!${pattern}] ${label}" _check_lifecycle_absent "$pattern" "$svc"
 }
 _check_lifecycle_absent() {
     ! dc logs --no-color "$2" 2>/dev/null | grep -q "LIFECYCLE.*$1"
@@ -756,7 +756,7 @@ _check_lifecycle_absent() {
 # expect_no_gaps [label]
 expect_no_gaps_check() {
     local label="${1:-no gap envelopes archived}"
-    _register_expect "$label" _check_no_gaps "$HOST_DATA_DIR"
+    _register_expect "[gaps=∅] ${label}" _check_no_gaps "$HOST_DATA_DIR"
 }
 _check_no_gaps() {
     [[ -z "$(_list_gap_reasons "$1" 2>/dev/null)" ]]
@@ -765,7 +765,7 @@ _check_no_gaps() {
 # expect_only_these_gaps_check <reason>...
 expect_only_these_gaps_check() {
     local reasons=("$@")
-    local label="archive contains only allowed gap reasons: [${reasons[*]:-<none>}]"
+    local label="[gaps⊆{${reasons[*]:-∅}}] archive contains only allowed gap reasons"
     _register_expect "$label" _check_only_these_gaps_args "$HOST_DATA_DIR" "${reasons[@]}"
 }
 _check_only_these_gaps_args() {
@@ -786,7 +786,7 @@ _check_only_these_gaps_args() {
 # expect_gap_present_check <label> <reason>
 expect_gap_present_check() {
     local label="${1:?need label}" reason="${2:?need reason}"
-    _register_expect "$label" _check_gap_present_inline "$HOST_DATA_DIR" "$reason"
+    _register_expect "[gap=${reason}] ${label}" _check_gap_present_inline "$HOST_DATA_DIR" "$reason"
 }
 _check_gap_present_inline() {
     _list_gap_reasons "$1" 2>/dev/null | grep -qx "$2"
