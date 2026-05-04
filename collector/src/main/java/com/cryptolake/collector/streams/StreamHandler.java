@@ -19,4 +19,16 @@ public sealed interface StreamHandler permits SimpleStreamHandler, DepthStreamHa
    * @param sessionSeq monotonic sequence number allocated by the session
    */
   void handle(String symbol, String rawText, Long exchangeTs, long sessionSeq);
+
+  /**
+   * Invoked by {@link com.cryptolake.collector.capture.RawFrameCapture#onDisconnect} when the
+   * underlying WebSocket disconnects. Default is no-op; stateful handlers (e.g. {@link
+   * DepthStreamHandler} with its pu-chain detector and pending-diff buffer) should reset per-symbol
+   * state here so that diffs received on the NEXT connection are buffered until the post-reconnect
+   * snapshot resync establishes a fresh sync point — instead of being validated against the stale
+   * {@code lastU} from the previous connection and emitting a false {@code pu_chain_break} gap.
+   *
+   * @param symbols the symbols active on this connection
+   */
+  default void onDisconnect(java.util.List<String> symbols) {}
 }

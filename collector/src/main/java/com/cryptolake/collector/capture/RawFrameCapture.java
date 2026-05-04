@@ -148,6 +148,17 @@ public final class RawFrameCapture {
    * @param subscribeAckAtNs timestamp when the SUBSCRIBE ack was received; {@code 0} if not known
    */
   public void onDisconnect(String socketName, List<String> symbols, long subscribeAckAtNs) {
+    // Tell each handler to reset per-symbol state so that the next connection's first diffs are
+    // buffered (synced=false) until the post-reconnect snapshot resync establishes a fresh sync
+    // point — without this, the depth detector still has lastU from the closed socket and emits
+    // a spurious pu_chain_break on the very first depth diff after reconnect.
+    for (StreamHandler h : handlers.values()) {
+      try {
+        h.onDisconnect(symbols);
+      } catch (Exception e) {
+        log.warn("handler_on_disconnect_error", "error", e.getMessage());
+      }
+    }
     long now = clock.nowNs();
     for (String symbol : symbols) {
       for (String stream : enabledStreams) {

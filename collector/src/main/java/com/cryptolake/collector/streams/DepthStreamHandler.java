@@ -226,6 +226,13 @@ public final class DepthStreamHandler implements StreamHandler {
     }
   }
 
+  @Override
+  public void onDisconnect(List<String> symbols) {
+    for (String symbol : symbols) {
+      reset(symbol);
+    }
+  }
+
   /** Resets the detector state for a symbol (e.g. on reconnect). */
   public void reset(String symbol) {
     DepthGapDetector detector = detectors.get(symbol);
