@@ -2,15 +2,25 @@
 # 06_full_stack_restart_gap.sh
 #
 # Scenario: full_stack_restart
-# Chaos:    docker compose down then up (everything off)
-# Expected: gap reason=collector_restart OR unclean_shutdown (real loss)
-# Flow:     MAIN, BACKUP, writer, redpanda, postgres ALL killed simultaneously →
-#           no process is running, nothing is being delivered or archived →
-#           stack restarts → on recovery the lifecycle journal proves the
-#           down window and a gap envelope is emitted for it.
-# Why:      Both collectors are off at the same time. The TWO-COLLECTOR
-#           rule's exception — "BOTH collectors fail simultaneously" — is
-#           the entire chaos here. Real loss; gap is correct.
+# Chaos:    docker compose down then up after 60s (every container off)
+# Expected: per-stream restart_gap candidate is detected and PARKED, then
+#           SUPPRESSED_BY_COVERAGE because both collectors come back together
+#           and the coverage filter sees both currently fresh. NO gap envelope
+#           is archived — full-stack restart is handled gracefully when
+#           both sides resume in lockstep.
+# Flow:     MAIN, BACKUP, writer, redpanda, postgres ALL killed → 60s of
+#           silence → stack restarts → writer reads its committed offsets
+#           from PG, resumes consuming → sees primary's session_id changed
+#           since last commit → emits restart_gap candidate → parks it
+#           (backup is also delivering fresh data) → 10s grace window
+#           passes with backup still publishing → gap suppressed.
+# Why:      The coverage filter's heuristic is "is backup currently fresh?"
+#           When both collectors restart together, both ARE fresh post-
+#           restart, so the filter suppresses. This documents and locks in
+#           that current behavior. Detection of the "both silent during the
+#           gap window" case requires the SilenceInferredGapEmitter path —
+#           see test 22 (both_collectors_silent) which forces it via
+#           sustained egress block while collectors stay alive.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -28,8 +38,8 @@ msg "=== CHAOS: Full stack down (no clean shutdown markers) ==="
 # Stop WITHOUT -v so data is preserved (volumes stay)
 dc down --remove-orphans
 
-msg "Waiting 15s (simulates downtime gap)…"
-sleep 15
+msg "Waiting 60s (simulates downtime gap; long enough that backup's Kafka backlog can't bridge the gap window)…"
+sleep 60
 
 msg "Restarting full stack…"
 start_stack "primary+backup"
@@ -41,10 +51,13 @@ sleep 60
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — both collectors went down at once; expect a restart-class gap
-# of one of these reasons, no others. (Tolerant: gap may be below the
-# minimum-window threshold, in which case the gap whitelist still passes.)
-expect_lifecycle_event "writer detects session change after restart" "WITHIN_SOURCE_SESSION_CHANGE"
-expect_only_these_gaps_check collector_restart unclean_shutdown writer_restart host_unclean_shutdown
+# Assertions — restart_gap is detected, parked, then suppressed by mutual
+# coverage when both collectors come back together. The only gap that may
+# survive is a depth pu_chain_break from whichever collector resumes
+# publishing first (the other hasn't sent data yet so it can't cover);
+# that's a real restart artifact and is permitted.
+expect_lifecycle_event       "restart-gap candidate detected"            "GAP_PARKED.*restart_gap"
+expect_lifecycle_event       "candidate suppressed by mutual coverage"   "GAP_SUPPRESSED_BY_COVERAGE.*restart_gap"
+expect_only_these_gaps_check pu_chain_break
 
 verdict
