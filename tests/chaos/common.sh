@@ -1009,4 +1009,68 @@ scenario_fail() {
     exit 1
 }
 
+# ---------------------------------------------------------------------------
+# scenario_skip <reason>
+# Exits 0 with a yellow SKIP banner and a "RESULT: SKIP" token. The runner
+# counts this as PASS (since exit 0) but the banner + token make it
+# unmistakable in logs that the test did not actually exercise the chaos.
+# Use for scenarios that need infrastructure not present in the current
+# environment (e.g., a dedicated small filesystem at HOST_DATA_DIR for
+# disk-full tests).
+# ---------------------------------------------------------------------------
+_scenario_color_yellow() {
+    if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then printf '\033[1;30;43m'; fi
+}
+scenario_skip() {
+    local nn="${SCENARIO_NUM:-??}"
+    local reason="${*:-unspecified}"
+    local on off bar pad body
+    on="$(_scenario_color_yellow)"
+    off="$(_scenario_color off)"
+    bar="##########################################################"
+    pad="#                                                        #"
+    body=$(printf "#   %-50s   #" "SCENARIO ${nn}: SKIP")
+    {
+        echo ""
+        printf '%s%s%s\n' "$on" "$bar" "$off"
+        printf '%s%s%s\n' "$on" "$pad" "$off"
+        printf '%s%s%s\n' "$on" "$body" "$off"
+        printf '%s%s%s\n' "$on" "$pad" "$off"
+        printf '%s%s%s\n' "$on" "$bar" "$off"
+        echo ""
+    } >&2
+    msg "Reason: ${reason}"
+    msg "RESULT: SKIP [scenario ${nn}] — ${reason}"
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# safe_disk_fill_or_skip <dir>
+# Disk-fill scenarios call dd against a host directory; if that directory
+# lives on the host's main filesystem (typically /tmp on macOS APFS),
+# filling it to 99% writes hundreds of GB to the host disk and can crash
+# Docker or the OS. To make these tests safe-by-default, this helper
+# refuses to proceed unless either:
+#   1. The targeted filesystem has < 5 GiB available (so it's clearly a
+#      dedicated small fs — tmpfs, loopback, etc.), OR
+#   2. The user explicitly opts in via CRYPTOLAKE_CHAOS_DANGEROUS_DISK=1.
+# Otherwise it calls scenario_skip with instructions.
+# ---------------------------------------------------------------------------
+safe_disk_fill_or_skip() {
+    local dir="${1:-$HOST_DATA_DIR}"
+    [[ -d "$dir" ]] || mkdir -p "$dir"
+    local avail_kb
+    avail_kb=$(df -k "$dir" | awk 'NR==2{print $4}')
+    local avail_gb=$(( avail_kb / 1024 / 1024 ))
+    if [[ "${CRYPTOLAKE_CHAOS_DANGEROUS_DISK:-0}" == "1" ]]; then
+        msg "safe_disk_fill_or_skip: CRYPTOLAKE_CHAOS_DANGEROUS_DISK=1, proceeding (avail=${avail_gb}G)"
+        return 0
+    fi
+    if (( avail_kb < 5 * 1024 * 1024 )); then
+        msg "safe_disk_fill_or_skip: avail=${avail_kb}K < 5GiB, OK to fill (dedicated small fs)"
+        return 0
+    fi
+    scenario_skip "fill_disk would target ${dir} which has ${avail_gb} GiB free — that is the host's main filesystem and filling it would write hundreds of GB and likely crash Docker. To run this test safely, mount a small filesystem (e.g., tmpfs or loopback ≤2 GiB) at ${dir} BEFORE invoking the test, or set CRYPTOLAKE_CHAOS_DANGEROUS_DISK=1 to override (NOT recommended on dev machines)."
+}
+
 msg "common.sh loaded (REPO_ROOT=${REPO_ROOT})"

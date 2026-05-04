@@ -20,13 +20,25 @@
 #           rate alerting, not via a gap envelope, since chaos-testing it
 #           reliably is impractical.)
 #
-# NOTE: This scenario fills /tmp which is typically tmpfs and may affect the
-# host. The teardown_stack trap calls free_disk to clean up even on failure.
+# NOTE: This scenario writes real data with `dd if=/dev/zero` to HOST_DATA_DIR
+# until the underlying filesystem is 99% full. On a typical dev machine
+# /tmp is on the host disk (APFS on macOS), so running this naively would
+# fill hundreds of GB and likely crash Docker. The `safe_disk_fill_or_skip`
+# guard below SKIPs the scenario unless HOST_DATA_DIR is on a small
+# dedicated filesystem (tmpfs / loopback ≤ ~2 GiB) or
+# CRYPTOLAKE_CHAOS_DANGEROUS_DISK=1 is set explicitly. The teardown trap
+# calls free_disk to clean the filler file even on failure.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
 init_scenario "04" "primary+backup"
+
+# Disk-fill is safe only on a small dedicated filesystem at HOST_DATA_DIR.
+# On a regular dev machine /tmp lives on the host disk; filling it to 99%
+# can write hundreds of GB and crash Docker. The guard skips this scenario
+# unless the env is configured for it (or the operator opted in).
+safe_disk_fill_or_skip "$HOST_DATA_DIR"
 
 start_stack "primary+backup"
 wait_healthy 150
