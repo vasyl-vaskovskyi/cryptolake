@@ -801,6 +801,15 @@ verdict() {
     msg "             SCENARIO ${SCENARIO_NUM:-??} VERDICT"
     msg "============================================================"
     trap - ERR
+    # Disable pipefail for the check loop. Many checks pipe `dc logs … | grep -q`,
+    # and `grep -q` exits as soon as it finds a match. That makes the upstream
+    # `dc logs` get SIGPIPE → non-zero exit → pipefail flips the pipeline to
+    # FAIL even though the event IS present. The exact symptom is "earlier
+    # events fail / later events pass" depending on which side of the pipe
+    # finished first. Switch to "any-success-is-success" semantics for checks.
+    local _saved_pipefail=0
+    [[ -o pipefail ]] && _saved_pipefail=1
+    set +o pipefail
     local pass=0 fail=0 total=0
     local i
     for ((i=0; i < ${#_EXPECT_LABELS[@]}; i++)); do
@@ -823,6 +832,7 @@ verdict() {
     msg "  ---"
     msg "  Total: ${pass} passed, ${fail} failed (of ${total})"
     msg "============================================================"
+    (( _saved_pipefail )) && set -o pipefail
     if (( fail > 0 )); then
         scenario_fail "${fail} of ${total} expectation(s) failed"
     fi
