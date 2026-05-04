@@ -91,7 +91,9 @@ public final class WebSocketSupervisor {
         globalStop,
         virtualExec,
         exchange,
-        30L); // production default: 30-second ping interval
+        20L); // production default: 20-second ping interval (faster than the observed
+    // ~60s upstream/NAT idle close so we detect dead sockets within one ping cycle
+    // instead of waiting for the upstream cleanup; was 30s).
   }
 
   /** Package-private constructor for tests — allows injecting a custom ping interval. */
@@ -262,13 +264,22 @@ public final class WebSocketSupervisor {
           url);
     }
 
-    // Start FirstFrameWatchdog
+    // Start FirstFrameWatchdog (one-shot: ensures every subscription gets >=1 frame post-connect)
     Set<String> expectedTuples = buildExpectedTuples();
     CountDownLatch watchdogStop = new CountDownLatch(1);
     FirstFrameWatchdog watchdog = new FirstFrameWatchdog(capture, watchdogStop);
     Thread.ofVirtual()
         .name("ws-watchdog")
         .start(() -> watchdog.watch(ws, expectedTuples, WATCHDOG_DEADLINE));
+
+    // Start OngoingLivenessWatchdog — runs for the life of the connection, forces reconnect if
+    // any non-exempt subscription goes silent past its per-stream threshold (catches Binance
+    // fstream half-open subscriptions that pass first-frame but stop delivering soon after).
+    CountDownLatch ongoingStop = new CountDownLatch(1);
+    OngoingLivenessWatchdog ongoingWatchdog = new OngoingLivenessWatchdog(capture, ongoingStop);
+    Thread.ofVirtual()
+        .name("ws-ongoing-watchdog")
+        .start(() -> ongoingWatchdog.watch(ws, expectedTuples));
 
     // Start ping loop
     Thread.ofVirtual().name("ws-ping").start(() -> pingLoop(ws, disconnectLatch));
@@ -280,6 +291,7 @@ public final class WebSocketSupervisor {
       Thread.currentThread().interrupt();
     } finally {
       watchdogStop.countDown();
+      ongoingStop.countDown();
     }
   }
 
