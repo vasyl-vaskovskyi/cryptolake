@@ -99,7 +99,7 @@ still removes its containers and volumes.
      flaky for the same OI / depth_snapshot poll-cadence reasons test 01
      handles. Test 01 is the canonical version. -->
 | 17 | kafka_producer_outage | Network-isolate primary collector for 60s | NO uncovered gap; writer's silence-based failover takes over (sustained-outage path is test 23); only `collector_restart` permitted on polled streams |
-| 18 | kafka_consumer_outage | Block writer←redpanda for 60s | `kafka_consumer_outage` |
+| 18 | kafka_consumer_outage | Network-isolate writer from redpanda for 60s | NO gap; consumer catches up from last committed offset (Kafka retention 48h covers); `KafkaConsumerOutageDetector` exists but is dead code in current build |
 | 19 | kafka_offset_reset | Delete + recreate topic during writer run | `kafka_offset_reset` |
 | 20 | cross_source_pu_chain_break | Kill primary at depth u=N; backup has gap | `cross_source_pu_chain_break` |
 | 21 | disk_full_hold | Fill disk; verify hold + recovery | `disk_full_hold` |

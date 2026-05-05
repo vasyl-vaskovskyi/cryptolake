@@ -2,18 +2,22 @@
 # 18_kafka_consumer_outage.sh
 #
 # Scenario: writer_kafka_consumer_outage
-# Chaos:    iptables-block writer↔redpanda for 60s; then unblock
-# Expected: gap reason=kafka_consumer_outage (real loss)
-# Flow:     MAIN+BACKUP both healthy and publishing to redpanda → writer's
-#           consumer link to redpanda blocked → records accumulate on
-#           Kafka topics but writer reads NOTHING → archive frozen for
-#           60s → unblocked, writer resumes consuming from last committed
-#           offset → writer emits a gap envelope for the offsets that
-#           Kafka retention may purge before it caught up (or for the
-#           down window if the consumer outage controller flags it).
-# Why:      The writer is the single consumer. While its link is blocked,
-#           neither MAIN's nor BACKUP's records reach the archive.
-#           Writer-side failure is real loss under the TWO-COLLECTOR rule.
+# Chaos:    Network-isolate writer from redpanda for 60s; then restore
+# Expected: NO gap. Writer's consumer reconnects from its last committed
+#           offset; records are still in Kafka (48h retention) and just
+#           catch up. Archive resumes cleanly.
+# Flow:     MAIN+BACKUP both healthy and publishing → writer isolated →
+#           consumer FETCH cancelled, heartbeat fails → writer can't
+#           archive new records → 60s later isolation lifted → consumer
+#           rejoins group, resumes from committed offset → catches up
+#           on backlog.
+# Why:      Kafka retention (48h) covers any consumer outage well below
+#           that horizon. KafkaConsumerOutageDetector exists in the
+#           codebase but is NOT instantiated in writer/Main.java
+#           (dead code), so the kafka_consumer_outage gap reason is
+#           never emitted in the current build — what matters is that
+#           the writer survives the outage and doesn't archive synthetic
+#           gaps for catch-up windows.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -43,9 +47,12 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — writer is the single consumer; outage means real loss.
-expect_lifecycle_event       "gap was archived"                      "GAP_ARCHIVED"
-expect_gap_present_check     "kafka_consumer_outage gap recorded"    "kafka_consumer_outage"
-expect_only_these_gaps_check kafka_consumer_outage
+# Assertions — writer survives a 60s isolation; consumer catches up from
+# committed offset; no gap is archived because Kafka retention covers
+# the catch-up window. KafkaConsumerOutageDetector is dead code in the
+# current writer wiring so its gap reason cannot fire here.
+expect_log_event              "writer's consumer disconnected from broker"  "Cancelled in-flight FETCH request"
+expect_lifecycle_event_absent "no uncovered gap accepted on consumer outage" "GAP_ACCEPTED_NO_COVERAGE"
+expect_no_gaps_check          "no gap envelopes archived (Kafka retention covered catch-up)"
 
 verdict
