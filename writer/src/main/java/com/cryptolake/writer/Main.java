@@ -34,6 +34,7 @@ import com.cryptolake.writer.io.ZstdFrameCompressor;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import com.cryptolake.writer.recovery.LastEnvelopeReader;
 import com.cryptolake.writer.recovery.SealedFileIndex;
+import com.cryptolake.writer.recovery.ZstdTailScrubber;
 import com.cryptolake.writer.rotate.FileRotator;
 import com.cryptolake.writer.state.ComponentRuntimeState;
 import com.cryptolake.writer.state.CryptoLakeStateException;
@@ -327,6 +328,21 @@ public final class Main {
       // cannot reach (design §3.4; Tier 1 sidecar invariant).
       rotator.writeMissingSidecars();
       log.info("startup_sidecar_repair_complete");
+
+      // ── Startup zstd-tail scrub ──────────────────────────────────────────────────────────────
+      // If a previous unexpected exit (SIGKILL, OOM, segfault, host crash) left a torn zstd
+      // frame at the tail of an archive file, ZstdTailScrubber finds the last valid frame
+      // boundary and truncates beyond it (recomputing the sidecar). This complements
+      // DurableAppender.appendAndFsync's IOException-truncate path — which only runs when the
+      // JVM lives long enough to handle the exception. Kernel-level kills bypass that path;
+      // this scrubber heals the leftover damage on the next startup.
+      int scrubHealed;
+      try {
+        scrubHealed = ZstdTailScrubber.scrub(java.nio.file.Path.of(baseDir));
+      } catch (java.io.IOException scrubErr) {
+        throw new java.io.UncheckedIOException("startup_tail_scrub_failed", scrubErr);
+      }
+      log.info("startup_tail_scrub_complete", "healed_files", scrubHealed);
 
       // ── HourRotationScheduler ────────────────────────────────────────────────────────────────
       HourRotationScheduler hourScheduler =
