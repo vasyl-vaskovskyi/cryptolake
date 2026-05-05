@@ -2,7 +2,8 @@
 # 02_fill_disk.sh
 #
 # Scenario: writer_disk_full_brief
-# Chaos:    Fill HOST_DATA_DIR to 99%; hold ~120s; free disk
+# Chaos:    Fill the writer's /data filesystem (a 300 MiB tmpfs served by
+#           the chaosfs NFS sidecar) to ~96%; hold ~120s; free disk.
 # Expected: NO gap (writer recovers from Kafka after disk freed)
 # Flow:     MAIN+BACKUP both delivering normally → writer's appendAndFsync
 #           hits IOException on disk-full → writeErrors metric increments,
@@ -20,35 +21,32 @@
 #           rate alerting, not via a gap envelope, since chaos-testing it
 #           reliably is impractical.)
 #
-# NOTE: This scenario writes real data with `dd if=/dev/zero` to HOST_DATA_DIR
-# until the underlying filesystem is 99% full. On a typical dev machine
-# /tmp is on the host disk (APFS on macOS), so running this naively would
-# fill hundreds of GB and likely crash Docker. The `safe_disk_fill_or_skip`
-# guard below SKIPs the scenario unless HOST_DATA_DIR is on a small
-# dedicated filesystem (tmpfs / loopback ≤ ~2 GiB) or
-# CRYPTOLAKE_CHAOS_DANGEROUS_DISK=1 is set explicitly. The teardown trap
-# calls free_disk to clean the filler file even on failure.
+# Implementation: This scenario uses a sidecar NFSv4 server (`chaosfs`)
+# whose backing store is a 300 MiB tmpfs. The writer mounts /data over NFS
+# from chaosfs. Filling 290 MiB of the tmpfs leaves ~10 MiB headroom and
+# triggers ENOSPC on the writer's next fsync without touching the host
+# filesystem. After recovery, the archive is materialized from chaosfs
+# back to HOST_DATA_DIR so the host-side verify CLI can read it.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
+# Opt in to the chaosfs sidecar via the generic CHAOS_EXTRA_* hooks.
+# init_scenario reads CHAOS_EXTRA_COMPOSE_FILES; start_stack reads CHAOS_EXTRA_SERVICES.
+export CHAOS_EXTRA_COMPOSE_FILES="docker-compose.chaos-02-nfs.yml"
+export CHAOS_EXTRA_SERVICES="chaosfs"
+
 init_scenario "02" "primary+backup"
 
-# Disk-fill is safe only on a small dedicated filesystem at HOST_DATA_DIR.
-# On a regular dev machine /tmp lives on the host disk; filling it to 99%
-# can write hundreds of GB and crash Docker. The guard skips this scenario
-# unless the env is configured for it (or the operator opted in).
-safe_disk_fill_or_skip "$HOST_DATA_DIR"
-
 start_stack "primary+backup"
-wait_healthy 150
+wait_healthy 180
 
 msg "Warm-up 60s…"
 warm_up 60
 wait_data_flowing "bookticker" 30
 
-msg "=== CHAOS: Filling HOST_DATA_DIR to 99% ==="
-fill_disk "$HOST_DATA_DIR" 99
+msg "=== CHAOS: Filling chaosfs tmpfs (290 MiB of 300 MiB cap) ==="
+fill_via_chaosfs 290
 
 # Hold the disk-full state long enough for the writer to attempt several
 # flush cycles and accumulate writeErrors. Default flush interval is 5s,
@@ -56,8 +54,8 @@ fill_disk "$HOST_DATA_DIR" 99
 msg "Holding disk-full state for 120s (writer's flushAndCommit will fail repeatedly)…"
 sleep 120
 
-msg "Freeing disk…"
-free_disk
+msg "Freeing chaosfs tmpfs…"
+free_via_chaosfs
 
 # After the disk is freed, the writer's next flushAndCommit succeeds. The
 # Kafka consumer position is unchanged (no commits happened during the
@@ -65,6 +63,10 @@ free_disk
 # from BOTH topics. They get archived now, completing the gap.
 msg "Waiting 90s for writer recovery (re-poll uncommitted offsets, archive backlog)…"
 sleep 90
+
+# The archive lives inside chaosfs:/exports (the writer's NFS-mounted /data).
+# Copy it to HOST_DATA_DIR so the host-side verify CLI can see it.
+materialize_archive_to_host
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
