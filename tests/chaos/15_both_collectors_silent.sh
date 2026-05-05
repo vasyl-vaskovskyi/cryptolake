@@ -62,6 +62,9 @@ expect_lifecycle_event_absent "no failover to BACKUP (both silent, no source pre
 # candidates without a session-change/chain-break trigger, so their
 # silent loss is invisible until SilenceInferredGapEmitter is wired.
 expect_lifecycle_event       "no-coverage gap accepted on polled streams" "GAP_ACCEPTED_NO_COVERAGE"
-expect_only_these_gaps_check snapshot_poll_miss collector_restart
+# pu_chain_break may legitimately fire on depth when both egress paths
+# are blocked: the in-flight diff sequence is interrupted on both sides
+# and on resume the snapshot replay can't reconstruct the chain.
+expect_only_these_gaps_check snapshot_poll_miss collector_restart pu_chain_break
 
 verdict
