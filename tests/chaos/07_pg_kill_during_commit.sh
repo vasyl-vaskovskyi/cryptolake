@@ -37,20 +37,26 @@ msg "Warm-up 60s…"
 warm_up 60
 wait_data_flowing "bookticker" 30
 
-msg "=== CHAOS: Pausing postgres (writer enters pg_outage_hold) ==="
-dc pause postgres
+msg "=== CHAOS: Killing postgres container (TCP-RST connections so JDBC fails immediately) ==="
+# `dc pause` (SIGSTOP) leaves TCP sockets open and JDBC blocks rather than
+# failing — recordPgFailure() never fires and the threshold is never reached.
+# `dc kill` actually terminates the postgres process and the kernel RSTs all
+# open connections; the writer's next saveStatesAndCheckpoints call throws
+# immediately (Connection reset by peer / Connection refused).
+dc kill postgres
 
-# PgOutageHoldController triggers after 3 consecutive failures (~90s at 30s
-# retry interval). Hold for 120s so the third failure is well past the
-# threshold and WRITER_PG_OUTAGE_HOLD_ENTERED fires deterministically.
-msg "Holding postgres paused for 120s (must exceed 3-failure threshold)…"
+# PgOutageHoldController triggers after 3 consecutive failures. With 30 s
+# flush interval, 180 s of outage = 6 flush attempts = well past the
+# 3-failure threshold so WRITER_PG_OUTAGE_HOLD_ENTERED fires deterministically.
+msg "Holding postgres killed for 180s (must exceed 3-failure threshold)…"
+sleep 180
+
+msg "Restarting postgres (writer exits hold, resumes commits)…"
+dc start postgres
+wait_healthy 60
+
+msg "Waiting 120s for PG recovery and archive flush to complete…"
 sleep 120
-
-msg "Unpausing postgres (writer exits hold, resumes commits)…"
-dc unpause postgres
-
-msg "Waiting 90s for PG recovery and archive flush to complete…"
-sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
