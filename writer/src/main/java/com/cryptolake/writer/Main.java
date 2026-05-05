@@ -293,17 +293,11 @@ public final class Main {
               Clocks.systemNanoClock(), diskProbe, gapEmitter, "binance", diskSymbolStreams);
 
       // ── PgOutageHoldController ────────────────────────────────────────────────────────────────
-      // Probe: empty-list saveStatesAndCheckpoints round-trip. Cheap PG ping; throws if PG is
-      // unreachable, in which case we stay in hold (conservative).
-      java.util.function.BooleanSupplier pgProbe =
-          () -> {
-            try {
-              stateManager.saveStatesAndCheckpoints(java.util.List.of(), java.util.List.of());
-              return true;
-            } catch (Exception probeErr) {
-              return false;
-            }
-          };
+      // Probe: cheap PG reachability check via Connection.isValid(5). Lighter-weight than the
+      // earlier draft which used saveStatesAndCheckpoints (that path retries 3× with backoff
+      // inside StateManager.retry, generating 3 WARN log lines per probe failure). The
+      // ping method swallows SQLException internally and returns false on any unhealthy state.
+      java.util.function.BooleanSupplier pgProbe = stateManager::ping;
       PgOutageHoldController pgHold =
           PgOutageHoldController.of(
               Clocks.systemNanoClock(), pgProbe, gapEmitter, "binance", pgSymbolStreams);
