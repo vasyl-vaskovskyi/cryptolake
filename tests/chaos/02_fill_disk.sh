@@ -23,12 +23,16 @@
 #
 # Implementation: This scenario uses a sidecar NFSv4 server (`chaosfs`)
 # whose backing store is a 300 MiB tmpfs. The writer mounts /data over NFS
-# from chaosfs. Filling 290 MiB of the tmpfs leaves ~10 MiB headroom and
-# triggers ENOSPC on the writer's next fsync without touching the host
-# filesystem. After recovery, the writer is gracefully stopped (its
-# shutdown hook performs a final flushAndCommit) and the archive is
-# materialized from chaosfs back to HOST_DATA_DIR so the host-side verify
-# CLI can read a stable, fully-flushed snapshot.
+# from chaosfs. We deliberately OVERFILL the tmpfs (request 320 MiB into
+# a 300 MiB cap) so dd hits ENOSPC partway through and the resulting
+# state is 100% Used with zero free bytes. The writer's next fsync via
+# NFS then gets ENOSPC immediately — leaving even a few MiB of headroom
+# fails the test because per-record flushes (kilobyte-sized) keep fitting
+# until the headroom is depleted, which can take longer than the hold
+# window. After recovery, the writer is gracefully stopped (its shutdown
+# hook performs a final flushAndCommit) and the archive is materialized
+# from chaosfs back to HOST_DATA_DIR so the host-side verify CLI can read
+# a stable, fully-flushed snapshot.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -47,8 +51,16 @@ msg "Warm-up 60s…"
 warm_up 60
 wait_data_flowing_chaosfs "bookticker" 60
 
-msg "=== CHAOS: Filling chaosfs tmpfs (290 MiB of 300 MiB cap) ==="
-fill_via_chaosfs 290
+# Overshoot the 300 MiB tmpfs cap by ~20 MiB. dd exits non-zero at
+# ENOSPC partway through — that's the success path inside fill_via_chaosfs,
+# whose post-condition is "tmpfs is now ≥95% Used". The overshoot
+# guarantees the resulting state is 100% Used (zero free bytes), so the
+# writer's NEXT fsync over NFS receives ENOSPC immediately rather than
+# fitting into a few MiB of remaining headroom (which is what happened
+# in run 2: 290 MiB filler left 8.8 MiB headroom and per-record flushes
+# kilobyte-sized just kept fitting for the entire hold window).
+msg "=== CHAOS: Filling chaosfs tmpfs to 100% (overshooting 300 MiB cap) ==="
+fill_via_chaosfs 320
 
 # Hold the disk-full state long enough for the writer to attempt several
 # flush cycles and accumulate writeErrors. Production flush interval is
