@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Smoke test for {@link BackupTailConsumer} — verifies the wrapper subscribes the underlying
- * consumer on {@code start()} and returns empty {@link ConsumerRecords} from {@code poll()} when
- * no records are available.
+ * consumer on {@code start()} and returns empty {@link ConsumerRecords} from {@code poll()} when no
+ * records are available.
  */
 class BackupTailConsumerTest {
 

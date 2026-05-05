@@ -44,8 +44,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * Isolation-boundary test for the continuous backup-topic tail (plan
- * {@code 2026-05-03-continuous-dual-source-tailing.md}, Task 3 — code-review Issue #1).
+ * Isolation-boundary test for the continuous backup-topic tail (plan {@code
+ * 2026-05-03-continuous-dual-source-tailing.md}, Task 3 — code-review Issue #1).
  *
  * <p>The tail is best-effort liveness; primary archiving MUST NOT be coupled to its health. A
  * {@link KafkaException}, broker disconnect, or auth failure on the tail must not stop the writer
@@ -65,7 +65,8 @@ class KafkaConsumerLoopBackupTailIsolationTest {
 
   @Test
   @Timeout(10)
-  void backupPollThrows_primaryStillProcessed_counterIncrements_loopKeepsRunning() throws Exception {
+  void backupPollThrows_primaryStillProcessed_counterIncrements_loopKeepsRunning()
+      throws Exception {
     // ── Primary: deliver one record on the first poll, then empty forever ────────────────────
     @SuppressWarnings("unchecked")
     KafkaConsumer<byte[], byte[]> primaryKafka = mock(KafkaConsumer.class);
@@ -169,9 +170,9 @@ class KafkaConsumerLoopBackupTailIsolationTest {
   }
 
   /**
-   * Minimal {@link Consumer} stub that throws {@link KafkaException} on the first poll and
-   * returns empty thereafter. All other methods are no-ops or return reasonable defaults — the
-   * test only exercises subscribe(List), poll(Duration), and close(Duration).
+   * Minimal {@link Consumer} stub that throws {@link KafkaException} on the first poll and returns
+   * empty thereafter. All other methods are no-ops or return reasonable defaults — the test only
+   * exercises subscribe(List), poll(Duration), and close(Duration).
    */
   private static final class ThrowingFirstPollConsumer implements Consumer<byte[], byte[]> {
     private final AtomicInteger pollCount;

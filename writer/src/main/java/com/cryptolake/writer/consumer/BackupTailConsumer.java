@@ -8,11 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Long-lived tail consumer for the backup topic prefix. Owns its own KafkaConsumer with a
- * distinct group.id and {@code auto.offset.reset=latest}. Does NOT commit offsets. Used purely
- * to feed liveness signals into {@link com.cryptolake.writer.failover.CoverageFilter} so the
- * coverage decision has up-to-date data for the backup source even when the writer is currently
- * archiving from primary.
+ * Long-lived tail consumer for the backup topic prefix. Owns its own KafkaConsumer with a distinct
+ * group.id and {@code auto.offset.reset=latest}. Does NOT commit offsets. Used purely to feed
+ * liveness signals into {@link com.cryptolake.writer.failover.CoverageFilter} so the coverage
+ * decision has up-to-date data for the backup source even when the writer is currently archiving
+ * from primary.
  */
 public final class BackupTailConsumer {
 

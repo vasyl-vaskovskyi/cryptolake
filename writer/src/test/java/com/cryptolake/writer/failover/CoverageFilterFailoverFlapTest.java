@@ -12,29 +12,28 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 
 /**
- * Regression test for chaos test 04 (writer disk-full brief) — the false-positive
- * {@code pu_chain_break} gap caused by the writer's backup consumer NOT polling when failover was
+ * Regression test for chaos test 04 (writer disk-full brief) — the false-positive {@code
+ * pu_chain_break} gap caused by the writer's backup consumer NOT polling when failover was
  * inactive.
  *
- * <p>Before the dual-source-tailing fix, the writer only consumed the backup topic on demand
- * during failover, so {@code lastDataTsByStream[(stream, "backup")]} was {@code null} when a
- * primary-emitted {@code pu_chain_break} arrived shortly after a brief failover flap. The
- * coverage check then concluded "backup did not cover" → archived → false positive.
+ * <p>Before the dual-source-tailing fix, the writer only consumed the backup topic on demand during
+ * failover, so {@code lastDataTsByStream[(stream, "backup")]} was {@code null} when a
+ * primary-emitted {@code pu_chain_break} arrived shortly after a brief failover flap. The coverage
+ * check then concluded "backup did not cover" → archived → false positive.
  *
- * <p>After Tasks 3 and 4 of the {@code continuous-dual-source-tailing} plan, the writer tails
- * the backup topic continuously, so {@code lastDataTsByStream} stays fresh during a flap and
- * the gap correctly parks → suppresses on grace expiry.
+ * <p>After Tasks 3 and 4 of the {@code continuous-dual-source-tailing} plan, the writer tails the
+ * backup topic continuously, so {@code lastDataTsByStream} stays fresh during a flap and the gap
+ * correctly parks → suppresses on grace expiry.
  *
  * <p>This test reproduces the SYMPTOM logically at the {@link CoverageFilter} level (no chaos
- * infra, no Kafka): backup data arrives throughout the flap window, primary emits a
- * {@code pu_chain_break} after the flap, the gap is parked, grace elapses, and
- * {@link CoverageFilter#sweepExpired()} returns nothing because backup's per-(stream, source)
- * coverage timestamp covers the gap window.
+ * infra, no Kafka): backup data arrives throughout the flap window, primary emits a {@code
+ * pu_chain_break} after the flap, the gap is parked, grace elapses, and {@link
+ * CoverageFilter#sweepExpired()} returns nothing because backup's per-(stream, source) coverage
+ * timestamp covers the gap window.
  */
 class CoverageFilterFailoverFlapTest {
 
-  private DataEnvelope makeData(
-      String exchange, String symbol, String stream, long receivedAtNs) {
+  private DataEnvelope makeData(String exchange, String symbol, String stream, long receivedAtNs) {
     return new DataEnvelope(
         1,
         "data",
@@ -124,8 +123,7 @@ class CoverageFilterFailoverFlapTest {
         .as(
             "backup delivered depth at t=%dns (during the flap window starting at t=%dns) — "
                 + "coverage applies, the gap MUST be parked, not archived",
-            backupLastDepthTs,
-            flapStartNs)
+            backupLastDepthTs, flapStartNs)
         .isFalse();
     assertThat(coverage.pendingSize()).isEqualTo(1);
 
@@ -140,8 +138,7 @@ class CoverageFilterFailoverFlapTest {
             "with continuous dual-source tailing, backup's per-stream last-data ts (%dns) "
                 + "covers the gap window (gap_start=%dns) — sweepExpired must return empty "
                 + "(this is the chaos-04 regression assertion)",
-            backupLastDepthTs,
-            flapStartNs)
+            backupLastDepthTs, flapStartNs)
         .isEmpty();
     assertThat(coverage.pendingSize()).isEqualTo(0);
   }

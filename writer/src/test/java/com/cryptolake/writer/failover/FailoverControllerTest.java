@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>After plan 2026-05-03 (Task 4) the controller is state-only — it no longer owns a backup
  * consumer, so the previous {@code pollBackup}/{@code cleanup} consumer-ownership tests were
- * removed; backup-topic delivery is now covered by {@code KafkaConsumerLoopDualPollTest} and
- * {@code KafkaConsumerLoopBackupTailIsolationTest}.
+ * removed; backup-topic delivery is now covered by {@code KafkaConsumerLoopDualPollTest} and {@code
+ * KafkaConsumerLoopBackupTailIsolationTest}.
  */
 class FailoverControllerTest {
 
@@ -34,11 +34,7 @@ class FailoverControllerTest {
     fakeClock = new AtomicLong(1_000_000_000_000L);
     controller =
         new FailoverController(
-            "backup.",
-            Duration.ofSeconds(5),
-            Duration.ofSeconds(10),
-            metrics,
-            fakeClock::get);
+            "backup.", Duration.ofSeconds(5), Duration.ofSeconds(10), metrics, fakeClock::get);
   }
 
   // ports: design §4.6 — not active at startup

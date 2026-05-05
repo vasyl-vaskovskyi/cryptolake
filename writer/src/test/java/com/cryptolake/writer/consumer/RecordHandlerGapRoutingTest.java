@@ -48,11 +48,7 @@ class RecordHandlerGapRoutingTest {
     // Minimal FailoverController — only resetSilenceTimer() is called in the gap path.
     failover =
         new FailoverController(
-            "backup_",
-            Duration.ofSeconds(30),
-            Duration.ofSeconds(10),
-            metrics,
-            clock);
+            "backup_", Duration.ofSeconds(30), Duration.ofSeconds(10), metrics, clock);
 
     handler =
         new RecordHandler(

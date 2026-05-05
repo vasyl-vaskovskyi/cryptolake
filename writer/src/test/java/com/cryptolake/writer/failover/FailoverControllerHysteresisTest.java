@@ -38,12 +38,7 @@ class FailoverControllerHysteresisTest {
     clock = fakeClockNs::get;
     metrics = new WriterMetrics(new PrometheusMeterRegistry(PrometheusConfig.DEFAULT));
     controller =
-        new FailoverController(
-            "backup.",
-            SILENCE_TIMEOUT,
-            RECOVERY_WINDOW,
-            metrics,
-            clock);
+        new FailoverController("backup.", SILENCE_TIMEOUT, RECOVERY_WINDOW, metrics, clock);
   }
 
   private void advanceSeconds(long s) {

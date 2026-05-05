@@ -169,7 +169,8 @@ public final class KafkaConsumerLoop implements Runnable {
         // exception so we can alert on tail health without losing the writer.
         if (backupTail != null) {
           try {
-            ConsumerRecords<byte[], byte[]> backupRecords = backupTail.poll(BACKUP_TAIL_POLL_TIMEOUT);
+            ConsumerRecords<byte[], byte[]> backupRecords =
+                backupTail.poll(BACKUP_TAIL_POLL_TIMEOUT);
             for (ConsumerRecord<byte[], byte[]> rec : backupRecords) {
               recordHandler.handle(rec, true);
             }

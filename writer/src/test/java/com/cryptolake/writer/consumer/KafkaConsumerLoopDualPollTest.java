@@ -32,22 +32,22 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * RED integration test for the continuous-dual-source-tailing fix (plan
- * {@code 2026-05-03-continuous-dual-source-tailing.md}, Task 2).
+ * RED integration test for the continuous-dual-source-tailing fix (plan {@code
+ * 2026-05-03-continuous-dual-source-tailing.md}, Task 2).
  *
  * <p>Proves the production bug: while {@link FailoverController#isActive()} is {@code false},
  * {@link KafkaConsumerLoop} never reaches the backup topic, so {@link CoverageFilter}'s per-source
  * data-freshness map never sees backup records. The TWO-COLLECTOR rule for gap suppression then
- * runs on stale {@code lastDataTsByStream[(stream, "backup")]} state and leaks false-positive
- * gaps when MAIN flaps briefly. The fix in Task 3 makes the loop tail backup unconditionally,
- * and this test will go GREEN.
+ * runs on stale {@code lastDataTsByStream[(stream, "backup")]} state and leaks false-positive gaps
+ * when MAIN flaps briefly. The fix in Task 3 makes the loop tail backup unconditionally, and this
+ * test will go GREEN.
  *
  * <p>Test design: a {@link BackupTailConsumer} wraps a {@link MockConsumer} pre-loaded with one
  * backup data envelope. {@link KafkaConsumerLoop} is driven for ~300 ms with {@code
  * failover.isActive()} stubbed to {@code false} throughout. Assertion: {@code
- * coverage.getLastDataTs("backup")} is positive (i.e. {@link CoverageFilter#handleData} was
- * called for a backup record). Pre-fix this assertion fails because the loop has no wiring to
- * the tail consumer; post-fix it passes.
+ * coverage.getLastDataTs("backup")} is positive (i.e. {@link CoverageFilter#handleData} was called
+ * for a backup record). Pre-fix this assertion fails because the loop has no wiring to the tail
+ * consumer; post-fix it passes.
  */
 class KafkaConsumerLoopDualPollTest {
 
@@ -93,8 +93,7 @@ class KafkaConsumerLoopDualPollTest {
             42L,
             Clocks.fixed(1_777_326_113_915_016_714L));
     byte[] backupEnvBytes = codec.toJsonBytes(backupEnv);
-    backupKafka.addRecord(
-        new ConsumerRecord<>(backupTopic, 0, 0L, new byte[0], backupEnvBytes));
+    backupKafka.addRecord(new ConsumerRecord<>(backupTopic, 0, 0L, new byte[0], backupEnvBytes));
 
     // ── Real CoverageFilter — the assertion target ────────────────────────────────────────
     PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
@@ -152,7 +151,8 @@ class KafkaConsumerLoopDualPollTest {
             gaps,
             metrics);
 
-    // ── Drive the loop briefly on a worker thread (mirrors KafkaConsumerLoopFailoverDeactivateTest)
+    // ── Drive the loop briefly on a worker thread (mirrors
+    // KafkaConsumerLoopFailoverDeactivateTest)
     AtomicReference<Throwable> error = new AtomicReference<>();
     Thread t =
         new Thread(

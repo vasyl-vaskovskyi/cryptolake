@@ -229,183 +229,184 @@ public final class Main {
     // would otherwise leak. (Issue #4: the leak was pre-existing for the primary; this commit
     // adds the backup tail to the same lifecycle.)
     try {
-    // ── Failover controller ──────────────────────────────────────────────────────────────────
-    // After plan 2026-05-03 (Task 4): state-only. Backup topic is tailed continuously by
-    // BackupTailConsumer (constructed above); FailoverController no longer owns a backup
-    // consumer.
-    FailoverController failover =
-        new FailoverController(
-            BACKUP_PREFIX,
-            Duration.ofSeconds(5),
-            Duration.ofSeconds(10), // recoveryStabilityWindow — bug B hysteresis
-            metrics,
-            Clocks.systemNanoClock());
+      // ── Failover controller ──────────────────────────────────────────────────────────────────
+      // After plan 2026-05-03 (Task 4): state-only. Backup topic is tailed continuously by
+      // BackupTailConsumer (constructed above); FailoverController no longer owns a backup
+      // consumer.
+      FailoverController failover =
+          new FailoverController(
+              BACKUP_PREFIX,
+              Duration.ofSeconds(5),
+              Duration.ofSeconds(10), // recoveryStabilityWindow — bug B hysteresis
+              metrics,
+              Clocks.systemNanoClock());
 
-    // ── File rotation ─────────────────────────────────────────────────────────────────────────
-    LastEnvelopeReader envelopeReader = new LastEnvelopeReader(codec);
+      // ── File rotation ─────────────────────────────────────────────────────────────────────────
+      LastEnvelopeReader envelopeReader = new LastEnvelopeReader(codec);
 
-    // GapEmitter depends on CoverageFilter (create before other consumers of it)
-    // Temporary placeholder — will be wired after full construction
-    // We use a forward reference pattern: create GapEmitter after all its deps are ready
-    // CoverageFilter is already created above
-    GapEmitter gapEmitter; // declared here, constructed below
+      // GapEmitter depends on CoverageFilter (create before other consumers of it)
+      // Temporary placeholder — will be wired after full construction
+      // We use a forward reference pattern: create GapEmitter after all its deps are ready
+      // CoverageFilter is already created above
+      GapEmitter gapEmitter; // declared here, constructed below
 
-    // ── OffsetCommitCoordinator ───────────────────────────────────────────────────────────────
-    OffsetCommitCoordinator committer =
-        new OffsetCommitCoordinator(
-            primaryConsumer,
-            appender,
-            compressor,
-            stateManager,
-            sealedIndex,
-            metrics,
-            Clocks.systemNanoClock());
+      // ── OffsetCommitCoordinator ───────────────────────────────────────────────────────────────
+      OffsetCommitCoordinator committer =
+          new OffsetCommitCoordinator(
+              primaryConsumer,
+              appender,
+              compressor,
+              stateManager,
+              sealedIndex,
+              metrics,
+              Clocks.systemNanoClock());
 
-    // ── GapEmitter (now we have coverage and buffers) ─────────────────────────────────────────
-    gapEmitter = new GapEmitter(buffers, metrics, null, coverage);
+      // ── GapEmitter (now we have coverage and buffers) ─────────────────────────────────────────
+      gapEmitter = new GapEmitter(buffers, metrics, null, coverage);
 
-    // ── FileRotator ───────────────────────────────────────────────────────────────────────────
-    FileRotator rotator = new FileRotator(appender, compressor, lateSeq, buffers, metrics, baseDir);
+      // ── FileRotator ───────────────────────────────────────────────────────────────────────────
+      FileRotator rotator =
+          new FileRotator(appender, compressor, lateSeq, buffers, metrics, baseDir);
 
-    // ── Startup sidecar repair (Bug B / Tier 1 sidecar-per-archive) ──────────────────────────
-    // If the writer crashed before writing sidecars, any *.jsonl.zst without a .sha256 sibling
-    // will be repaired here — BEFORE the consume loop reads any messages. This covers the
-    // "writer crashed before sidecar was written" path that writeMissingSidecars at shutdown
-    // cannot reach (design §3.4; Tier 1 sidecar invariant).
-    rotator.writeMissingSidecars();
-    log.info("startup_sidecar_repair_complete");
+      // ── Startup sidecar repair (Bug B / Tier 1 sidecar-per-archive) ──────────────────────────
+      // If the writer crashed before writing sidecars, any *.jsonl.zst without a .sha256 sibling
+      // will be repaired here — BEFORE the consume loop reads any messages. This covers the
+      // "writer crashed before sidecar was written" path that writeMissingSidecars at shutdown
+      // cannot reach (design §3.4; Tier 1 sidecar invariant).
+      rotator.writeMissingSidecars();
+      log.info("startup_sidecar_repair_complete");
 
-    // ── HourRotationScheduler ────────────────────────────────────────────────────────────────
-    HourRotationScheduler hourScheduler =
-        new HourRotationScheduler(rotator, buffers, committer, metrics);
+      // ── HourRotationScheduler ────────────────────────────────────────────────────────────────
+      HourRotationScheduler hourScheduler =
+          new HourRotationScheduler(rotator, buffers, committer, metrics);
 
-    // ── RecoveryCoordinator ───────────────────────────────────────────────────────────────────
-    RecoveryCoordinator recovery =
-        new RecoveryCoordinator(
-            stateManager,
-            sealedIndex,
-            envelopeReader,
-            hostEvidence,
-            null, // RestartGapClassifier is a static utility
-            gapEmitter,
-            metrics,
-            Clocks.systemNanoClock(),
-            currentBootId,
-            instanceId);
+      // ── RecoveryCoordinator ───────────────────────────────────────────────────────────────────
+      RecoveryCoordinator recovery =
+          new RecoveryCoordinator(
+              stateManager,
+              sealedIndex,
+              envelopeReader,
+              hostEvidence,
+              null, // RestartGapClassifier is a static utility
+              gapEmitter,
+              metrics,
+              Clocks.systemNanoClock(),
+              currentBootId,
+              instanceId);
 
-    RecoveryResult recoveryResult = recovery.runOnStartup();
-    committer.seedDurableCheckpoints(recoveryResult.checkpoints());
+      RecoveryResult recoveryResult = recovery.runOnStartup();
+      committer.seedDurableCheckpoints(recoveryResult.checkpoints());
 
-    // ── SessionChangeDetector ─────────────────────────────────────────────────────────────────
-    SessionChangeDetector sessionDetector =
-        new SessionChangeDetector(gapEmitter, coverage, metrics, Clocks.systemNanoClock());
+      // ── SessionChangeDetector ─────────────────────────────────────────────────────────────────
+      SessionChangeDetector sessionDetector =
+          new SessionChangeDetector(gapEmitter, coverage, metrics, Clocks.systemNanoClock());
 
-    // ── DepthRecoveryGapFilter ────────────────────────────────────────────────────────────────
-    DepthRecoveryGapFilter depthFilter =
-        new DepthRecoveryGapFilter(gapEmitter, Clocks.systemNanoClock());
+      // ── DepthRecoveryGapFilter ────────────────────────────────────────────────────────────────
+      DepthRecoveryGapFilter depthFilter =
+          new DepthRecoveryGapFilter(gapEmitter, Clocks.systemNanoClock());
 
-    // ── RecordHandler ─────────────────────────────────────────────────────────────────────────
-    RecordHandler recordHandler =
-        new RecordHandler(
-            codec,
-            sessionDetector,
-            depthFilter,
-            coverage,
-            failover,
-            recovery,
-            buffers,
-            gapEmitter,
-            metrics,
-            BACKUP_PREFIX);
+      // ── RecordHandler ─────────────────────────────────────────────────────────────────────────
+      RecordHandler recordHandler =
+          new RecordHandler(
+              codec,
+              sessionDetector,
+              depthFilter,
+              coverage,
+              failover,
+              recovery,
+              buffers,
+              gapEmitter,
+              metrics,
+              BACKUP_PREFIX);
 
-    // ── KafkaConsumerLoop ─────────────────────────────────────────────────────────────────────
-    KafkaConsumerLoop consumerLoop =
-        new KafkaConsumerLoop(
-            primaryConsumer,
-            backupTail,
-            enabledTopics,
-            recordHandler,
-            failover,
-            committer,
-            recovery,
-            hourScheduler,
-            buffers,
-            coverage,
-            gapEmitter,
-            metrics);
+      // ── KafkaConsumerLoop ─────────────────────────────────────────────────────────────────────
+      KafkaConsumerLoop consumerLoop =
+          new KafkaConsumerLoop(
+              primaryConsumer,
+              backupTail,
+              enabledTopics,
+              recordHandler,
+              failover,
+              committer,
+              recovery,
+              hourScheduler,
+              buffers,
+              coverage,
+              gapEmitter,
+              metrics);
 
-    // ── Health server ─────────────────────────────────────────────────────────────────────────
-    WriterReadyCheck readyCheck = new WriterReadyCheck(consumerLoop, Path.of(baseDir));
-    // Common's MonitoringConfig exposes prometheusPort() only; reuse that for the combined
-    // health+metrics HTTP server (design §2.1 — single HTTP endpoint for /ready and /metrics).
-    int healthPort = config.monitoring() != null ? config.monitoring().prometheusPort() : 8080;
-    HealthServer healthServer = new HealthServer(healthPort, readyCheck, metricsSource);
-    healthServer.start();
+      // ── Health server ─────────────────────────────────────────────────────────────────────────
+      WriterReadyCheck readyCheck = new WriterReadyCheck(consumerLoop, Path.of(baseDir));
+      // Common's MonitoringConfig exposes prometheusPort() only; reuse that for the combined
+      // health+metrics HTTP server (design §2.1 — single HTTP endpoint for /ready and /metrics).
+      int healthPort = config.monitoring() != null ? config.monitoring().prometheusPort() : 8080;
+      HealthServer healthServer = new HealthServer(healthPort, readyCheck, metricsSource);
+      healthServer.start();
 
-    // ── Disk usage gauge — periodic update via nanoTime counter in loop ───────────────────────
-    // NOTE: Disk usage is tracked in OffsetCommitCoordinator after flushAndCommit; for simplicity
-    // the gauge is initialized here and updated on first flush.
+      // ── Disk usage gauge — periodic update via nanoTime counter in loop ───────────────────────
+      // NOTE: Disk usage is tracked in OffsetCommitCoordinator after flushAndCommit; for simplicity
+      // the gauge is initialized here and updated on first flush.
 
-    // ── Shutdown latch ────────────────────────────────────────────────────────────────────────
-    CountDownLatch shutdownLatch = new CountDownLatch(1);
+      // ── Shutdown latch ────────────────────────────────────────────────────────────────────────
+      CountDownLatch shutdownLatch = new CountDownLatch(1);
 
-    // ── SIGTERM hook (T3 — platform thread per JVM requirement) ─────────────────────────────
-    Runtime.getRuntime()
-        .addShutdownHook(
-            new Thread(
+      // ── SIGTERM hook (T3 — platform thread per JVM requirement) ─────────────────────────────
+      Runtime.getRuntime()
+          .addShutdownHook(
+              new Thread(
+                  () -> {
+                    log.info("shutdown_hook_triggered");
+                    consumerLoop.requestShutdown();
+                    try {
+                      shutdownLatch.await(
+                          java.util.concurrent.TimeUnit.SECONDS.toMillis(35),
+                          java.util.concurrent.TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException e) {
+                      Thread.currentThread().interrupt();
+                    }
+                    try {
+                      healthServer.stop();
+                    } catch (Exception ignored) {
+                      // best-effort shutdown; never block main shutdown path
+                    }
+                    try {
+                      stateManager.markComponentCleanShutdown("writer", instanceId);
+                      stateManager.close();
+                    } catch (Exception ignored) {
+                      // best-effort shutdown; never block main shutdown path
+                    }
+                  }));
+
+      // ── Start consume loop on virtual thread (Tier 5 A2; design §3.1 T1) ────────────────────
+      try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        var future =
+            executor.submit(
                 () -> {
-                  log.info("shutdown_hook_triggered");
-                  consumerLoop.requestShutdown();
                   try {
-                    shutdownLatch.await(
-                        java.util.concurrent.TimeUnit.SECONDS.toMillis(35),
-                        java.util.concurrent.TimeUnit.MILLISECONDS);
-                  } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                    consumerLoop.run();
+                  } finally {
+                    shutdownLatch.countDown();
                   }
-                  try {
-                    healthServer.stop();
-                  } catch (Exception ignored) {
-                    // best-effort shutdown; never block main shutdown path
-                  }
-                  try {
-                    stateManager.markComponentCleanShutdown("writer", instanceId);
-                    stateManager.close();
-                  } catch (Exception ignored) {
-                    // best-effort shutdown; never block main shutdown path
-                  }
-                }));
+                });
 
-    // ── Start consume loop on virtual thread (Tier 5 A2; design §3.1 T1) ────────────────────
-    try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      var future =
-          executor.submit(
-              () -> {
-                try {
-                  consumerLoop.run();
-                } finally {
-                  shutdownLatch.countDown();
-                }
-              });
+        log.info(
+            "writer_started",
+            "instance_id",
+            instanceId,
+            "boot_id",
+            currentBootId,
+            "base_dir",
+            baseDir,
+            "topics",
+            enabledTopics.size());
 
-      log.info(
-          "writer_started",
-          "instance_id",
-          instanceId,
-          "boot_id",
-          currentBootId,
-          "base_dir",
-          baseDir,
-          "topics",
-          enabledTopics.size());
-
-      // Block until the consume loop terminates
-      try {
-        shutdownLatch.await();
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+        // Block until the consume loop terminates
+        try {
+          shutdownLatch.await();
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
       }
-    }
     } catch (RuntimeException | Error startupErr) {
       // Issue #4: any failure during wiring (recovery, health server bind, etc.) leaks both
       // consumer threads. Close both best-effort, suppressing exceptions, then rethrow so the
@@ -465,15 +466,15 @@ public final class Main {
   /**
    * Builds Kafka consumer properties for the continuous backup-topic tail (plan 2026-05-03).
    *
-   * <p>Delegates to {@link #buildConsumerProps(AppConfig)} for the shared keys (one source of
-   * truth for {@code bootstrap.servers}, {@code max.poll.records}, etc.) and overrides only the
-   * keys that differ:
+   * <p>Delegates to {@link #buildConsumerProps(AppConfig)} for the shared keys (one source of truth
+   * for {@code bootstrap.servers}, {@code max.poll.records}, etc.) and overrides only the keys that
+   * differ:
    *
    * <ul>
    *   <li>Distinct, unique {@code group.id} per writer instance — the tail must not share the
    *       primary writer's consumer group state; we never commit offsets here.
-   *   <li>{@code auto.offset.reset=latest} — the tail tracks live liveness only; there is no
-   *       value in re-reading historical backup records on first connect.
+   *   <li>{@code auto.offset.reset=latest} — the tail tracks live liveness only; there is no value
+   *       in re-reading historical backup records on first connect.
    *   <li>{@code enable.auto.commit=false} — already set by {@code buildConsumerProps}, restated
    *       here for clarity since this consumer never commits offsets.
    * </ul>
