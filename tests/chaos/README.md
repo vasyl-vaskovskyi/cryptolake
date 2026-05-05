@@ -106,7 +106,7 @@ still removes its containers and volumes.
      validator stays null in the current build, so cross_source_pu_chain_break
      cannot be emitted regardless of chaos. The chaos itself (SIGKILL primary,
      backup covers, restart) duplicates test 01. -->
-| 21 | disk_full_hold | Fill disk; verify hold + recovery | `disk_full_hold` |
+| 21 | disk_full_hold | Fill disk to 99% sustained; verify hold + recovery | `disk_full_hold` — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
 | 22 | both_collectors_silent | Block both collectors' egress | `both_collectors_silent` |
 | 23 | kafka_full_outage | Stop redpanda; restart; verify journal replay | `kafka_producer_outage` |
 

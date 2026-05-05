@@ -21,6 +21,10 @@ source "$(dirname "$0")/common.sh"
 
 init_scenario "21" "primary+backup"
 
+# Disk-fill is safe only on a small dedicated filesystem at HOST_DATA_DIR.
+# See the safe_disk_fill_or_skip helper in common.sh — same guard as test 04.
+safe_disk_fill_or_skip "$HOST_DATA_DIR"
+
 start_stack "primary+backup"
 wait_healthy 150
 
