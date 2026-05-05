@@ -64,10 +64,11 @@ import org.slf4j.LoggerFactory;
  * <p>Wiring order (design §2.1): {@code LogInit.apply()} → {@code YamlConfigLoader.load()} → {@code
  * EnvelopeCodec.newMapper()} → {@code StateManager.connect()} → {@code HostLifecycleReader.load()}
  * → {@code WriterMetrics} → {@code ZstdFrameCompressor} → {@code BufferManager} → {@code
- * CoverageFilter} → {@code FailoverController} → {@code FileRotator} → {@code
- * OffsetCommitCoordinator} → {@code RecoveryCoordinator} → {@code SessionChangeDetector} → {@code
- * DepthRecoveryGapFilter} → {@code GapEmitter} → {@code RecordHandler} → {@code KafkaConsumerLoop}
- * → {@code HealthServer} → SIGTERM hook → start.
+ * CoverageFilter} → {@code FailoverController} → {@code FileRotator} → {@code GapEmitter} → {@code
+ * DiskFullHoldController} → {@code PgOutageHoldController} → {@code OffsetCommitCoordinator} →
+ * {@code RecoveryCoordinator} → {@code SessionChangeDetector} → {@code DepthRecoveryGapFilter} →
+ * {@code RecordHandler} → {@code KafkaConsumerLoop} → {@code HealthServer} → SIGTERM hook →
+ * controllers.start() → consume loop start.
  *
  * <p>Thread model: one virtual-thread executor for T1 (consume loop); health server runs on its own
  * JDK httpserver executor; SIGTERM hook on a platform thread (JVM requirement). No other threads
