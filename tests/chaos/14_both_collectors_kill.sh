@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 14_pg_outage_then_crash.sh
+# 14_both_collectors_kill.sh
+# (Originally misnamed pg_outage_then_crash; renamed to match its actual
+# chaos. The PG outage path is covered by test 12.)
 #
 # Scenario: both_collectors_kill
 # Chaos:    SIGKILL MAIN AND BACKUP at the same instant; sleep 30s; restart both
@@ -40,12 +42,14 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — both collectors killed simultaneously; expect real loss.
-expect_lifecycle_event   "BOTH collectors silent observed"  "BOTH_COLLECTORS_SILENT"
-expect_lifecycle_event   "BOTH collectors recovered"        "BOTH_COLLECTORS_RECOVERED"
-expect_lifecycle_event   "uncovered gap accepted"           "GAP_ACCEPTED_NO_COVERAGE"
-expect_lifecycle_event   "gap was archived"                 "GAP_ARCHIVED"
-expect_gap_present_check "collector_restart gap recorded"   "collector_restart"
+# Assertions — both collectors killed simultaneously; expect real loss
+# detected via the CoverageFilter "no-coverage" path (NOT the silence-
+# inferred path, which is for alive-but-silent collectors — see test 22).
+# When both processes die, GAP_ACCEPTED_NO_COVERAGE fires immediately at
+# session-change time (no parking grace), so GAP_ARCHIVED (which is for
+# the parked-then-timeout path) does NOT fire here.
+expect_lifecycle_event       "uncovered gap accepted"          "GAP_ACCEPTED_NO_COVERAGE"
+expect_gap_present_check     "collector_restart gap recorded"  "collector_restart"
 expect_only_these_gaps_check collector_restart
 
 verdict

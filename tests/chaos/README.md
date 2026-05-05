@@ -90,7 +90,7 @@ still removes its containers and volumes.
 | 11 | corrupt_message | Produce 3 malformed envelopes to a writer-consumed topic | NO gap; writer logs `corrupt_message_skipped` ERROR per record and continues |
 | 12 | pg_kill_during_commit | Pause postgres for 120s | NO gap; writer logs `pg_save_failed`, archive flushes continue uninterrupted |
 | 13 | rapid_restart_storm | Restart primary 5× with 8s down per cycle (each above 5s silence threshold) | `collector_restart` only on polled streams; ≥3 of 5 failover round-trips fire |
-| 14 | pg_outage_then_crash | Kill postgres + writer simultaneously | `pg_outage_hold` |
+| 14 | both_collectors_kill | SIGKILL both collectors for 30s while writer/PG/redpanda stay up | `collector_restart` archived via CoverageFilter no-coverage path |
 | 15 | redpanda_leader_change | Brief redpanda restart | `kafka_consumer_outage` |
 | 16 | collector_failover_to_backup | Kill primary; backup covers | `collector_restart` |
 | 17 | kafka_producer_outage | Block collector→redpanda for 60s | `kafka_producer_outage` |
