@@ -344,6 +344,35 @@ wait_data_flowing() {
 }
 
 # ---------------------------------------------------------------------------
+# wait_data_flowing_chaosfs [stream] [timeout_secs]
+# Like wait_data_flowing, but probes inside the chaosfs sidecar container
+# rather than HOST_DATA_DIR. Required by scenarios that NFS-mount the
+# writer's /data from chaosfs (e.g. 02_fill_disk.sh) — the host dir is
+# empty until materialize_archive_to_host runs at end of scenario.
+# ---------------------------------------------------------------------------
+wait_data_flowing_chaosfs() {
+    local stream="${1:-bookticker}"
+    local timeout="${2:-90}"
+    local deadline=$(( SECONDS + timeout ))
+    msg "Waiting for data to flow (stream=${stream}, in chaosfs:/exports, timeout=${timeout}s)…"
+
+    while true; do
+        local count
+        count=$(dc exec -T chaosfs sh -c "find /exports -name 'hour-*.jsonl.zst' -path '*/${stream}/*' 2>/dev/null | wc -l" 2>/dev/null | tr -d '[:space:]\r')
+        if [[ -n "${count}" ]] && [[ "${count}" =~ ^[0-9]+$ ]] && (( count > 0 )); then
+            msg "Data flowing in chaosfs:/exports: found ${count} archive file(s) for ${stream}."
+            return 0
+        fi
+        if (( SECONDS >= deadline )); then
+            msg "Timeout: no archive files found for stream=${stream} in chaosfs:/exports (last count='${count:-?}')"
+            dc exec -T chaosfs sh -c 'find /exports -type f 2>/dev/null | head -10' || true
+            return 1
+        fi
+        sleep 5
+    done
+}
+
+# ---------------------------------------------------------------------------
 # warm_up [secs]
 # Simple sleep with a progress message.
 # ---------------------------------------------------------------------------

@@ -45,7 +45,7 @@ wait_healthy 180
 
 msg "Warm-up 60s…"
 warm_up 60
-wait_data_flowing "bookticker" 30
+wait_data_flowing_chaosfs "bookticker" 60
 
 msg "=== CHAOS: Filling chaosfs tmpfs (290 MiB of 300 MiB cap) ==="
 fill_via_chaosfs 290
