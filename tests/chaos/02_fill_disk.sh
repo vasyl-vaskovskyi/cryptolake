@@ -25,8 +25,10 @@
 # whose backing store is a 300 MiB tmpfs. The writer mounts /data over NFS
 # from chaosfs. Filling 290 MiB of the tmpfs leaves ~10 MiB headroom and
 # triggers ENOSPC on the writer's next fsync without touching the host
-# filesystem. After recovery, the archive is materialized from chaosfs
-# back to HOST_DATA_DIR so the host-side verify CLI can read it.
+# filesystem. After recovery, the writer is gracefully stopped (its
+# shutdown hook performs a final flushAndCommit) and the archive is
+# materialized from chaosfs back to HOST_DATA_DIR so the host-side verify
+# CLI can read a stable, fully-flushed snapshot.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -49,23 +51,36 @@ msg "=== CHAOS: Filling chaosfs tmpfs (290 MiB of 300 MiB cap) ==="
 fill_via_chaosfs 290
 
 # Hold the disk-full state long enough for the writer to attempt several
-# flush cycles and accumulate writeErrors. Default flush interval is 5s,
-# so 120s gives ~24 failed-flush attempts.
+# flush cycles and accumulate writeErrors. Production flush interval is
+# 30s (config/config.yaml: flush_interval_seconds), so 120s gives ~4
+# failed-flush attempts and ensures DiskFullHoldController has seen the
+# ENOSPC signal multiple times.
 msg "Holding disk-full state for 120s (writer's flushAndCommit will fail repeatedly)…"
 sleep 120
 
 msg "Freeing chaosfs tmpfs…"
 free_via_chaosfs
 
-# After the disk is freed, the writer's next flushAndCommit succeeds. The
-# Kafka consumer position is unchanged (no commits happened during the
-# hold), so the next poll re-reads the records published during the hold
-# from BOTH topics. They get archived now, completing the gap.
-msg "Waiting 90s for writer recovery (re-poll uncommitted offsets, archive backlog)…"
-sleep 90
+# Recovery budget. DiskFullHoldController probes free-space every 30s,
+# so worst case after free is ~30s to flip out of hold + 30s for the
+# next successful flush cycle = ~60s. We sleep 120s to absorb scheduling
+# jitter and to let the consumer drain the post-hold backlog from Kafka.
+msg "Waiting 120s for writer recovery (re-poll uncommitted offsets, archive backlog)…"
+sleep 120
+
+# Gracefully stop the writer so its shutdown hook performs a final
+# flushAndCommit. Without this, materialize_archive_to_host could tar a
+# partial-flush snapshot while the writer is still writing, and the
+# archive on HOST_DATA_DIR would diverge from what's on chaosfs.
+# `dc stop` issues SIGTERM; the writer's shutdown hook (see writer/Main.java)
+# drains the consumer, flushes buffered records, and commits offsets
+# before exiting. stop_grace_period=30s in docker-compose.yml is enough.
+msg "Stopping writer for clean snapshot…"
+dc stop writer
 
 # The archive lives inside chaosfs:/exports (the writer's NFS-mounted /data).
-# Copy it to HOST_DATA_DIR so the host-side verify CLI can see it.
+# Now that the writer is stopped, the on-disk state is stable; copy it to
+# HOST_DATA_DIR so the host-side verify CLI can see it.
 materialize_archive_to_host
 
 run_verify "$(today)" "$HOST_DATA_DIR"
