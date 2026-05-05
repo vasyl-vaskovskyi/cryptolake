@@ -111,6 +111,23 @@ public final class OffsetCommitCoordinator {
     this.pgHold = pgHold;
   }
 
+  /**
+   * Returns {@code true} if either the disk-full hold or the PG-outage hold is currently active.
+   *
+   * <p>Used by {@link KafkaConsumerLoop} to decide whether to pause primary Kafka consumption. When
+   * either hold is active, the consume loop pauses {@link
+   * org.apache.kafka.clients.consumer.KafkaConsumer#poll} so records remain in Kafka rather than
+   * accumulating in {@link com.cryptolake.writer.buffer.BufferManager}.
+   *
+   * <p>Null-tolerant for legacy unit tests that construct this coordinator without controllers.
+   *
+   * @return {@code true} iff at least one hold is active
+   */
+  public boolean isAnyHoldActive() {
+    return (diskHold != null && diskHold.isHoldActive())
+        || (pgHold != null && pgHold.isHoldActive());
+  }
+
   // ── Main flush+commit operation (Tier 1 §4) ─────────────────────────────────────────────────
 
   /**
