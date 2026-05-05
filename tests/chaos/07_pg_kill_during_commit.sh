@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 12_pg_kill_during_commit.sh
+# 07_pg_kill_during_commit.sh
 #
 # Scenario: pg_outage_writer_holds
 # Chaos:    docker compose pause postgres for 120s; then unpause
@@ -23,7 +23,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "12" "primary+backup"
+init_scenario "07" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

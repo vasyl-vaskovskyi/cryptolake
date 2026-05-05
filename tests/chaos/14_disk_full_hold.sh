@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 21_disk_full_hold.sh
+# 14_disk_full_hold.sh
 #
-# Scenario: writer_disk_full_hold (state-machine variant of #04)
+# Scenario: writer_disk_full_hold (state-machine variant of #02)
 # Chaos:    Fill HOST_DATA_DIR to 99%; wait until a disk_full_hold gap
 #           envelope is emitted; then free disk
 # Expected: gap reason=disk_full_hold (real loss)
@@ -19,10 +19,10 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "21" "primary+backup"
+init_scenario "14" "primary+backup"
 
 # Disk-fill is safe only on a small dedicated filesystem at HOST_DATA_DIR.
-# See the safe_disk_fill_or_skip helper in common.sh — same guard as test 04.
+# See the safe_disk_fill_or_skip helper in common.sh — same guard as test 02.
 safe_disk_fill_or_skip "$HOST_DATA_DIR"
 
 start_stack "primary+backup"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 10_planned_collector_restart.sh
+# 05_planned_collector_restart.sh
 #
 # Scenario: planned_main_restart
 # Chaos:    mark_maintenance + clean stop + start MAIN collector
@@ -16,7 +16,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "10" "primary+backup"
+init_scenario "05" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150
@@ -27,12 +27,12 @@ wait_data_flowing "bookticker" 30
 
 # Write a maintenance_intent record into the lifecycle ledger BEFORE stopping.
 # This simulates what cryptolake-maintenance.sh does (minus the CLI call).
-MAINT_ID="chaos-10-$(date -u +%s)"
+MAINT_ID="chaos-05-$(date -u +%s)"
 JOURNAL_DIR="${HOST_DATA_DIR}/cryptolake/binance-collector-01"
 mkdir -p "$JOURNAL_DIR"
 LEDGER_PATH="${JOURNAL_DIR}/lifecycle.jsonl"
 TS_NS=$(python3 -c "import time; print(int(time.time_ns()))")
-printf '{"ts_ns":%s,"event":"clean_shutdown","host_boot_id":"chaos-boot","collector_session_id":"chaos-10-session","planned":true,"maintenance_id":"%s"}\n' \
+printf '{"ts_ns":%s,"event":"clean_shutdown","host_boot_id":"chaos-boot","collector_session_id":"chaos-05-session","planned":true,"maintenance_id":"%s"}\n' \
     "$TS_NS" "$MAINT_ID" >> "$LEDGER_PATH" || true
 msg "=== Wrote planned clean_shutdown marker to lifecycle journal ==="
 

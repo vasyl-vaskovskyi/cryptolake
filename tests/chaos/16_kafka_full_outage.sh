@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 23_kafka_full_outage.sh
+# 16_kafka_full_outage.sh
 #
 # Scenario: redpanda_full_outage_long
 # Chaos:    Stop redpanda completely; let collectors accumulate
@@ -22,7 +22,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "23" "primary+backup"
+init_scenario "16" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

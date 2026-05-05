@@ -27,7 +27,7 @@ The runner executes each `NN_*.sh` in lexicographic order, captures stdout+stder
 per scenario into `build/chaos-logs/NN_<name>.log`, and prints a final summary
 table.
 
-### Run the JUnit harness (discovers all 23 scenarios)
+### Run the JUnit harness (discovers all 16 scenarios)
 
 ```bash
 ./gradlew :consolidation:test --tests "*ChaosVerifyIT*"
@@ -63,52 +63,56 @@ still removes its containers and volumes.
 
 | # | Name | What it tests | Expected gap reason |
 |---|------|--------------|---------------------|
-| 01 | collector_unclean_exit | Kill primary mid-flight; backup keeps flowing | `collector_restart` (only on polled streams; high-freq fully covered) |
-| 04 | fill_disk | Fill HOST_DATA_DIR to 99%; hold 120s; free disk | NO gap (writer re-polls uncommitted offsets from Kafka) — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
-| 05 | depth_reconnect_inflight | Drop primary egress for 45s; primary self-heals via snapshot resync | `snapshot_poll_miss` (only on the 30s-polled depth_snapshot stream; live diffs fully covered) |
-| 06 | full_stack_restart_gap | Down + restart entire stack after 60s | `restart_gap` parked then suppressed by mutual coverage; only `pu_chain_break` may survive (real loss case for "both silent" lives in test 22) |
-<!-- 07 removed: identical chaos to 06 (full stack down + restart) and its boot_id
-     injection had no effect — it wrote to the per-collector lifecycle.jsonl,
-     but host_reboot classification reads /proc/sys/kernel/random/boot_id
-     (overridable only via CRYPTOLAKE_TEST_BOOT_ID, which isn't propagated
-     through compose). The host_reboot path itself is unit-tested in
-     writer/.../RestartGapClassifierTest.java. -->
-<!-- 08 removed: duplicate chaos with test 05 (block_egress_via_network "collector"
-     for 45s) and asserted a failover that never fires. Egress block cuts the
-     upstream WS but leaves the collector's Kafka producer alive — primary
-     keeps publishing heartbeats/state to Kafka so the writer's
-     MAIN_FAILURE_DETECTED (5s topic silence) never trips. The "primary
-     dies, backup covers" failover path is reliably exercised by test 01
-     via SIGKILL, which actually severs the producer. -->
-<!-- 09 removed: misnamed — its chaos was identical to test 22 (block egress
-     for BOTH collectors, not "primary REST endpoint"). Test 22 is the
-     stricter version (adds expect_gap_present_check for
-     both_collectors_silent and a narrower gap whitelist). The
-     `snapshot_poll_miss` reason on polled streams is observed and
-     accepted in tests 01 and 05. -->
-| 10 | planned_collector_restart | Clean stop + start with maintenance marker | `restart_gap` planned=true |
-| 11 | corrupt_message | Produce 3 malformed envelopes to a writer-consumed topic | NO gap; writer logs `corrupt_message_skipped` ERROR per record and continues |
-| 12 | pg_kill_during_commit | Pause postgres for 120s | NO gap; writer logs `pg_save_failed`, archive flushes continue uninterrupted |
-| 13 | rapid_restart_storm | Restart primary 5× with 8s down per cycle (each above 5s silence threshold) | `collector_restart` only on polled streams; ≥3 of 5 failover round-trips fire |
-| 14 | both_collectors_kill | SIGKILL both collectors for 30s while writer/PG/redpanda stay up | `collector_restart` archived via CoverageFilter no-coverage path |
-| 15 | redpanda_leader_change | Stop redpanda for 45s, restart | NO uncovered gap; producer health-monitor stays HEALTHY for brief outages (sustained-outage path is test 23) |
-<!-- 16 removed: same chaos as test 01 (SIGKILL primary, backup covers,
-     restart) with the only difference being a 90s vs 45s downtime. Its
-     strict gaps=∅ assertion happens to pass when backup's polled-stream
-     samples align well with the gap-decision moment, but is structurally
-     flaky for the same OI / depth_snapshot poll-cadence reasons test 01
-     handles. Test 01 is the canonical version. -->
-| 17 | kafka_producer_outage | Network-isolate primary collector for 60s | NO uncovered gap; writer's silence-based failover takes over (sustained-outage path is test 23); only `collector_restart` permitted on polled streams |
-| 18 | kafka_consumer_outage | Network-isolate writer from redpanda for 60s | NO gap; consumer catches up from last committed offset (Kafka retention 48h covers); `KafkaConsumerOutageDetector` exists but is dead code in current build |
-| 19 | kafka_offset_reset | Delete + recreate `binance.bookticker` mid-run | NO `kafka_offset_reset` gap; auto.offset.reset=earliest silently resets the consumer (the gap-emit path requires auto.offset.reset=none which prod doesn't use) |
-<!-- 20 removed: CrossSourcePuChainValidator is referenced in RecordHandler but
-     `setCrossSourceValidator()` is never called from writer/Main.java — the
-     validator stays null in the current build, so cross_source_pu_chain_break
-     cannot be emitted regardless of chaos. The chaos itself (SIGKILL primary,
-     backup covers, restart) duplicates test 01. -->
-| 21 | disk_full_hold | Fill disk to 99% sustained; verify hold + recovery | `disk_full_hold` — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
-| 22 | both_collectors_silent | Block both collectors' egress for 60s | `snapshot_poll_miss` on polled streams (correct GAP_ACCEPTED_NO_COVERAGE); `both_collectors_silent` reason currently UNREACHABLE — `SilenceInferredGapEmitter` is dead code in current build (silent loss on continuous WS streams) |
-| 23 | kafka_full_outage | Stop redpanda for 180s (>delivery.timeout.ms) | `kafka_producer_outage` + `kafka_delivery_failed` archived; both collectors transition through COLLECTOR_KAFKA_OUTAGE_ENTERED/EXITED via journal replay |
+| 01 | collector_unclean_exit       | SIGKILL primary mid-flight; backup keeps flowing                                       | `collector_restart` (only on polled streams; high-freq fully covered) |
+| 02 | fill_disk                    | Fill HOST_DATA_DIR to 99%; hold 120s; free disk                                        | NO gap (writer re-polls uncommitted offsets from Kafka) — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
+| 03 | depth_reconnect_inflight     | Drop primary egress for 45s; primary self-heals via snapshot resync                    | `snapshot_poll_miss` (only on the 30s-polled depth_snapshot stream; live diffs fully covered) |
+| 04 | full_stack_restart_gap       | Down + restart entire stack after 60s                                                  | `restart_gap` parked then suppressed by mutual coverage; only `pu_chain_break` may survive (real loss case for "both silent" lives in test 15) |
+| 05 | planned_collector_restart    | Clean stop + start primary with maintenance marker                                     | NO gap; full failover → recovery lifecycle |
+| 06 | corrupt_message              | Produce 3 malformed envelopes to a writer-consumed topic                               | NO gap; writer logs `corrupt_message_skipped` ERROR per record and continues |
+| 07 | pg_kill_during_commit        | Pause postgres for 120s                                                                | NO gap; writer logs `pg_save_failed`, archive flushes continue uninterrupted |
+| 08 | rapid_restart_storm          | Restart primary 5× with 8s down per cycle (each above 5s silence threshold)            | `collector_restart` only on polled streams; ≥3 of 5 failover round-trips fire |
+| 09 | both_collectors_kill         | SIGKILL both collectors for 30s while writer/PG/redpanda stay up                       | `collector_restart` archived via CoverageFilter no-coverage path |
+| 10 | redpanda_leader_change       | Stop redpanda for 45s, restart                                                         | NO uncovered gap; producer health-monitor stays HEALTHY for brief outages (sustained-outage path is test 16) |
+| 11 | kafka_producer_outage        | Network-isolate primary collector for 60s                                              | NO uncovered gap; writer's silence-based failover takes over (sustained-outage path is test 16); only `collector_restart` permitted on polled streams |
+| 12 | kafka_consumer_outage        | Network-isolate writer from redpanda for 60s                                           | NO gap; consumer catches up from last committed offset (Kafka 48h retention covers); `KafkaConsumerOutageDetector` exists but is dead code in current build |
+| 13 | kafka_offset_reset           | Delete + recreate `binance.bookticker` mid-run                                         | NO `kafka_offset_reset` gap; auto.offset.reset=earliest silently resets the consumer (the gap-emit path requires auto.offset.reset=none which prod doesn't use) |
+| 14 | disk_full_hold               | Fill disk to 99% sustained; verify hold + recovery                                     | `disk_full_hold` — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
+| 15 | both_collectors_silent       | Block both collectors' egress for 60s                                                  | `snapshot_poll_miss` on polled streams (correct GAP_ACCEPTED_NO_COVERAGE); `both_collectors_silent` reason currently UNREACHABLE — `SilenceInferredGapEmitter` is dead code in current build (silent loss on continuous WS streams) |
+| 16 | kafka_full_outage            | Stop redpanda for 180s (>delivery.timeout.ms)                                          | `kafka_producer_outage` + `kafka_delivery_failed` archived; both collectors transition through COLLECTOR_KAFKA_OUTAGE_ENTERED/EXITED via journal replay |
+
+### Previously-numbered scenarios that no longer exist
+
+The suite was compacted from a sparse 1..23 numbering down to a contiguous
+1..16. Five scenarios were removed during the compaction; their original
+intent and reason for removal are preserved here so anyone re-discovering
+those code paths knows the history:
+
+- **host_reboot_restart_gap** — same chaos as the current full_stack_restart_gap
+  (test 04). Its boot_id injection had no effect: it wrote to the per-collector
+  `lifecycle.jsonl`, but host_reboot classification reads
+  `/proc/sys/kernel/random/boot_id` (overridable only via
+  `CRYPTOLAKE_TEST_BOOT_ID`, which isn't propagated through compose). The
+  host_reboot path itself is unit-tested in
+  `writer/.../RestartGapClassifierTest.java`.
+- **ws_disconnect** — duplicate chaos with depth_reconnect_inflight (test 03)
+  and asserted a failover that never fires. Egress block cuts the upstream WS
+  but leaves the collector's Kafka producer alive, so primary keeps
+  publishing heartbeats/state to Kafka and the writer's `MAIN_FAILURE_DETECTED`
+  (5s topic silence) never trips. The "primary dies, backup covers" failover
+  path is reliably exercised by test 01 via SIGKILL.
+- **snapshot_poll_miss** — misnamed; its chaos was identical to
+  both_collectors_silent (test 15). The `snapshot_poll_miss` reason on polled
+  streams is observed and accepted in tests 01 and 03 where it actually arises.
+- **collector_failover_to_backup** — same chaos as collector_unclean_exit
+  (test 01) with only the downtime length differing. Its strict gaps=∅
+  assertion happened to pass when backup's polled-stream samples aligned
+  with the gap-decision moment, but was structurally flaky for the same
+  OI / depth_snapshot poll-cadence reasons test 01 handles correctly.
+- **cross_source_pu_chain_break** — `CrossSourcePuChainValidator` is referenced
+  in `RecordHandler` but `setCrossSourceValidator()` is never called from
+  `writer/Main.java`, so the validator stays null in the current build and
+  `cross_source_pu_chain_break` cannot be emitted under any chaos. The chaos
+  itself (SIGKILL primary, backup covers, restart) also duplicated test 01.
 
 ## Writing a new scenario
 

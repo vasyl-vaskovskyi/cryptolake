@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 15_redpanda_leader_change.sh
+# 10_redpanda_leader_change.sh
 #
 # Scenario: redpanda_brief_restart
 # Chaos:    docker compose restart redpanda (brief Kafka outage)
@@ -17,7 +17,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "15" "primary+backup"
+init_scenario "10" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150
@@ -44,7 +44,7 @@ run_verify "$(today)" "$HOST_DATA_DIR"
 # 1 GiB buffer doesn't deplete and cached cluster metadata still satisfies
 # partitionsFor(), so KafkaProducerHealthMonitor stays HEALTHY and
 # COLLECTOR_KAFKA_OUTAGE_ENTERED does NOT fire. The PAUSED-threshold path
-# is only reachable for sustained outages — see test 23 (kafka_full_outage)
+# is only reachable for sustained outages — see test 16 (kafka_full_outage)
 # which forces a long outage to cross the buffer-depletion threshold.
 # What this test actually verifies: the system survives a brief broker
 # restart without any spurious gap envelope or uncovered-gap acceptance.

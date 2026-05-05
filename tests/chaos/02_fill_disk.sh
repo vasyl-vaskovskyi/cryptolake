@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 04_fill_disk.sh
+# 02_fill_disk.sh
 #
 # Scenario: writer_disk_full_brief
 # Chaos:    Fill HOST_DATA_DIR to 99%; hold ~120s; free disk
@@ -32,7 +32,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "04" "primary+backup"
+init_scenario "02" "primary+backup"
 
 # Disk-fill is safe only on a small dedicated filesystem at HOST_DATA_DIR.
 # On a regular dev machine /tmp lives on the host disk; filling it to 99%

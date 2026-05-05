@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 17_kafka_producer_outage.sh
+# 11_kafka_producer_outage.sh
 #
 # Scenario: main_kafka_producer_outage
 # Chaos:    iptables-block MAIN→redpanda for 60s; then unblock
@@ -17,7 +17,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "17" "primary+backup"
+init_scenario "11" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150
@@ -48,7 +48,7 @@ run_verify "$(today)" "$HOST_DATA_DIR"
 # COLLECTOR_KAFKA_OUTAGE_ENTERED path is NOT reached at 60s isolation:
 # probeHealth() relies on cached metadata + buffer-depletion / record-
 # error-rate signals, none of which trip in 60s with a 1 GiB producer
-# buffer. The sustained-outage path lives in test 23.
+# buffer. The sustained-outage path lives in test 16.
 expect_lifecycle_event        "writer fails over to BACKUP"         "WRITER_NOW_ARCHIVING_FROM=BACKUP"
 expect_lifecycle_event        "writer switches back to MAIN"        "WRITER_NOW_ARCHIVING_FROM=MAIN"
 expect_lifecycle_event_absent "no uncovered gap accepted"           "GAP_ACCEPTED_NO_COVERAGE"

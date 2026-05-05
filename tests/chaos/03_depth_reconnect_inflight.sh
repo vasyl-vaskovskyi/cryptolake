@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 05_depth_reconnect_inflight.sh
+# 03_depth_reconnect_inflight.sh
 #
 # Scenario: main_depth_resync_inflight
 # Chaos:    Drop MAIN's egress (depth WS dies, REST snapshot blocked) for 45s
@@ -24,7 +24,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "05" "primary+backup"
+init_scenario "03" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

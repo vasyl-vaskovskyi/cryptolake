@@ -7,9 +7,13 @@ import org.junit.jupiter.api.Test;
 /**
  * Chaos integration suite for the writer service.
  *
- * <p>Ports Python's 16 bash chaos scenarios under {@code tests/chaos/*.sh} (mapping §8, design
- * §8.3). Every scenario lives as a {@code @Test} method named {@code chaos_<NN>_<description>()}
- * with a docstring linking back to its Python origin.
+ * <p>Ports the bash chaos scenarios under {@code tests/chaos/*.sh} (mapping §8, design §8.3).
+ * Every scenario lives as a {@code @Test} method with a docstring linking back to its current
+ * bash counterpart. NOTE: the bash suite was compacted from a sparse 1..23 numbering down to a
+ * contiguous 1..16. The {@code chaos_NN_*} method names below preserve the ORIGINAL numbering
+ * (so git blame stays useful); the {@code ports:} comment on each method points at the CURRENT
+ * bash filename. Methods marked REMOVED have no current bash counterpart (the original was
+ * deleted as part of the compaction — see tests/chaos/README.md for the rationale).
  *
  * <p>The real implementation will drive Testcontainers Kafka + PostgreSQL with targeted failure
  * injection (kill -9 via docker-java, network partitions via {@code tc netem}, volume fills). For
@@ -23,7 +27,7 @@ import org.junit.jupiter.api.Test;
 @Tag("chaos")
 class WriterChaosIT {
 
-  /** ports: tests/chaos/1_collector_unclean_exit.sh */
+  /** ports: tests/chaos/01_collector_unclean_exit.sh */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_01_collector_unclean_exit_emits_restart_gap() {
@@ -31,7 +35,7 @@ class WriterChaosIT {
     // classification=system in the next archive file and host_evidence reflects no reboot.
   }
 
-  /** ports: tests/chaos/4_fill_disk.sh */
+  /** ports: tests/chaos/02_fill_disk.sh (was 04_fill_disk.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_04_fill_disk_emits_write_error_gap() {
@@ -39,7 +43,7 @@ class WriterChaosIT {
     // increments, and a write_error gap (reason='write_error') is emitted for the affected stream.
   }
 
-  /** ports: tests/chaos/5_depth_reconnect_inflight.sh */
+  /** ports: tests/chaos/03_depth_reconnect_inflight.sh (was 05_depth_reconnect_inflight.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_05_depth_reconnect_inflight_emits_recovery_depth_anchor() {
@@ -47,7 +51,7 @@ class WriterChaosIT {
     // emit exactly one gap with reason=recovery_depth_anchor. No duplicates on re-delivery.
   }
 
-  /** ports: tests/chaos/6_full_stack_restart_gap.sh */
+  /** ports: tests/chaos/04_full_stack_restart_gap.sh (was 06_full_stack_restart_gap.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_06_full_stack_restart_classification_system() {
@@ -55,7 +59,8 @@ class WriterChaosIT {
     // restart_gap with classification=system (no host reboot evidence, clean shutdown marker).
   }
 
-  /** ports: tests/chaos/7_host_reboot_restart_gap.sh */
+  /** REMOVED: 07_host_reboot_restart_gap.sh — see tests/chaos/README.md (boot_id injection
+   *  had no effect; host_reboot path is unit-tested in RestartGapClassifierTest). */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_07_host_reboot_classification_host() {
@@ -63,7 +68,8 @@ class WriterChaosIT {
     // restart_gap classification=host and host_lifecycle_evidence persisted in PG.
   }
 
-  /** ports: tests/chaos/8_ws_disconnect.sh */
+  /** REMOVED: 08_ws_disconnect.sh — see tests/chaos/README.md (egress block doesn't trip
+   *  failover; primary keeps publishing heartbeats. The SIGKILL path in test 01 covers it). */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_08_ws_disconnect_activates_backup_then_switchback() {
@@ -72,7 +78,8 @@ class WriterChaosIT {
     // primary catches up.
   }
 
-  /** ports: tests/chaos/9_snapshot_poll_miss.sh */
+  /** REMOVED: 09_snapshot_poll_miss.sh — see tests/chaos/README.md (was a misnamed duplicate
+   *  of both_collectors_silent; the snapshot_poll_miss reason is observed in tests 01 and 03). */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_09_snapshot_poll_miss_coverage_grace() {
@@ -80,7 +87,7 @@ class WriterChaosIT {
     // filter during grace period, then archived once grace elapses without coverage arriving.
   }
 
-  /** ports: tests/chaos/10_planned_collector_restart.sh */
+  /** ports: tests/chaos/05_planned_collector_restart.sh (was 10_planned_collector_restart.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_10_planned_collector_restart() {
@@ -88,7 +95,7 @@ class WriterChaosIT {
     // classification=planned (no alert) and MaintenanceIntent cleared on success.
   }
 
-  /** ports: tests/chaos/11_corrupt_message.sh */
+  /** ports: tests/chaos/06_corrupt_message.sh (was 11_corrupt_message.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_11_corrupt_message_emits_deserialization_error_gap() {
@@ -96,7 +103,7 @@ class WriterChaosIT {
     // emits deserialization_error gap, and does NOT advance offset past the bad record.
   }
 
-  /** ports: tests/chaos/12_pg_kill_during_commit.sh */
+  /** ports: tests/chaos/07_pg_kill_during_commit.sh (was 12_pg_kill_during_commit.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_12_pg_kill_during_commit_offsets_not_committed() {
@@ -104,7 +111,7 @@ class WriterChaosIT {
     // advance (Tier 5 C8 watch-out), pg_commit_failures increments, retry path re-drives flush.
   }
 
-  /** ports: tests/chaos/13_rapid_restart_storm.sh */
+  /** ports: tests/chaos/08_rapid_restart_storm.sh (was 13_rapid_restart_storm.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_13_rapid_restart_storm_dedup() {
@@ -112,7 +119,8 @@ class WriterChaosIT {
     // (RestartGapClassifier dedup on instance_id + bootId + high-water offset).
   }
 
-  /** ports: tests/chaos/14_pg_outage_then_crash.sh */
+  /** ports: tests/chaos/09_both_collectors_kill.sh (was misnamed 14_pg_outage_then_crash.sh —
+   *  its actual chaos is dual-collector SIGKILL, not a PG outage; PG outage is now test 07) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_14_pg_outage_then_crash() {
@@ -120,7 +128,7 @@ class WriterChaosIT {
     // treats uncommitted pending writes as a checkpoint_lost gap for the affected streams.
   }
 
-  /** ports: tests/chaos/15_redpanda_leader_change.sh */
+  /** ports: tests/chaos/10_redpanda_leader_change.sh (was 15_redpanda_leader_change.sh) */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_15_redpanda_leader_change_no_loss() {
@@ -128,7 +136,8 @@ class WriterChaosIT {
     // consumer_lag gauge recovers within one poll cycle.
   }
 
-  /** ports: tests/chaos/16_collector_failover_to_backup.sh */
+  /** REMOVED: 16_collector_failover_to_backup.sh — see tests/chaos/README.md (duplicate of
+   *  test 01 with only the downtime length differing). */
   @Test
   @Disabled("requires docker-compose stack — Testcontainers skeleton only")
   void chaos_16_collector_failover_to_backup_coverage_suppresses() {

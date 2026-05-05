@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 22_both_collectors_silent.sh
+# 15_both_collectors_silent.sh
 #
 # Scenario: both_collectors_silent_inferred
 # Chaos:    Disconnect BOTH MAIN and BACKUP from their egress networks
@@ -23,7 +23,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "22" "primary+backup"
+init_scenario "15" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

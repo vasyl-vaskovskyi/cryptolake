@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 18_kafka_consumer_outage.sh
+# 12_kafka_consumer_outage.sh
 #
 # Scenario: writer_kafka_consumer_outage
 # Chaos:    Network-isolate writer from redpanda for 60s; then restore
@@ -22,7 +22,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "18" "primary+backup"
+init_scenario "12" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

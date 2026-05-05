@@ -46,9 +46,9 @@ Health endpoints: collector primary `:8000`, collector backup `:8004`, writer `:
 Each `tests/chaos/NN_*.sh` spins up an isolated `cryptolake-chaos-NN` compose project, injects a fault, then asserts `cryptolake-verify` exits 0 with `ERRORS=0` and the expected gap envelope is archived.
 
 ```bash
-bash tests/chaos/16_collector_failover_to_backup.sh   # one scenario
+bash tests/chaos/01_collector_unclean_exit.sh         # one scenario
 bash scripts/run-chaos-tests.sh                       # all scenarios; logs to build/chaos-logs/
-bash scripts/run-chaos-tests.sh 16                    # filter to one
+bash scripts/run-chaos-tests.sh 09                    # filter to one
 ./gradlew :consolidation:test --tests "*ChaosVerifyIT*"  # JUnit harness wraps all scenarios
 ```
 

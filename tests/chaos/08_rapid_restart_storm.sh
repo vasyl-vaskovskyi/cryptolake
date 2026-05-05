@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 13_rapid_restart_storm.sh
+# 08_rapid_restart_storm.sh
 #
 # Scenario: rapid_main_restart_storm
 # Chaos:    Restart MAIN 5× in 30s (SIGKILL + restart each iteration)
@@ -15,7 +15,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "13" "primary+backup"
+init_scenario "08" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

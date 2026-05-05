@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 14_both_collectors_kill.sh
+# 09_both_collectors_kill.sh
 # (Originally misnamed pg_outage_then_crash; renamed to match its actual
-# chaos. The PG outage path is covered by test 12.)
+# chaos. The PG outage path is covered by test 07.)
 #
 # Scenario: both_collectors_kill
 # Chaos:    SIGKILL MAIN AND BACKUP at the same instant; sleep 30s; restart both
@@ -16,7 +16,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "14" "primary+backup"
+init_scenario "09" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150
@@ -44,7 +44,7 @@ run_verify "$(today)" "$HOST_DATA_DIR"
 
 # Assertions — both collectors killed simultaneously; expect real loss
 # detected via the CoverageFilter "no-coverage" path (NOT the silence-
-# inferred path, which is for alive-but-silent collectors — see test 22).
+# inferred path, which is for alive-but-silent collectors — see test 15).
 # When both processes die, GAP_ACCEPTED_NO_COVERAGE fires immediately at
 # session-change time (no parking grace), so GAP_ARCHIVED (which is for
 # the parked-then-timeout path) does NOT fire here.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 19_kafka_offset_reset.sh
+# 13_kafka_offset_reset.sh
 #
 # Scenario: writer_kafka_offset_reset
 # Chaos:    Delete + recreate binance.bookticker topic, forcing the
@@ -20,7 +20,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "19" "primary+backup"
+init_scenario "13" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 06_full_stack_restart_gap.sh
+# 04_full_stack_restart_gap.sh
 #
 # Scenario: full_stack_restart
 # Chaos:    docker compose down then up after 60s (every container off)
@@ -19,13 +19,13 @@
 #           restart, so the filter suppresses. This documents and locks in
 #           that current behavior. Detection of the "both silent during the
 #           gap window" case requires the SilenceInferredGapEmitter path —
-#           see test 22 (both_collectors_silent) which forces it via
+#           see test 15 (both_collectors_silent) which forces it via
 #           sustained egress block while collectors stay alive.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "06" "primary+backup"
+init_scenario "04" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150

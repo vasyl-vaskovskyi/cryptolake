@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 11_corrupt_message.sh
+# 06_corrupt_message.sh
 #
 # Scenario: corrupt_message
 # Chaos:    Produce 3 malformed envelopes to a writer-consumed topic
@@ -20,7 +20,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-init_scenario "11" "primary+backup"
+init_scenario "06" "primary+backup"
 
 start_stack "primary+backup"
 wait_healthy 150
