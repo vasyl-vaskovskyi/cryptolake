@@ -115,6 +115,23 @@ public final class StateManager {
     }
   }
 
+  /**
+   * Cheap reachability probe used by {@link
+   * com.cryptolake.writer.durability.PgOutageHoldController}'s recovery loop. Acquires one pooled
+   * connection and calls {@link Connection#isValid(int)} with a 5-second timeout. No retry, no
+   * batch, no metric, no log noise — the controller itself logs probe outcome.
+   *
+   * <p>Returns {@code true} only if PG responded within 5 s. Any exception (broken pool, network
+   * timeout, auth) returns {@code false}; the caller stays in hold and re-probes in 30 s.
+   */
+  public boolean ping() {
+    try (Connection conn = ds.getConnection()) {
+      return conn.isValid(5);
+    } catch (SQLException e) {
+      return false;
+    }
+  }
+
   /** Closes the underlying HikariCP data source. */
   public void close() {
     try {

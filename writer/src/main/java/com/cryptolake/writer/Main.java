@@ -21,6 +21,8 @@ import com.cryptolake.writer.consumer.RecordHandler;
 import com.cryptolake.writer.consumer.RecoveryCoordinator;
 import com.cryptolake.writer.consumer.RecoveryResult;
 import com.cryptolake.writer.consumer.SessionChangeDetector;
+import com.cryptolake.writer.durability.DiskFullHoldController;
+import com.cryptolake.writer.durability.PgOutageHoldController;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.failover.FailoverController;
 import com.cryptolake.writer.failover.HostLifecycleEvidence;
@@ -62,10 +64,11 @@ import org.slf4j.LoggerFactory;
  * <p>Wiring order (design §2.1): {@code LogInit.apply()} → {@code YamlConfigLoader.load()} → {@code
  * EnvelopeCodec.newMapper()} → {@code StateManager.connect()} → {@code HostLifecycleReader.load()}
  * → {@code WriterMetrics} → {@code ZstdFrameCompressor} → {@code BufferManager} → {@code
- * CoverageFilter} → {@code FailoverController} → {@code FileRotator} → {@code
- * OffsetCommitCoordinator} → {@code RecoveryCoordinator} → {@code SessionChangeDetector} → {@code
- * DepthRecoveryGapFilter} → {@code GapEmitter} → {@code RecordHandler} → {@code KafkaConsumerLoop}
- * → {@code HealthServer} → SIGTERM hook → start.
+ * CoverageFilter} → {@code FailoverController} → {@code FileRotator} → {@code GapEmitter} → {@code
+ * DiskFullHoldController} → {@code PgOutageHoldController} → {@code OffsetCommitCoordinator} →
+ * {@code RecoveryCoordinator} → {@code SessionChangeDetector} → {@code DepthRecoveryGapFilter} →
+ * {@code RecordHandler} → {@code KafkaConsumerLoop} → {@code HealthServer} → SIGTERM hook →
+ * controllers.start() → consume loop start.
  *
  * <p>Thread model: one virtual-thread executor for T1 (consume loop); health server runs on its own
  * JDK httpserver executor; SIGTERM hook on a platform thread (JVM requirement). No other threads
@@ -250,6 +253,56 @@ public final class Main {
       // CoverageFilter is already created above
       GapEmitter gapEmitter; // declared here, constructed below
 
+      // ── GapEmitter (now we have coverage and buffers) ─────────────────────────────────────────
+      gapEmitter = new GapEmitter(buffers, metrics, null, coverage);
+
+      // ── (symbol, stream) lists for hold controllers ───────────────────────────────────────────
+      // Build the same list shape both controllers need. Sourced from the writer's enabled
+      // symbols × streams (config). One pair per (symbol, stream) the writer is responsible for.
+      var binance = config.exchanges().binance();
+      java.util.List<String> enabledStreamsForHolds =
+          binance.writerStreamsOverride() != null
+              ? binance.writerStreamsOverride()
+              : binance.getEnabledStreams();
+      java.util.List<DiskFullHoldController.SymbolStream> diskSymbolStreams =
+          new java.util.ArrayList<>();
+      java.util.List<PgOutageHoldController.SymbolStream> pgSymbolStreams =
+          new java.util.ArrayList<>();
+      for (String sym : binance.symbols()) {
+        for (String stream : enabledStreamsForHolds) {
+          diskSymbolStreams.add(new DiskFullHoldController.SymbolStream(sym, stream));
+          pgSymbolStreams.add(new PgOutageHoldController.SymbolStream(sym, stream));
+        }
+      }
+
+      // ── DiskFullHoldController ────────────────────────────────────────────────────────────────
+      // Probe: usable bytes on the baseDir filesystem > 50 MiB. Conservative: stay in hold on
+      // probe failure so we don't exit prematurely on a flaky FS.
+      final long minFreeBytesForRecovery = 50L * 1024 * 1024;
+      java.util.function.BooleanSupplier diskProbe =
+          () -> {
+            try {
+              return java.nio.file.Files.getFileStore(java.nio.file.Path.of(baseDir))
+                      .getUsableSpace()
+                  > minFreeBytesForRecovery;
+            } catch (java.io.IOException probeErr) {
+              return false;
+            }
+          };
+      DiskFullHoldController diskHold =
+          DiskFullHoldController.of(
+              Clocks.systemNanoClock(), diskProbe, gapEmitter, "binance", diskSymbolStreams);
+
+      // ── PgOutageHoldController ────────────────────────────────────────────────────────────────
+      // Probe: cheap PG reachability check via Connection.isValid(5). Lighter-weight than the
+      // earlier draft which used saveStatesAndCheckpoints (that path retries 3× with backoff
+      // inside StateManager.retry, generating 3 WARN log lines per probe failure). The
+      // ping method swallows SQLException internally and returns false on any unhealthy state.
+      java.util.function.BooleanSupplier pgProbe = stateManager::ping;
+      PgOutageHoldController pgHold =
+          PgOutageHoldController.of(
+              Clocks.systemNanoClock(), pgProbe, gapEmitter, "binance", pgSymbolStreams);
+
       // ── OffsetCommitCoordinator ───────────────────────────────────────────────────────────────
       OffsetCommitCoordinator committer =
           new OffsetCommitCoordinator(
@@ -259,10 +312,9 @@ public final class Main {
               stateManager,
               sealedIndex,
               metrics,
-              Clocks.systemNanoClock());
-
-      // ── GapEmitter (now we have coverage and buffers) ─────────────────────────────────────────
-      gapEmitter = new GapEmitter(buffers, metrics, null, coverage);
+              Clocks.systemNanoClock(),
+              diskHold,
+              pgHold);
 
       // ── FileRotator ───────────────────────────────────────────────────────────────────────────
       FileRotator rotator =
@@ -364,6 +416,18 @@ public final class Main {
                     } catch (InterruptedException e) {
                       Thread.currentThread().interrupt();
                     }
+                    // Stop hold-controller retry loops AFTER the consume loop has drained,
+                    // to avoid racing the probes against a closing PG / FS.
+                    try {
+                      diskHold.stop();
+                    } catch (Exception ignored) {
+                      // best-effort shutdown
+                    }
+                    try {
+                      pgHold.stop();
+                    } catch (Exception ignored) {
+                      // best-effort shutdown
+                    }
                     try {
                       healthServer.stop();
                     } catch (Exception ignored) {
@@ -376,6 +440,12 @@ public final class Main {
                       // best-effort shutdown; never block main shutdown path
                     }
                   }));
+
+      // ── Start hold-controller retry loops ────────────────────────────────────────────────────
+      // Each starts a virtual-thread retry loop that probes the underlying resource every 30s
+      // and flips its hold state off via onRecovery / recordPgSuccess once recovered.
+      diskHold.start();
+      pgHold.start();
 
       // ── Start consume loop on virtual thread (Tier 5 A2; design §3.1 T1) ────────────────────
       try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {

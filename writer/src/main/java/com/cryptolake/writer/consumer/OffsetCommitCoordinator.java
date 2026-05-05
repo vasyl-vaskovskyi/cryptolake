@@ -5,6 +5,8 @@ import com.cryptolake.writer.StreamKey;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.buffer.CheckpointMeta;
 import com.cryptolake.writer.buffer.FlushResult;
+import com.cryptolake.writer.durability.DiskFullHoldController;
+import com.cryptolake.writer.durability.PgOutageHoldController;
 import com.cryptolake.writer.io.DurableAppender;
 import com.cryptolake.writer.io.ZstdFrameCompressor;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -69,6 +71,20 @@ public final class OffsetCommitCoordinator {
   private final ClockSupplier clock;
 
   /**
+   * Disk-full hold controller. When {@link DiskFullHoldController#isHoldActive()} returns true,
+   * {@link #flushAndCommit} early-returns 0 without flushing buffers or committing offsets.
+   * Nullable for legacy unit tests that exercise empty-buffer paths only; real wiring (Main.java)
+   * always provides a non-null instance.
+   */
+  private final DiskFullHoldController diskHold;
+
+  /**
+   * PG-outage hold controller. Same role as {@link #diskHold} but for prolonged PG unavailability.
+   * Nullable for legacy unit tests.
+   */
+  private final PgOutageHoldController pgHold;
+
+  /**
    * Mutable cache of durable checkpoints — updated after every successful PG+Kafka commit. Owned by
    * T1; shared (read-only) with RecoveryCoordinator via the method view.
    */
@@ -81,7 +97,9 @@ public final class OffsetCommitCoordinator {
       StateManager stateManager,
       SealedFileIndex sealedIndex,
       WriterMetrics metrics,
-      ClockSupplier clock) {
+      ClockSupplier clock,
+      DiskFullHoldController diskHold,
+      PgOutageHoldController pgHold) {
     this.primary = primary;
     this.appender = appender;
     this.compressor = compressor;
@@ -89,6 +107,8 @@ public final class OffsetCommitCoordinator {
     this.sealedIndex = sealedIndex;
     this.metrics = metrics;
     this.clock = clock;
+    this.diskHold = diskHold;
+    this.pgHold = pgHold;
   }
 
   // ── Main flush+commit operation (Tier 1 §4) ─────────────────────────────────────────────────
@@ -106,6 +126,15 @@ public final class OffsetCommitCoordinator {
    * @return total number of records flushed
    */
   public int flushAndCommit(BufferManager buffers) {
+    // Hold-controller gate (spec §Architecture; design path 2). If either disk-full hold or
+    // pg-outage hold is active, return 0 without flushing buffers, saving PG state, or
+    // committing offsets. Records remain in buffers; the controller's retry loop probes for
+    // recovery every 30s and flips hold off via onRecovery / recordPgSuccess.
+    if ((diskHold != null && diskHold.isHoldActive())
+        || (pgHold != null && pgHold.isHoldActive())) {
+      return 0;
+    }
+
     // Step 1: Extract all buffered lines (in-memory, no I/O yet)
     List<FlushResult> results = buffers.flushAll();
 
@@ -132,6 +161,17 @@ public final class OffsetCommitCoordinator {
         metrics
             .writeErrors(r.target().exchange(), r.target().symbol(), r.target().stream())
             .increment();
+        // Route to disk-full hold controller. If this is ENOSPC, the controller flips its
+        // hold state to active and emits LIFECYCLE WRITER_DISK_FULL_HOLD_ENTERED. We then
+        // short-circuit the rest of flushAndCommit (no PG save, no Kafka commit) so the
+        // records stay in Kafka and replay on recovery. For non-ENOSPC IOExceptions, the
+        // controller is a no-op (isEnospc returns false), and we rethrow as today.
+        if (diskHold != null) {
+          diskHold.onWriteError(e);
+          if (diskHold.isHoldActive()) {
+            return 0;
+          }
+        }
         throw new UncheckedIOException("File write failed for " + r.filePath(), e);
       }
 
@@ -204,13 +244,27 @@ public final class OffsetCommitCoordinator {
     long flushEndNs = System.nanoTime();
     double flushMs = (flushEndNs - flushStartNs) / 1_000_000.0;
 
-    // Step 4: PG save — atomic, retry 3× (Tier 5 G3). On failure: metric + throw, NO commit
+    // Step 4: PG save — atomic, retry 3× (Tier 5 G3). On failure: metric + threshold-tracked
+    // hold via pgHold; below threshold the call still throws (preserves today's fail-fast on
+    // first PG failure); at the threshold pgHold.isHoldActive flips true and we return 0
+    // cleanly so the consume loop continues without crashing.
     try {
       stateManager.saveStatesAndCheckpoints(states, checkpoints);
+      if (pgHold != null) {
+        // Resets the consecutive-failure counter and exits hold if it was active. Idempotent
+        // when the counter is already 0.
+        pgHold.recordPgSuccess();
+      }
     } catch (CryptoLakeStateException e) {
       metrics.pgCommitFailures().increment();
       log.error("pg_commit_failed", e, "error", e.getMessage());
-      throw e; // NO Kafka commit (Tier 5 C8 watch-out)
+      if (pgHold != null) {
+        pgHold.recordPgFailure();
+        if (pgHold.isHoldActive()) {
+          return 0;
+        }
+      }
+      throw e; // <-threshold: NO Kafka commit; preserves today's behavior (Tier 5 C8 watch-out)
     }
 
     // Step 5: Only on PG success — commitSync with explicit offsets (Tier 5 C8; Tier 1 §4)
