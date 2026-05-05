@@ -92,7 +92,12 @@ still removes its containers and volumes.
 | 13 | rapid_restart_storm | Restart primary 5× with 8s down per cycle (each above 5s silence threshold) | `collector_restart` only on polled streams; ≥3 of 5 failover round-trips fire |
 | 14 | both_collectors_kill | SIGKILL both collectors for 30s while writer/PG/redpanda stay up | `collector_restart` archived via CoverageFilter no-coverage path |
 | 15 | redpanda_leader_change | Stop redpanda for 45s, restart | NO uncovered gap; producer health-monitor stays HEALTHY for brief outages (sustained-outage path is test 23) |
-| 16 | collector_failover_to_backup | Kill primary; backup covers | `collector_restart` |
+<!-- 16 removed: same chaos as test 01 (SIGKILL primary, backup covers,
+     restart) with the only difference being a 90s vs 45s downtime. Its
+     strict gaps=∅ assertion happens to pass when backup's polled-stream
+     samples align well with the gap-decision moment, but is structurally
+     flaky for the same OI / depth_snapshot poll-cadence reasons test 01
+     handles. Test 01 is the canonical version. -->
 | 17 | kafka_producer_outage | Block collector→redpanda for 60s | `kafka_producer_outage` |
 | 18 | kafka_consumer_outage | Block writer←redpanda for 60s | `kafka_consumer_outage` |
 | 19 | kafka_offset_reset | Delete + recreate topic during writer run | `kafka_offset_reset` |
