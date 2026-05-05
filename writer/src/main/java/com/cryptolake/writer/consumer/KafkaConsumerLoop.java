@@ -70,6 +70,13 @@ public final class KafkaConsumerLoop implements Runnable {
   private volatile boolean stopRequested = false;
 
   /**
+   * Tracks whether the previous {@link #applyHoldPauseState()} call observed an active hold. Used
+   * to emit the LIFECYCLE pause/resume log lines on edge-changes only (not every iteration). Read
+   * and written by T1 only — no synchronization needed.
+   */
+  private boolean lastKnownHeld = false;
+
+  /**
    * Volatile set of currently assigned partitions. Written by T1 (listener), read by T2 (health).
    * Uses an unmodifiable copy swap pattern — no race (single writer; T2 reads reference
    * atomically).
@@ -131,6 +138,12 @@ public final class KafkaConsumerLoop implements Runnable {
 
     while (!stopRequested) {
       try {
+        // Pause/resume primary consumption based on hold state. When either disk-full or
+        // pg-outage hold is active, primary partitions are paused so records remain in Kafka
+        // rather than accumulating in BufferManager (no max-bytes cap → OOM risk under long
+        // holds). Backup-tail is unaffected (liveness only).
+        applyHoldPauseState();
+
         // Poll primary (Tier 5 A2 — blocking call on virtual thread; no run_in_executor wrapper)
         ConsumerRecords<byte[], byte[]> records = primary.poll(Duration.ofSeconds(1));
         if (!records.isEmpty()) {
@@ -232,6 +245,64 @@ public final class KafkaConsumerLoop implements Runnable {
   public void requestShutdown() {
     this.stopRequested = true;
     log.info("consume_loop_shutdown_requested");
+  }
+
+  /**
+   * Pauses or resumes primary Kafka consumption based on the committer's hold state.
+   *
+   * <p>Called at the top of every consume-loop iteration BEFORE {@code primary.poll}. When any hold
+   * is active, primary partitions are paused so records remain in Kafka rather than accumulating in
+   * {@link com.cryptolake.writer.buffer.BufferManager} (which has no max-bytes cap and would OOM
+   * during long holds).
+   *
+   * <p>The pause/resume is edge-triggered for log emission (single LIFECYCLE line per state
+   * change), but the underlying {@code primary.pause(...)} call is repeated each iteration while
+   * held to cover partition reassignment during a hold (Kafka client treats pause on already-
+   * paused partitions as a no-op).
+   *
+   * <p>Package-private for unit-test access; production callers go through {@link #run()}.
+   */
+  void applyHoldPauseState() {
+    boolean nowHeld = committer.isAnyHoldActive();
+    if (nowHeld != lastKnownHeld) {
+      try {
+        if (nowHeld) {
+          primary.pause(primary.assignment());
+          log.info(
+              "LIFECYCLE WRITER_KAFKA_CONSUMPTION_PAUSED: Hold is active — the writer is"
+                  + " pausing primary Kafka consumption so records remain in Kafka rather than"
+                  + " accumulating in the in-memory buffer. They will replay when the hold"
+                  + " exits.");
+        } else {
+          primary.resume(primary.assignment());
+          log.info(
+              "LIFECYCLE WRITER_KAFKA_CONSUMPTION_RESUMED: Hold has cleared — the writer is"
+                  + " resuming primary Kafka consumption; records that accumulated in Kafka"
+                  + " during the hold will now flow through.");
+        }
+      } catch (Exception e) {
+        // Pause/resume can throw IllegalStateException if the consumer is already closed
+        // (only happens during shutdown; defensive).
+        log.warn("hold_pause_state_apply_failed", "now_held", nowHeld, "error", e.getMessage());
+      }
+      lastKnownHeld = nowHeld;
+    } else if (nowHeld) {
+      // Re-pause the current assignment every iteration while held so a rebalance during
+      // hold does not leak unpaused partitions.
+      try {
+        primary.pause(primary.assignment());
+      } catch (Exception ignored) {
+        // best-effort
+      }
+    }
+  }
+
+  /**
+   * Test-only: returns the current {@link #lastKnownHeld} value. Package-private accessor exposed
+   * for assertions in {@link KafkaConsumerLoopHoldPauseTest}.
+   */
+  boolean isLastKnownHeldForTest() {
+    return lastKnownHeld;
   }
 
   /**
