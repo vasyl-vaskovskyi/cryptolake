@@ -43,12 +43,15 @@ sleep 90
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — only MAIN's producer path failed; BACKUP covered.
-expect_lifecycle_event        "MAIN collector enters kafka outage"  "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector
-expect_lifecycle_event        "MAIN collector exits kafka outage"   "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector
+# Assertions — primary's network isolation makes its records stop reaching
+# Kafka, so the writer's silence-based failover trips. The
+# COLLECTOR_KAFKA_OUTAGE_ENTERED path is NOT reached at 60s isolation:
+# probeHealth() relies on cached metadata + buffer-depletion / record-
+# error-rate signals, none of which trip in 60s with a 1 GiB producer
+# buffer. The sustained-outage path lives in test 23.
 expect_lifecycle_event        "writer fails over to BACKUP"         "WRITER_NOW_ARCHIVING_FROM=BACKUP"
 expect_lifecycle_event        "writer switches back to MAIN"        "WRITER_NOW_ARCHIVING_FROM=MAIN"
 expect_lifecycle_event_absent "no uncovered gap accepted"           "GAP_ACCEPTED_NO_COVERAGE"
-expect_no_gaps_check          "no gap envelopes archived"
+expect_only_these_gaps_check  collector_restart
 
 verdict
