@@ -1095,6 +1095,15 @@ teardown_stack() {
         rm -rf "$HOST_DATA_DIR"
         msg "Removed ${HOST_DATA_DIR}"
     fi
+
+    # Free the cached chaosfs upstream image so each scenario start is hermetic. The image
+    # is pinned by digest in docker-compose.chaos-02-nfs.yml; we rmi by the same digest here
+    # so the rmi targets exactly that image regardless of any other tagged variant. Best-
+    # effort; harmless when no chaosfs scenario was loaded (image not present, rmi exits 1).
+    docker rmi itsthenetwork/nfs-server-alpine@sha256:7fa99ae65c23c5af87dd4300e543a86b119ed15ba61422444207efc7abd0ba20 2>/dev/null \
+        && msg "Removed cached chaosfs image" \
+        || true
+
     msg "=== Teardown complete ==="
 }
 
