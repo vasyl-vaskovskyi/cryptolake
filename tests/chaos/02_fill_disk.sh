@@ -2,7 +2,8 @@
 # 02_fill_disk.sh
 #
 # Scenario: writer_disk_full_brief
-# Chaos:    Fill HOST_DATA_DIR to 99%; hold ~120s; free disk
+# Chaos:    Fill the writer's /data filesystem (a 300 MiB tmpfs served by
+#           the chaosfs NFS sidecar) to ~96%; hold ~120s; free disk.
 # Expected: NO gap (writer recovers from Kafka after disk freed)
 # Flow:     MAIN+BACKUP both delivering normally → writer's appendAndFsync
 #           hits IOException on disk-full → writeErrors metric increments,
@@ -20,51 +21,79 @@
 #           rate alerting, not via a gap envelope, since chaos-testing it
 #           reliably is impractical.)
 #
-# NOTE: This scenario writes real data with `dd if=/dev/zero` to HOST_DATA_DIR
-# until the underlying filesystem is 99% full. On a typical dev machine
-# /tmp is on the host disk (APFS on macOS), so running this naively would
-# fill hundreds of GB and likely crash Docker. The `safe_disk_fill_or_skip`
-# guard below SKIPs the scenario unless HOST_DATA_DIR is on a small
-# dedicated filesystem (tmpfs / loopback ≤ ~2 GiB) or
-# CRYPTOLAKE_CHAOS_DANGEROUS_DISK=1 is set explicitly. The teardown trap
-# calls free_disk to clean the filler file even on failure.
+# Implementation: This scenario uses a sidecar NFSv4 server (`chaosfs`)
+# whose backing store is a 300 MiB tmpfs. The writer mounts /data over NFS
+# from chaosfs. We deliberately OVERFILL the tmpfs (request 320 MiB into
+# a 300 MiB cap) so dd hits ENOSPC partway through and the resulting
+# state is 100% Used with zero free bytes. The writer's next fsync via
+# NFS then gets ENOSPC immediately — leaving even a few MiB of headroom
+# fails the test because per-record flushes (kilobyte-sized) keep fitting
+# until the headroom is depleted, which can take longer than the hold
+# window. After recovery, the writer is gracefully stopped (its shutdown
+# hook performs a final flushAndCommit) and the archive is materialized
+# from chaosfs back to HOST_DATA_DIR so the host-side verify CLI can read
+# a stable, fully-flushed snapshot.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
+# Opt in to the chaosfs sidecar via the generic CHAOS_EXTRA_* hooks.
+# init_scenario reads CHAOS_EXTRA_COMPOSE_FILES; start_stack reads CHAOS_EXTRA_SERVICES.
+export CHAOS_EXTRA_COMPOSE_FILES="docker-compose.chaos-02-nfs.yml"
+export CHAOS_EXTRA_SERVICES="chaosfs"
+
 init_scenario "02" "primary+backup"
 
-# Disk-fill is safe only on a small dedicated filesystem at HOST_DATA_DIR.
-# On a regular dev machine /tmp lives on the host disk; filling it to 99%
-# can write hundreds of GB and crash Docker. The guard skips this scenario
-# unless the env is configured for it (or the operator opted in).
-safe_disk_fill_or_skip "$HOST_DATA_DIR"
-
 start_stack "primary+backup"
-wait_healthy 150
+wait_healthy 180
 
 msg "Warm-up 60s…"
 warm_up 60
-wait_data_flowing "bookticker" 30
+wait_data_flowing_chaosfs "bookticker" 60
 
-msg "=== CHAOS: Filling HOST_DATA_DIR to 99% ==="
-fill_disk "$HOST_DATA_DIR" 99
+# Overshoot the 300 MiB tmpfs cap by ~20 MiB. dd exits non-zero at
+# ENOSPC partway through — that's the success path inside fill_via_chaosfs,
+# whose post-condition is "tmpfs is now ≥95% Used". The overshoot
+# guarantees the resulting state is 100% Used (zero free bytes), so the
+# writer's NEXT fsync over NFS receives ENOSPC immediately rather than
+# fitting into a few MiB of remaining headroom (which is what happened
+# in run 2: 290 MiB filler left 8.8 MiB headroom and per-record flushes
+# kilobyte-sized just kept fitting for the entire hold window).
+msg "=== CHAOS: Filling chaosfs tmpfs to 100% (overshooting 300 MiB cap) ==="
+fill_via_chaosfs 320
 
 # Hold the disk-full state long enough for the writer to attempt several
-# flush cycles and accumulate writeErrors. Default flush interval is 5s,
-# so 120s gives ~24 failed-flush attempts.
+# flush cycles and accumulate writeErrors. Production flush interval is
+# 30s (config/config.yaml: flush_interval_seconds), so 120s gives ~4
+# failed-flush attempts and ensures DiskFullHoldController has seen the
+# ENOSPC signal multiple times.
 msg "Holding disk-full state for 120s (writer's flushAndCommit will fail repeatedly)…"
 sleep 120
 
-msg "Freeing disk…"
-free_disk
+msg "Freeing chaosfs tmpfs…"
+free_via_chaosfs
 
-# After the disk is freed, the writer's next flushAndCommit succeeds. The
-# Kafka consumer position is unchanged (no commits happened during the
-# hold), so the next poll re-reads the records published during the hold
-# from BOTH topics. They get archived now, completing the gap.
-msg "Waiting 90s for writer recovery (re-poll uncommitted offsets, archive backlog)…"
-sleep 90
+# Recovery budget. DiskFullHoldController probes free-space every 30s,
+# so worst case after free is ~30s to flip out of hold + 30s for the
+# next successful flush cycle = ~60s. We sleep 120s to absorb scheduling
+# jitter and to let the consumer drain the post-hold backlog from Kafka.
+msg "Waiting 120s for writer recovery (re-poll uncommitted offsets, archive backlog)…"
+sleep 120
+
+# Gracefully stop the writer so its shutdown hook performs a final
+# flushAndCommit. Without this, materialize_archive_to_host could tar a
+# partial-flush snapshot while the writer is still writing, and the
+# archive on HOST_DATA_DIR would diverge from what's on chaosfs.
+# `dc stop` issues SIGTERM; the writer's shutdown hook (see writer/Main.java)
+# drains the consumer, flushes buffered records, and commits offsets
+# before exiting. stop_grace_period=30s in docker-compose.yml is enough.
+msg "Stopping writer for clean snapshot…"
+dc stop writer
+
+# The archive lives inside chaosfs:/exports (the writer's NFS-mounted /data).
+# Now that the writer is stopped, the on-disk state is stable; copy it to
+# HOST_DATA_DIR so the host-side verify CLI can see it.
+materialize_archive_to_host
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
