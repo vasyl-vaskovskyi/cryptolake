@@ -4,7 +4,10 @@
 # Scenario: writer_disk_full_brief
 # Chaos:    Fill the writer's /data filesystem (a 300 MiB tmpfs served by
 #           the chaosfs NFS sidecar) to ~96%; hold ~120s; free disk.
-# Expected: NO gap (writer recovers from Kafka after disk freed)
+# Expected: writer enters and exits disk-full hold cleanly; only allowed gap
+#           reason is `disk_full_hold` (the controller emits hold-window markers
+#           by design at entry/exit; these are NOT data loss). Records that
+#           arrived in Kafka during the hold replay on recovery.
 # Flow:     MAIN+BACKUP both delivering normally → writer's appendAndFsync
 #           hits IOException on disk-full → writeErrors metric increments,
 #           Kafka offsets are NOT committed (PG-then-Kafka ordering in
@@ -100,7 +103,13 @@ run_verify "$(today)" "$HOST_DATA_DIR"
 # Assertions — brief disk-full is recoverable; no real data loss.
 expect_lifecycle_event        "writer enters disk-full hold"     "WRITER_DISK_FULL_HOLD_ENTERED"
 expect_lifecycle_event        "writer exits disk-full hold"      "WRITER_DISK_FULL_HOLD_EXITED"
+expect_lifecycle_event        "kafka consumption paused"         "WRITER_KAFKA_CONSUMPTION_PAUSED"
+expect_lifecycle_event        "kafka consumption resumed"        "WRITER_KAFKA_CONSUMPTION_RESUMED"
 expect_lifecycle_event_absent "no uncovered gap accepted"        "GAP_ACCEPTED_NO_COVERAGE"
-expect_no_gaps_check          "no gap envelopes archived"
+# DiskFullHoldController emits disk_full_hold gap envelopes at hold entry and
+# exit by design — they mark the window where Kafka commits were paused. They
+# are NOT data loss (records replay from Kafka on recovery). Allow only this
+# reason; any other reason indicates an unintended path.
+expect_only_these_gaps_check "disk_full_hold"
 
 verdict
