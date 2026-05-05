@@ -5,6 +5,8 @@ import com.cryptolake.writer.StreamKey;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.buffer.CheckpointMeta;
 import com.cryptolake.writer.buffer.FlushResult;
+import com.cryptolake.writer.durability.DiskFullHoldController;
+import com.cryptolake.writer.durability.PgOutageHoldController;
 import com.cryptolake.writer.io.DurableAppender;
 import com.cryptolake.writer.io.ZstdFrameCompressor;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -74,13 +76,13 @@ public final class OffsetCommitCoordinator {
    * Nullable for legacy unit tests that exercise empty-buffer paths only; real wiring (Main.java)
    * always provides a non-null instance.
    */
-  private final com.cryptolake.writer.durability.DiskFullHoldController diskHold;
+  private final DiskFullHoldController diskHold;
 
   /**
    * PG-outage hold controller. Same role as {@link #diskHold} but for prolonged PG unavailability.
    * Nullable for legacy unit tests.
    */
-  private final com.cryptolake.writer.durability.PgOutageHoldController pgHold;
+  private final PgOutageHoldController pgHold;
 
   /**
    * Mutable cache of durable checkpoints — updated after every successful PG+Kafka commit. Owned by
@@ -96,8 +98,8 @@ public final class OffsetCommitCoordinator {
       SealedFileIndex sealedIndex,
       WriterMetrics metrics,
       ClockSupplier clock,
-      com.cryptolake.writer.durability.DiskFullHoldController diskHold,
-      com.cryptolake.writer.durability.PgOutageHoldController pgHold) {
+      DiskFullHoldController diskHold,
+      PgOutageHoldController pgHold) {
     this.primary = primary;
     this.appender = appender;
     this.compressor = compressor;
