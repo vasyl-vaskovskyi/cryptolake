@@ -99,4 +99,128 @@ class OffsetCommitCoordinatorHoldIntegrationTest {
       throw new AssertionError(unreachable);
     }
   }
+
+  /**
+   * Test 1: ENOSPC IOException on appendAndFsync triggers diskHold.onWriteError, hold becomes
+   * active, flushAndCommit returns 0 cleanly (no rethrow), no commitSync call.
+   */
+  @Test
+  void flushAndCommit_returnsZero_whenDiskHoldEntered_byEnospcIoException() throws Exception {
+    PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    WriterMetrics metrics = new WriterMetrics(registry);
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    // BufferManager with one buffered record so flushAll() returns a non-empty result.
+    BufferManager buffers = new BufferManager("/tmp/test-hold-task2-1", 100, 60, codec);
+    enqueueOneBufferedRecord(buffers);
+
+    @SuppressWarnings("unchecked")
+    KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+    DurableAppender appender = mock(DurableAppender.class);
+    ZstdFrameCompressor compressor = mock(ZstdFrameCompressor.class);
+    StateManager stateManager = mock(StateManager.class);
+    SealedFileIndex sealedIndex = mock(SealedFileIndex.class);
+
+    // Compressor returns a small byte[] so the for-loop reaches appendAndFsync.
+    org.mockito.Mockito.when(compressor.compressFrame(any())).thenReturn(new byte[] {0, 1, 2, 3});
+    // Appender throws ENOSPC on the first (and only) call.
+    org.mockito.Mockito.doThrow(new IOException("No space left on device"))
+        .when(appender)
+        .appendAndFsync(any(), any());
+
+    DiskFullHoldController diskHold = newDiskHoldNeverFreeing();
+    PgOutageHoldController pgHold = newPgHoldNeverRecovering();
+
+    OffsetCommitCoordinator coord =
+        new OffsetCommitCoordinator(
+            consumer,
+            appender,
+            compressor,
+            stateManager,
+            sealedIndex,
+            metrics,
+            Clocks.systemNanoClock(),
+            diskHold,
+            pgHold);
+
+    int n = coord.flushAndCommit(buffers);
+
+    assertThat(n).isEqualTo(0);
+    assertThat(diskHold.isHoldActive()).isTrue();
+    verify(appender).appendAndFsync(any(), any()); // called exactly once
+    verify(consumer, never()).commitSync(any(Map.class));
+    verify(stateManager, never()).saveStatesAndCheckpoints(any(), any());
+  }
+
+  /**
+   * Test 2: non-ENOSPC IOException on appendAndFsync still throws UncheckedIOException (preserves
+   * today's behavior). Disk hold is NOT entered.
+   */
+  @Test
+  void flushAndCommit_rethrowsUncheckedIO_whenIoExceptionIsNotEnospc() throws Exception {
+    PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    WriterMetrics metrics = new WriterMetrics(registry);
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    BufferManager buffers = new BufferManager("/tmp/test-hold-task2-2", 100, 60, codec);
+    enqueueOneBufferedRecord(buffers);
+
+    @SuppressWarnings("unchecked")
+    KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+    DurableAppender appender = mock(DurableAppender.class);
+    ZstdFrameCompressor compressor = mock(ZstdFrameCompressor.class);
+    StateManager stateManager = mock(StateManager.class);
+    SealedFileIndex sealedIndex = mock(SealedFileIndex.class);
+
+    org.mockito.Mockito.when(compressor.compressFrame(any())).thenReturn(new byte[] {0, 1});
+    org.mockito.Mockito.doThrow(new IOException("Permission denied"))
+        .when(appender)
+        .appendAndFsync(any(), any());
+
+    DiskFullHoldController diskHold = newDiskHoldNeverFreeing();
+    PgOutageHoldController pgHold = newPgHoldNeverRecovering();
+
+    OffsetCommitCoordinator coord =
+        new OffsetCommitCoordinator(
+            consumer,
+            appender,
+            compressor,
+            stateManager,
+            sealedIndex,
+            metrics,
+            Clocks.systemNanoClock(),
+            diskHold,
+            pgHold);
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> coord.flushAndCommit(buffers))
+        .isInstanceOf(java.io.UncheckedIOException.class)
+        .hasMessageContaining("File write failed");
+
+    assertThat(diskHold.isHoldActive()).isFalse();
+    verify(consumer, never()).commitSync(any(Map.class));
+  }
+
+  /**
+   * Helper: enqueue one buffered record into the BufferManager so flushAll() returns a non-empty
+   * FlushResult. Uses {@link BufferManager#add(com.cryptolake.common.envelope.DataEnvelope,
+   * com.cryptolake.common.envelope.BrokerCoordinates, String)} — the writer's real ingest path.
+   *
+   * <p>Symbol/stream are {@code btcusdt}/{@code trades} (matches the {@code DISK_SS}/{@code PG_SS}
+   * symbol-stream lists). Date/hour are derived inside {@code BufferManager.route} from {@code
+   * env.receivedAt()} = now — the specific hour does not matter for these tests; only that one
+   * record is buffered and ready to flush.
+   */
+  private static void enqueueOneBufferedRecord(BufferManager buffers) {
+    com.cryptolake.common.envelope.DataEnvelope env =
+        com.cryptolake.common.envelope.DataEnvelope.create(
+            EXCHANGE,
+            "btcusdt",
+            "trades",
+            "{}",
+            1_000_000L,
+            "binance-collector-01_2026-05-05T14:00:00Z",
+            1L,
+            Clocks.systemNanoClock());
+    com.cryptolake.common.envelope.BrokerCoordinates coords =
+        new com.cryptolake.common.envelope.BrokerCoordinates("binance.trades", 0, 0L);
+    buffers.add(env, coords, "primary");
+  }
 }

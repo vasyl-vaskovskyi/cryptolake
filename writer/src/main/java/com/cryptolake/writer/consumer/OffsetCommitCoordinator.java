@@ -161,6 +161,17 @@ public final class OffsetCommitCoordinator {
         metrics
             .writeErrors(r.target().exchange(), r.target().symbol(), r.target().stream())
             .increment();
+        // Route to disk-full hold controller. If this is ENOSPC, the controller flips its
+        // hold state to active and emits LIFECYCLE WRITER_DISK_FULL_HOLD_ENTERED. We then
+        // short-circuit the rest of flushAndCommit (no PG save, no Kafka commit) so the
+        // records stay in Kafka and replay on recovery. For non-ENOSPC IOExceptions, the
+        // controller is a no-op (isEnospc returns false), and we rethrow as today.
+        if (diskHold != null) {
+          diskHold.onWriteError(e);
+          if (diskHold.isHoldActive()) {
+            return 0;
+          }
+        }
         throw new UncheckedIOException("File write failed for " + r.filePath(), e);
       }
 
