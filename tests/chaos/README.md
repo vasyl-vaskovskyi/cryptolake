@@ -101,7 +101,11 @@ still removes its containers and volumes.
 | 17 | kafka_producer_outage | Network-isolate primary collector for 60s | NO uncovered gap; writer's silence-based failover takes over (sustained-outage path is test 23); only `collector_restart` permitted on polled streams |
 | 18 | kafka_consumer_outage | Network-isolate writer from redpanda for 60s | NO gap; consumer catches up from last committed offset (Kafka retention 48h covers); `KafkaConsumerOutageDetector` exists but is dead code in current build |
 | 19 | kafka_offset_reset | Delete + recreate `binance.bookticker` mid-run | NO `kafka_offset_reset` gap; auto.offset.reset=earliest silently resets the consumer (the gap-emit path requires auto.offset.reset=none which prod doesn't use) |
-| 20 | cross_source_pu_chain_break | Kill primary at depth u=N; backup has gap | `cross_source_pu_chain_break` |
+<!-- 20 removed: CrossSourcePuChainValidator is referenced in RecordHandler but
+     `setCrossSourceValidator()` is never called from writer/Main.java — the
+     validator stays null in the current build, so cross_source_pu_chain_break
+     cannot be emitted regardless of chaos. The chaos itself (SIGKILL primary,
+     backup covers, restart) duplicates test 01. -->
 | 21 | disk_full_hold | Fill disk; verify hold + recovery | `disk_full_hold` |
 | 22 | both_collectors_silent | Block both collectors' egress | `both_collectors_silent` |
 | 23 | kafka_full_outage | Stop redpanda; restart; verify journal replay | `kafka_producer_outage` |
