@@ -108,7 +108,7 @@ still removes its containers and volumes.
      backup covers, restart) duplicates test 01. -->
 | 21 | disk_full_hold | Fill disk to 99% sustained; verify hold + recovery | `disk_full_hold` — **requires small dedicated fs at HOST_DATA_DIR; SKIPs otherwise** |
 | 22 | both_collectors_silent | Block both collectors' egress for 60s | `snapshot_poll_miss` on polled streams (correct GAP_ACCEPTED_NO_COVERAGE); `both_collectors_silent` reason currently UNREACHABLE — `SilenceInferredGapEmitter` is dead code in current build (silent loss on continuous WS streams) |
-| 23 | kafka_full_outage | Stop redpanda; restart; verify journal replay | `kafka_producer_outage` |
+| 23 | kafka_full_outage | Stop redpanda for 180s (>delivery.timeout.ms) | `kafka_producer_outage` + `kafka_delivery_failed` archived; both collectors transition through COLLECTOR_KAFKA_OUTAGE_ENTERED/EXITED via journal replay |
 
 ## Writing a new scenario
 

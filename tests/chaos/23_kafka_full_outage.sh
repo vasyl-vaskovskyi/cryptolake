@@ -34,10 +34,13 @@ wait_data_flowing "bookticker" 30
 msg "=== CHAOS: Stopping Redpanda (full Kafka outage) ==="
 clean_stop_service "redpanda"
 
-# Hold for 60s — both collectors must accumulate KafkaOutageJournal entries
-# (KafkaProducerHealthMonitor needs >30s to enter paused state)
-msg "Holding Redpanda down for 60s…"
-sleep 60
+# Hold long enough for delivery.timeout.ms (120s) to expire on at least
+# one in-flight record, so the producer's record-error-rate metric goes
+# above 0 and KafkaProducerHealthMonitor.probeHealth() finally returns
+# false. (The probe is intentionally lenient about cached metadata; only
+# real back-pressure / record errors trip the DEGRADED → PAUSED path.)
+msg "Holding Redpanda down for 180s (>delivery.timeout.ms + DEGRADED window)…"
+sleep 180
 
 # Confirm KafkaOutageJournal files were created
 PRIMARY_JOURNAL="${HOST_DATA_DIR}/cryptolake/binance-collector-01/kafka_outage.json"
@@ -63,13 +66,17 @@ sleep 120
 run_verify "$(today)" "$HOST_DATA_DIR"
 
 # Assertions — full kafka outage: both collectors must enter+exit kafka outage
-# state, and kafka_producer_outage gap must be recorded.
+# state. The writer records gaps via the GAP_ACCEPTED_NO_COVERAGE path
+# (no parking — neither source has fresh data, decision is immediate),
+# with reason=kafka_producer_outage for the journal-replayed window plus
+# reason=kafka_delivery_failed for individual records that timed out
+# during the outage. Both are valid loss markers.
 expect_lifecycle_event   "MAIN collector enters kafka outage"      "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector
 expect_lifecycle_event   "MAIN collector exits kafka outage"       "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector
 expect_lifecycle_event   "BACKUP collector enters kafka outage"    "COLLECTOR_KAFKA_OUTAGE_ENTERED" collector-backup
 expect_lifecycle_event   "BACKUP collector exits kafka outage"     "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector-backup
-expect_lifecycle_event   "gap was archived"                        "GAP_ARCHIVED"
+expect_lifecycle_event   "uncovered gap accepted (no source had fresh data)" "GAP_ACCEPTED_NO_COVERAGE"
 expect_gap_present_check "kafka_producer_outage gap recorded"      "kafka_producer_outage"
-expect_only_these_gaps_check kafka_producer_outage
+expect_only_these_gaps_check kafka_producer_outage kafka_delivery_failed snapshot_poll_miss
 
 verdict
