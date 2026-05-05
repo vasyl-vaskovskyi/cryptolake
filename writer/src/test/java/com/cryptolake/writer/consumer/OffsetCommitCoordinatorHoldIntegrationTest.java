@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +42,15 @@ class OffsetCommitCoordinatorHoldIntegrationTest {
       List.of(new DiskFullHoldController.SymbolStream("btcusdt", "trades"));
   private static final List<PgOutageHoldController.SymbolStream> PG_SS =
       List.of(new PgOutageHoldController.SymbolStream("btcusdt", "trades"));
+
+  /**
+   * Monotonic broker-offset counter for {@link #enqueueOneBufferedRecord(BufferManager)}. Each call
+   * must use a unique {@code (topic, partition, offset)} triple so the BufferManager's
+   * archive-layer dedup window does not silently drop the second/third add inside a single test
+   * (the dedup window is per-BufferManager-instance, so unique-across-tests is overkill but
+   * harmless; the important property is unique-within-a-test).
+   */
+  private static final AtomicLong NEXT_OFFSET = new AtomicLong(0L);
 
   private static DiskFullHoldController newDiskHoldNeverFreeing() {
     AtomicBoolean diskFree = new AtomicBoolean(false); // probe always reports "still full"
@@ -199,6 +209,66 @@ class OffsetCommitCoordinatorHoldIntegrationTest {
   }
 
   /**
+   * Test 5: three consecutive PG failures → recordPgFailure on each → threshold reached →
+   * pgHold.isHoldActive flips true → third call returns 0 cleanly (no exception). Calls 1 and 2
+   * still throw — today's "fail fast on first PG failure" behavior is preserved below the
+   * threshold.
+   */
+  @Test
+  void flushAndCommit_returnsZero_whenPgHoldEntered_afterThreeConsecutiveFailures()
+      throws Exception {
+    PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    WriterMetrics metrics = new WriterMetrics(registry);
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    BufferManager buffers = new BufferManager("/tmp/test-hold-task3", 100, 60, codec);
+
+    @SuppressWarnings("unchecked")
+    KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+    DurableAppender appender = mock(DurableAppender.class);
+    ZstdFrameCompressor compressor = mock(ZstdFrameCompressor.class);
+    StateManager stateManager = mock(StateManager.class);
+    SealedFileIndex sealedIndex = mock(SealedFileIndex.class);
+
+    org.mockito.Mockito.when(compressor.compressFrame(any())).thenReturn(new byte[] {0, 1});
+    // Appender succeeds — PG is the failure point.
+    // saveStatesAndCheckpoints throws on every call.
+    org.mockito.Mockito.doThrow(new com.cryptolake.writer.state.CryptoLakeStateException("pg down"))
+        .when(stateManager)
+        .saveStatesAndCheckpoints(any(), any());
+
+    DiskFullHoldController diskHold = newDiskHoldNeverFreeing();
+    PgOutageHoldController pgHold = newPgHoldNeverRecovering();
+
+    OffsetCommitCoordinator coord =
+        new OffsetCommitCoordinator(
+            consumer,
+            appender,
+            compressor,
+            stateManager,
+            sealedIndex,
+            metrics,
+            Clocks.systemNanoClock(),
+            diskHold,
+            pgHold);
+
+    // Buffer a fresh record before each call so flushAll() returns non-empty.
+    enqueueOneBufferedRecord(buffers);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> coord.flushAndCommit(buffers))
+        .isInstanceOf(com.cryptolake.writer.state.CryptoLakeStateException.class);
+
+    enqueueOneBufferedRecord(buffers);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> coord.flushAndCommit(buffers))
+        .isInstanceOf(com.cryptolake.writer.state.CryptoLakeStateException.class);
+
+    enqueueOneBufferedRecord(buffers);
+    int n = coord.flushAndCommit(buffers);
+
+    assertThat(n).isEqualTo(0);
+    assertThat(pgHold.isHoldActive()).isTrue();
+    verify(consumer, never()).commitSync(any(Map.class));
+  }
+
+  /**
    * Helper: enqueue one buffered record into the BufferManager so flushAll() returns a non-empty
    * FlushResult. Uses {@link BufferManager#add(com.cryptolake.common.envelope.DataEnvelope,
    * com.cryptolake.common.envelope.BrokerCoordinates, String)} — the writer's real ingest path.
@@ -220,7 +290,8 @@ class OffsetCommitCoordinatorHoldIntegrationTest {
             1L,
             Clocks.systemNanoClock());
     com.cryptolake.common.envelope.BrokerCoordinates coords =
-        new com.cryptolake.common.envelope.BrokerCoordinates("binance.trades", 0, 0L);
+        new com.cryptolake.common.envelope.BrokerCoordinates(
+            "binance.trades", 0, NEXT_OFFSET.getAndIncrement());
     buffers.add(env, coords, "primary");
   }
 }

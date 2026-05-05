@@ -244,13 +244,22 @@ public final class OffsetCommitCoordinator {
     long flushEndNs = System.nanoTime();
     double flushMs = (flushEndNs - flushStartNs) / 1_000_000.0;
 
-    // Step 4: PG save — atomic, retry 3× (Tier 5 G3). On failure: metric + throw, NO commit
+    // Step 4: PG save — atomic, retry 3× (Tier 5 G3). On failure: metric + threshold-tracked
+    // hold via pgHold; below threshold the call still throws (preserves today's fail-fast on
+    // first PG failure); at the threshold pgHold.isHoldActive flips true and we return 0
+    // cleanly so the consume loop continues without crashing.
     try {
       stateManager.saveStatesAndCheckpoints(states, checkpoints);
     } catch (CryptoLakeStateException e) {
       metrics.pgCommitFailures().increment();
       log.error("pg_commit_failed", e, "error", e.getMessage());
-      throw e; // NO Kafka commit (Tier 5 C8 watch-out)
+      if (pgHold != null) {
+        pgHold.recordPgFailure();
+        if (pgHold.isHoldActive()) {
+          return 0;
+        }
+      }
+      throw e; // <-threshold: NO Kafka commit; preserves today's behavior (Tier 5 C8 watch-out)
     }
 
     // Step 5: Only on PG success — commitSync with explicit offsets (Tier 5 C8; Tier 1 §4)
