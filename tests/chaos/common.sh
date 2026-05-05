@@ -946,6 +946,67 @@ free_disk() {
 }
 
 # ---------------------------------------------------------------------------
+# fill_via_chaosfs <megabytes>
+# Fills the chaosfs sidecar's /exports tmpfs (capped to 300 MiB by the
+# scenario-02 compose override) by writing a single filler file inside the
+# chaosfs container. The writer mounts /exports over NFS as its /data, so
+# this is what triggers ENOSPC on the writer's next fsync.
+# ---------------------------------------------------------------------------
+fill_via_chaosfs() {
+    local megs="${1:?fill_via_chaosfs requires a megabyte count}"
+    msg "Filling chaosfs:/exports with ${megs} MiB filler…"
+    # conv=fsync forces metadata flush so the tmpfs cap is hit synchronously
+    # rather than at some later writeback. status=none keeps the chaos log
+    # readable; dd's progress lines mangle the [chaos] prefix layout.
+    if dc exec -T chaosfs sh -c "dd if=/dev/zero of=/exports/_chaos_filler bs=1M count=${megs} conv=fsync status=none"; then
+        msg "Fill complete. chaosfs:/exports usage:"
+        dc exec -T chaosfs sh -c 'df -h /exports' || true
+    else
+        # ENOSPC mid-write is the success case (we asked dd to overshoot or
+        # land exactly at the cap). Surface the usage either way.
+        msg "dd returned non-zero (likely ENOSPC — that's expected). Current usage:"
+        dc exec -T chaosfs sh -c 'df -h /exports' || true
+    fi
+    CHAOSFS_FILLED=1
+}
+
+# ---------------------------------------------------------------------------
+# free_via_chaosfs
+# Removes the chaosfs filler file. Idempotent; safe to call from teardown.
+# ---------------------------------------------------------------------------
+free_via_chaosfs() {
+    [[ -z "${CHAOSFS_FILLED:-}" ]] && return 0
+    msg "Removing chaosfs:/exports/_chaos_filler…"
+    dc exec -T chaosfs sh -c 'rm -f /exports/_chaos_filler' || true
+    dc exec -T chaosfs sh -c 'df -h /exports' || true
+    unset CHAOSFS_FILLED
+}
+
+# ---------------------------------------------------------------------------
+# materialize_archive_to_host
+# When the writer's /data is backed by an NFS volume served by chaosfs, the
+# archive lives inside the chaosfs container's tmpfs and is invisible to
+# the host-side `verify` CLI. This helper copies the archive tree out of
+# chaosfs into $HOST_DATA_DIR so the existing `run_verify` invocation can
+# read it without changes.
+#
+# Using `docker compose cp` (not bind-mount tricks) keeps this hermetic:
+# the host dir is empty before copy and gets populated only with what the
+# writer actually persisted.
+# ---------------------------------------------------------------------------
+materialize_archive_to_host() {
+    [[ -z "${HOST_DATA_DIR:-}" ]] && die "materialize_archive_to_host: HOST_DATA_DIR unset"
+    msg "Copying archive from chaosfs:/exports → ${HOST_DATA_DIR}…"
+    mkdir -p "$HOST_DATA_DIR"
+    # `cp -a` preserves mtimes; `dc cp` doesn't have -a, so use tar over a pipe.
+    dc exec -T chaosfs sh -c 'tar -C /exports -cf - . 2>/dev/null' \
+        | tar -C "$HOST_DATA_DIR" -xf - 2>/dev/null \
+        || die "materialize_archive_to_host: copy failed"
+    msg "Archive materialized. Top-level entries:"
+    ls -la "$HOST_DATA_DIR" | head -10 || true
+}
+
+# ---------------------------------------------------------------------------
 # teardown_stack
 # Called by trap EXIT. Cleans up containers, volumes, networks, locally-built
 # images, and HOST_DATA_DIR for this scenario's compose project.
@@ -962,6 +1023,7 @@ teardown_stack() {
     # `dc logs -f` doesn't error noisily on shutdown.
     stop_lifecycle_tail
     free_disk 2>/dev/null || true
+    free_via_chaosfs 2>/dev/null || true
 
     # Dump full per-service logs to ${REPO_ROOT}/build/chaos-logs/<NN>/<svc>.log
     # before tearing down. The lifecycle tail filters to LIFECYCLE-tagged
