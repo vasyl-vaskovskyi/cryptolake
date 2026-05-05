@@ -1,0 +1,79 @@
+# Chaos scenario 02 (writer_disk_full_brief) override.
+#
+# Adds a sidecar NFSv4 server (chaosfs) whose backing store is a 300 MiB
+# tmpfs at /exports. The writer's archive directory (HOST_DATA_DIR, mounted
+# at the same path inside the container) is rebound from a host bind-mount
+# to a Docker NFS volume served by chaosfs.
+#
+# This is loaded only for tests/chaos/02_fill_disk.sh via CHAOS_EXTRA_COMPOSE_FILES.
+# Other scenarios are unaffected.
+#
+# Static-IP network is used because Docker's local NFS volume driver runs
+# the mount(2) syscall on the Docker host (the Linux VM on macOS) at
+# container-start time. The host's resolver does not know Docker's internal
+# DNS, so we cannot use `addr=chaosfs`; we pin chaosfs to a static IP on a
+# dedicated bridge network and reference that IP in the volume's NFS opts.
+
+services:
+  chaosfs:
+    image: itsthenetwork/nfs-server-alpine:latest
+    privileged: true
+    environment:
+      SHARED_DIRECTORY: /exports
+    tmpfs:
+      - /exports:size=300m,mode=0777
+    networks:
+      chaos_nfs:
+        ipv4_address: 172.30.42.10
+    healthcheck:
+      # The image listens on 2049/tcp once nfsd is up. nc -z is the simplest
+      # portable readiness probe; rpcinfo isn't installed in this image.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2049 || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+
+  writer:
+    # !override replaces the entire list rather than appending. Without it,
+    # compose merges the override list into the base list and the writer
+    # ends up with BOTH the host bind-mount and the NFS volume, which is
+    # not what we want.
+    volumes: !override
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
+      - chaos02_data:${HOST_DATA_DIR:-/data}
+    depends_on: !override
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      chaosfs:
+        condition: service_healthy
+    networks:
+      - cryptolake_internal
+      - host_access
+      - chaos_nfs
+
+networks:
+  chaos_nfs:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.42.0/24
+
+volumes:
+  chaos02_data:
+    driver: local
+    driver_opts:
+      type: nfs
+      # nfsvers=4 avoids portmapper/rpcbind. hard,timeo=600,retrans=2 keeps
+      # the writer blocked on I/O during a server hiccup rather than failing
+      # — we want ENOSPC, not ETIMEDOUT, when the tmpfs fills.
+      o: "addr=172.30.42.10,rw,nfsvers=4,hard,timeo=600,retrans=2"
+      device: ":/"
