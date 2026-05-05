@@ -148,7 +148,15 @@ services:
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
       - DATABASE__URL=jdbc:postgresql://postgres:5432/cryptolake?user=cryptolake&password=${POSTGRES_PASSWORD:-postgres}
       - MONITORING__WEBHOOK_URL=${WEBHOOK_URL:-}
+      # Bound JVM heap so any future buffer-growth regression yields a logged
+      # OutOfMemoryError BEFORE the kernel SIGKILL fires. -Xms below -Xmx so startup
+      # doesn't allocate the whole heap eagerly.
+      - JAVA_TOOL_OPTIONS=-Xmx512m -Xms256m
     command: ["/etc/cryptolake/config.yml"]
+    deploy:
+      resources:
+        limits:
+          memory: 768M
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
       interval: 15s
