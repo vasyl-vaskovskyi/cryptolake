@@ -269,6 +269,73 @@ class OffsetCommitCoordinatorHoldIntegrationTest {
   }
 
   /**
+   * Test 4: enter disk hold via ENOSPC; simulate disk recovery via manual onRecovery() (the
+   * controller's retry-loop probe is the production path, but bypassing it makes the test
+   * deterministic and fast); next flushAndCommit succeeds and commitSync advances offsets.
+   */
+  @Test
+  void flushAndCommit_recoversAfterDiskHoldExits_andCommitsAccumulatedOffsets() throws Exception {
+    PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    WriterMetrics metrics = new WriterMetrics(registry);
+    EnvelopeCodec codec = new EnvelopeCodec(EnvelopeCodec.newMapper());
+    BufferManager buffers = new BufferManager("/tmp/test-hold-task4", 100, 60, codec);
+
+    @SuppressWarnings("unchecked")
+    KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+    DurableAppender appender = mock(DurableAppender.class);
+    ZstdFrameCompressor compressor = mock(ZstdFrameCompressor.class);
+    StateManager stateManager = mock(StateManager.class);
+    SealedFileIndex sealedIndex = mock(SealedFileIndex.class);
+
+    org.mockito.Mockito.when(compressor.compressFrame(any())).thenReturn(new byte[] {0, 1});
+
+    // First call: appendAndFsync throws ENOSPC. Subsequent calls: succeed.
+    java.util.concurrent.atomic.AtomicInteger appendCalls =
+        new java.util.concurrent.atomic.AtomicInteger();
+    org.mockito.Mockito.doAnswer(
+            inv -> {
+              if (appendCalls.getAndIncrement() == 0) {
+                throw new IOException("No space left on device");
+              }
+              return null; // success
+            })
+        .when(appender)
+        .appendAndFsync(any(), any());
+
+    DiskFullHoldController diskHold = newDiskHoldNeverFreeing();
+    PgOutageHoldController pgHold = newPgHoldNeverRecovering();
+
+    OffsetCommitCoordinator coord =
+        new OffsetCommitCoordinator(
+            consumer,
+            appender,
+            compressor,
+            stateManager,
+            sealedIndex,
+            metrics,
+            Clocks.systemNanoClock(),
+            diskHold,
+            pgHold);
+
+    // First flush: enters hold, returns 0.
+    enqueueOneBufferedRecord(buffers);
+    int n1 = coord.flushAndCommit(buffers);
+    assertThat(n1).isEqualTo(0);
+    assertThat(diskHold.isHoldActive()).isTrue();
+
+    // Simulate probe success — production path is the controller's retry loop, but we drive
+    // it manually for determinism.
+    diskHold.onRecovery();
+    assertThat(diskHold.isHoldActive()).isFalse();
+
+    // Second flush: appendAndFsync now succeeds; PG save succeeds; commitSync runs.
+    enqueueOneBufferedRecord(buffers);
+    int n2 = coord.flushAndCommit(buffers);
+    assertThat(n2).isGreaterThan(0);
+    verify(consumer).commitSync(any(Map.class));
+  }
+
+  /**
    * Helper: enqueue one buffered record into the BufferManager so flushAll() returns a non-empty
    * FlushResult. Uses {@link BufferManager#add(com.cryptolake.common.envelope.DataEnvelope,
    * com.cryptolake.common.envelope.BrokerCoordinates, String)} — the writer's real ingest path.

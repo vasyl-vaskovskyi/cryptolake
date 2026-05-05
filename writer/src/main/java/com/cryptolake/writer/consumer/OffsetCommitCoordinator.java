@@ -250,6 +250,11 @@ public final class OffsetCommitCoordinator {
     // cleanly so the consume loop continues without crashing.
     try {
       stateManager.saveStatesAndCheckpoints(states, checkpoints);
+      if (pgHold != null) {
+        // Resets the consecutive-failure counter and exits hold if it was active. Idempotent
+        // when the counter is already 0.
+        pgHold.recordPgSuccess();
+      }
     } catch (CryptoLakeStateException e) {
       metrics.pgCommitFailures().increment();
       log.error("pg_commit_failed", e, "error", e.getMessage());
