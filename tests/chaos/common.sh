@@ -60,6 +60,26 @@ init_scenario() {
         COMPOSE_OPTS+=(--file "$COMPOSE_DEBUG_WRITER_FILE")
         msg "WRITER_MODE=external — writer service will not be started; run it from your IDE."
     fi
+
+    # Per-scenario opt-in compose overrides. Set CHAOS_EXTRA_COMPOSE_FILES
+    # to a colon-separated list of file paths (relative to REPO_ROOT or
+    # absolute) before calling init_scenario. Each is appended as --file.
+    if [[ -n "${CHAOS_EXTRA_COMPOSE_FILES:-}" ]]; then
+        local IFS_SAVE="$IFS"
+        IFS=':'
+        for extra in $CHAOS_EXTRA_COMPOSE_FILES; do
+            local extra_path="$extra"
+            [[ "$extra_path" != /* ]] && extra_path="${REPO_ROOT}/${extra_path}"
+            if [[ ! -f "$extra_path" ]]; then
+                IFS="$IFS_SAVE"
+                die "CHAOS_EXTRA_COMPOSE_FILES references missing file: ${extra_path}"
+            fi
+            COMPOSE_OPTS+=(--file "$extra_path")
+            msg "Loaded extra compose file: ${extra_path}"
+        done
+        IFS="$IFS_SAVE"
+    fi
+
     SCENARIO_MODE="$mode"
     export HOST_DATA_DIR COMPOSE_PROJECT
 
@@ -165,6 +185,18 @@ start_stack() {
             pruned+=("$s")
         done
         services=("${pruned[@]}")
+    fi
+
+    # Per-scenario opt-in extra services (e.g. chaosfs for scenario 02).
+    # Set CHAOS_EXTRA_SERVICES to a space-separated list before calling
+    # start_stack. Order matters: extras are prepended so they come up
+    # before the writer (which depends_on them via the override file).
+    if [[ -n "${CHAOS_EXTRA_SERVICES:-}" ]]; then
+        local extras=()
+        # shellcheck disable=SC2206 # we want word-splitting here
+        extras=( ${CHAOS_EXTRA_SERVICES} )
+        services=( "${extras[@]}" "${services[@]}" )
+        msg "Including extra services: ${CHAOS_EXTRA_SERVICES}"
     fi
 
     # Pull only core services, exclude monitoring/alerting for speed.
