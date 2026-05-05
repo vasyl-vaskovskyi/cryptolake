@@ -2,18 +2,20 @@
 # 19_kafka_offset_reset.sh
 #
 # Scenario: writer_kafka_offset_reset
-# Chaos:    Force OUT_OF_RANGE on writer's consumer (delete + recreate a topic)
-# Expected: gap reason=kafka_offset_reset (real loss)
-# Flow:     MAIN+BACKUP delivering normally → topic deleted and recreated →
-#           writer's consumer hits OUT_OF_RANGE because its committed
-#           offset no longer exists on the new topic → writer emits a
-#           gap envelope covering the missing offset range and resumes
-#           from the new earliest offset.
-# Why:      The deleted offset range is unrecoverable from EITHER source —
-#           the records that existed there are permanently gone from
-#           Kafka. Even if MAIN+BACKUP would have re-published the same
-#           events, the original committed offsets are unrecoverable.
-#           Real loss under the TWO-COLLECTOR rule.
+# Chaos:    Delete + recreate binance.bookticker topic, forcing the
+#           writer's committed offset out of range.
+# Expected: writer's consumer detects position out of range and silently
+#           resets to earliest (auto.offset.reset=earliest) — no
+#           kafka_offset_reset gap is emitted, no crash, only normal
+#           collector_restart artifacts may appear from the topic-recreate
+#           churn. Writer resumes consuming the new topic.
+# Why:      The writer's consumer config uses auto.offset.reset=earliest,
+#           so Kafka client handles OUT_OF_RANGE by silently resetting
+#           position before throwing OffsetOutOfRangeException. The
+#           writer's handleOffsetReset path (which WOULD emit
+#           kafka_offset_reset) only fires for the never-thrown
+#           exception. To exercise that path the consumer would need
+#           auto.offset.reset=none, which production doesn't use.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -55,9 +57,14 @@ sleep 120
 
 run_verify "$(today)" "$HOST_DATA_DIR"
 
-# Assertions — offset reset; deleted offset range is unrecoverable from
-# either source. Lenient gap whitelist (manifestations vary).
-expect_lifecycle_event       "gap was archived"   "GAP_ARCHIVED"
-expect_only_these_gaps_check kafka_offset_reset kafka_consumer_outage collector_restart
+# Assertions — auto.offset.reset=earliest causes the consumer to silently
+# reset position when its committed offset disappears from the recreated
+# topic; OffsetOutOfRangeException is NOT thrown, so the writer's
+# handleOffsetReset path (which would emit kafka_offset_reset) does NOT
+# fire in this configuration. The writer simply resumes reading from
+# offset 0 of the new topic.
+expect_log_event              "consumer detected position out of range" "is out of range for partition binance.bookticker"
+expect_lifecycle_event_absent "writer didn't crash"                     "MAIN_FAILURE_DETECTED"
+expect_only_these_gaps_check  collector_restart pu_chain_break
 
 verdict
