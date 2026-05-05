@@ -16,7 +16,9 @@
 
 services:
   chaosfs:
-    image: itsthenetwork/nfs-server-alpine:latest
+    # Pinned by digest so a future re-tag of `:latest` cannot silently break
+    # this chaos scenario. Bump deliberately when you want a newer nfsd.
+    image: itsthenetwork/nfs-server-alpine@sha256:7fa99ae65c23c5af87dd4300e543a86b119ed15ba61422444207efc7abd0ba20
     privileged: true
     environment:
       SHARED_DIRECTORY: /exports
@@ -75,5 +77,8 @@ volumes:
       # nfsvers=4 avoids portmapper/rpcbind. hard,timeo=600,retrans=2 keeps
       # the writer blocked on I/O during a server hiccup rather than failing
       # — we want ENOSPC, not ETIMEDOUT, when the tmpfs fills.
-      o: "addr=172.30.42.10,rw,nfsvers=4,hard,timeo=600,retrans=2"
+      # `sync` proactively avoids client-side write-back buffering masking
+      # ENOSPC during the fill window — we want the writer's fsync to surface
+      # the disk-full condition immediately, not on a later commit RPC.
+      o: "addr=172.30.42.10,rw,nfsvers=4,hard,sync,timeo=600,retrans=2"
       device: ":/"
