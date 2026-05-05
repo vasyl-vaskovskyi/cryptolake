@@ -19,16 +19,3 @@ dependencies {
     testImplementation(platform(libs.testcontainers.bom))
     testImplementation(libs.testcontainers.postgres)
 }
-
-tasks.register<JavaExec>("runVerifyParity") {
-    group = "port"
-    description = "Run Java verify against Python-produced archive corpus; diff stdout byte-for-byte."
-    dependsOn("compileJava")
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.cryptolake.verify.harness.VerifyStdoutParityHarness")
-    args(
-        rootProject.file("parity-fixtures/verify/archive").absolutePath,
-        rootProject.file("parity-fixtures/verify/expected.txt").absolutePath,
-        layout.buildDirectory.file("reports/gate5-verify.txt").get().asFile.absolutePath,
-    )
-}

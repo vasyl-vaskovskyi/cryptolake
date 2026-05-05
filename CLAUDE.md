@@ -22,14 +22,6 @@ Use the Gradle wrapper (`./gradlew`). Spotless (google-java-format 1.23.0) runs 
 ./gradlew :collector:installDist :writer:installDist :backfill:installDist :consolidation:installDist
 ```
 
-Module-specific port harnesses (artifacts of the Python→Java port; gated by parity fixtures in `parity-fixtures/`):
-
-```bash
-./gradlew :collector:dumpMetricSkeleton    # → build/metrics-skeleton.txt
-./gradlew :collector:runRawTextParity      # gate-3 raw-frame replay
-./gradlew :verify:runVerifyParity          # gate-5 stdout byte-diff
-```
-
 ## Running locally
 
 ```bash
@@ -70,7 +62,7 @@ Scenario index lives in `tests/chaos/README.md` with the gap-reason taxonomy eac
 
 **Topic prefix is the redundancy switch.** Primary collector: `topicPrefix=""`. Backup collector: `TOPIC_PREFIX=backup.` env, `COLLECTOR_ID=binance-collector-backup`. Same image, same code, same config file — only env differs. `scripts/setup-backup-topics.sh` sets 30-min retention on all `backup.*` topics post-startup.
 
-**Verify CLI is picocli with five subcommands.** `verify`, `manifest`, `mark-maintenance`, `gaps`, `integrity`. `Main.java` overrides `System.out` to UTF-8 with `\n` line endings — verify output is byte-compared against parity fixtures, do not change line-ending behavior.
+**Verify CLI is picocli with five subcommands.** `verify`, `manifest`, `mark-maintenance`, `gaps`, `integrity`. `Main.java` overrides `System.out` to UTF-8 with `\n` line endings — keep that behavior even though the original byte-diff parity fixtures are no longer in the repo.
 
 ## Modules at a glance
 
@@ -82,7 +74,6 @@ Scenario index lives in `tests/chaos/README.md` with the gap-reason taxonomy eac
 | `backfill` | scheduled REST/CSV backfill (binance.vision for trades) | common |
 | `consolidation` | hourly seal/consolidation; also hosts `ChaosVerifyIT` test harness | common, verify |
 | `verify` | `cryptolake-verify` CLI; archive integrity, gap analysis, manifest | common |
-| `cli` | placeholder; no production sources currently | common |
 
 ## Conventions worth knowing
 

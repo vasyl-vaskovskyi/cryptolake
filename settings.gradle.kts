@@ -8,6 +8,5 @@ include(
     "backfill",
     "consolidation",
     "verify",
-    "cli",
 )
 

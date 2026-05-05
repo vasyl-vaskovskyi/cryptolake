@@ -18,14 +18,3 @@ dependencies {
     implementation(libs.logback.classic)
     implementation(libs.logstash.encoder)
 }
-
-tasks.register<JavaExec>("dumpMetricSkeleton") {
-    group = "port"
-    description = "Scrape Java backfill scheduler Prometheus registry -> build/metrics-skeleton.txt."
-    dependsOn("compileJava")
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.cryptolake.backfill.harness.MetricSkeletonDump")
-    val outFile = layout.buildDirectory.file("metrics-skeleton.txt")
-    args(outFile.get().asFile.absolutePath)
-    outputs.file(outFile)
-}

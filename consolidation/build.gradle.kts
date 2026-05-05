@@ -22,17 +22,6 @@ dependencies {
     implementation(libs.commons.compress)
 }
 
-tasks.register<JavaExec>("dumpMetricSkeleton") {
-    group = "port"
-    description = "Scrape Java consolidation scheduler Prometheus registry -> build/metrics-skeleton.txt."
-    dependsOn("compileJava")
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.cryptolake.consolidation.harness.MetricSkeletonDump")
-    val outFile = layout.buildDirectory.file("metrics-skeleton.txt")
-    args(outFile.get().asFile.absolutePath)
-    outputs.file(outFile)
-}
-
 // Exclude @Tag("chaos") from the default :test task (full chaos run is ~70 min
 // and requires docker). Run chaos via the :chaosTest task or
 // scripts/run-chaos-tests.sh.
