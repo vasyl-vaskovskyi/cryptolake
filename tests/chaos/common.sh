@@ -954,18 +954,27 @@ free_disk() {
 # ---------------------------------------------------------------------------
 fill_via_chaosfs() {
     local megs="${1:?fill_via_chaosfs requires a megabyte count}"
+    local min_used_pct="${FILL_VIA_CHAOSFS_MIN_USED_PCT:-95}"
     msg "Filling chaosfs:/exports with ${megs} MiB filler…"
     # conv=fsync forces metadata flush so the tmpfs cap is hit synchronously
     # rather than at some later writeback. status=none keeps the chaos log
     # readable; dd's progress lines mangle the [chaos] prefix layout.
-    if dc exec -T chaosfs sh -c "dd if=/dev/zero of=/exports/_chaos_filler bs=1M count=${megs} conv=fsync status=none"; then
-        msg "Fill complete. chaosfs:/exports usage:"
-        dc exec -T chaosfs sh -c 'df -h /exports' || true
-    else
-        # ENOSPC mid-write is the success case (we asked dd to overshoot or
-        # land exactly at the cap). Surface the usage either way.
-        msg "dd returned non-zero (likely ENOSPC — that's expected). Current usage:"
-        dc exec -T chaosfs sh -c 'df -h /exports' || true
+    # We deliberately ignore dd's exit code: ENOSPC mid-write is the success
+    # case. The post-condition that matters is "tmpfs is now nearly full",
+    # which we verify explicitly below.
+    dc exec -T chaosfs sh -c "dd if=/dev/zero of=/exports/_chaos_filler bs=1M count=${megs} conv=fsync status=none" || true
+
+    # Post-condition: tmpfs must be at least ${min_used_pct}% full. This
+    # rules out failure modes where dd exited non-zero for reasons OTHER
+    # than ENOSPC (chaosfs unreachable, busybox dd flag mismatch, SIGKILL,
+    # etc.) and we'd otherwise proceed to the 120s hold without an actual
+    # disk-full condition.
+    local used_pct
+    used_pct=$(dc exec -T chaosfs sh -c "df /exports | awk 'NR==2{gsub(\"%\",\"\",\$5); print \$5}'" 2>/dev/null | tr -d '\r\n[:space:]' || echo 0)
+    msg "chaosfs:/exports usage after fill:"
+    dc exec -T chaosfs sh -c 'df -h /exports' || true
+    if [[ -z "${used_pct}" ]] || ! [[ "${used_pct}" =~ ^[0-9]+$ ]] || (( used_pct < min_used_pct )); then
+        die "fill_via_chaosfs: tmpfs only ${used_pct:-?}% full after dd; expected ≥${min_used_pct}%"
     fi
     CHAOSFS_FILLED=1
 }
@@ -999,11 +1008,21 @@ materialize_archive_to_host() {
     msg "Copying archive from chaosfs:/exports → ${HOST_DATA_DIR}…"
     mkdir -p "$HOST_DATA_DIR"
     # `cp -a` preserves mtimes; `dc cp` doesn't have -a, so use tar over a pipe.
-    dc exec -T chaosfs sh -c 'tar -C /exports -cf - . 2>/dev/null' \
-        | tar -C "$HOST_DATA_DIR" -xf - 2>/dev/null \
-        || die "materialize_archive_to_host: copy failed"
+    # Producer stderr is intentionally NOT swallowed — a failing producer
+    # (chaosfs dead, /exports unreadable) must surface as a diagnostic, not
+    # as a silently empty copy. The consumer's stderr is also kept.
+    # Both legs are checked via PIPESTATUS because under `set -o pipefail`
+    # only the rightmost non-zero is surfaced — and `tar -xf -` happily
+    # accepts an empty stream and returns 0, which would mask producer
+    # failures.
+    dc exec -T chaosfs sh -c 'tar -C /exports -cf - .' \
+        | tar -C "$HOST_DATA_DIR" -xf -
+    local pipe_status=("${PIPESTATUS[@]}")
+    if [[ "${pipe_status[0]}" -ne 0 || "${pipe_status[1]}" -ne 0 ]]; then
+        die "materialize_archive_to_host: copy failed (chaosfs-tar=${pipe_status[0]} host-tar=${pipe_status[1]})"
+    fi
     msg "Archive materialized. Top-level entries:"
-    ls -la "$HOST_DATA_DIR" | head -10 || true
+    ls -la "$HOST_DATA_DIR" | head -10
 }
 
 # ---------------------------------------------------------------------------
