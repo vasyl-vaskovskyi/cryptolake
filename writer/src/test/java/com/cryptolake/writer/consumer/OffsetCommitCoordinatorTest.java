@@ -41,7 +41,9 @@ class OffsetCommitCoordinatorTest {
             null,
             null,
             metrics,
-            Clocks.systemNanoClock());
+            Clocks.systemNanoClock(),
+            null,
+            null);
 
     int n = coord.flushAndCommit(buffers);
     assertThat(n).isEqualTo(0);
@@ -55,7 +57,7 @@ class OffsetCommitCoordinatorTest {
 
     OffsetCommitCoordinator coord =
         new OffsetCommitCoordinator(
-            null, null, null, null, null, metrics, Clocks.systemNanoClock());
+            null, null, null, null, null, metrics, Clocks.systemNanoClock(), null, null);
 
     StreamKey key = new StreamKey("binance", "btcusdt", "trades");
     StreamCheckpoint checkpoint =
@@ -76,7 +78,7 @@ class OffsetCommitCoordinatorTest {
 
     OffsetCommitCoordinator coord =
         new OffsetCommitCoordinator(
-            null, null, null, null, null, metrics, Clocks.systemNanoClock());
+            null, null, null, null, null, metrics, Clocks.systemNanoClock(), null, null);
 
     Map<StreamKey, StreamCheckpoint> view = coord.durableCheckpoints();
     assertThat(view).isEmpty();

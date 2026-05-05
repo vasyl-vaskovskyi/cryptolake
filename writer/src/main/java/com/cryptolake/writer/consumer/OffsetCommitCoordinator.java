@@ -69,6 +69,20 @@ public final class OffsetCommitCoordinator {
   private final ClockSupplier clock;
 
   /**
+   * Disk-full hold controller. When {@link DiskFullHoldController#isHoldActive()} returns true,
+   * {@link #flushAndCommit} early-returns 0 without flushing buffers or committing offsets.
+   * Nullable for legacy unit tests that exercise empty-buffer paths only; real wiring (Main.java)
+   * always provides a non-null instance.
+   */
+  private final com.cryptolake.writer.durability.DiskFullHoldController diskHold;
+
+  /**
+   * PG-outage hold controller. Same role as {@link #diskHold} but for prolonged PG unavailability.
+   * Nullable for legacy unit tests.
+   */
+  private final com.cryptolake.writer.durability.PgOutageHoldController pgHold;
+
+  /**
    * Mutable cache of durable checkpoints — updated after every successful PG+Kafka commit. Owned by
    * T1; shared (read-only) with RecoveryCoordinator via the method view.
    */
@@ -81,7 +95,9 @@ public final class OffsetCommitCoordinator {
       StateManager stateManager,
       SealedFileIndex sealedIndex,
       WriterMetrics metrics,
-      ClockSupplier clock) {
+      ClockSupplier clock,
+      com.cryptolake.writer.durability.DiskFullHoldController diskHold,
+      com.cryptolake.writer.durability.PgOutageHoldController pgHold) {
     this.primary = primary;
     this.appender = appender;
     this.compressor = compressor;
@@ -89,6 +105,8 @@ public final class OffsetCommitCoordinator {
     this.sealedIndex = sealedIndex;
     this.metrics = metrics;
     this.clock = clock;
+    this.diskHold = diskHold;
+    this.pgHold = pgHold;
   }
 
   // ── Main flush+commit operation (Tier 1 §4) ─────────────────────────────────────────────────
@@ -106,6 +124,15 @@ public final class OffsetCommitCoordinator {
    * @return total number of records flushed
    */
   public int flushAndCommit(BufferManager buffers) {
+    // Hold-controller gate (spec §Architecture; design path 2). If either disk-full hold or
+    // pg-outage hold is active, return 0 without flushing buffers, saving PG state, or
+    // committing offsets. Records remain in buffers; the controller's retry loop probes for
+    // recovery every 30s and flips hold off via onRecovery / recordPgSuccess.
+    if ((diskHold != null && diskHold.isHoldActive())
+        || (pgHold != null && pgHold.isHoldActive())) {
+      return 0;
+    }
+
     // Step 1: Extract all buffered lines (in-memory, no I/O yet)
     List<FlushResult> results = buffers.flushAll();
 

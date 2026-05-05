@@ -251,6 +251,8 @@ public final class Main {
       GapEmitter gapEmitter; // declared here, constructed below
 
       // ── OffsetCommitCoordinator ───────────────────────────────────────────────────────────────
+      // TODO(Wire-Task 5): replace null diskHold/pgHold with real controllers (probes, lifecycle).
+      // Until then, null values are safely treated as "no hold" via != null checks at the gate.
       OffsetCommitCoordinator committer =
           new OffsetCommitCoordinator(
               primaryConsumer,
@@ -259,7 +261,9 @@ public final class Main {
               stateManager,
               sealedIndex,
               metrics,
-              Clocks.systemNanoClock());
+              Clocks.systemNanoClock(),
+              null,
+              null);
 
       // ── GapEmitter (now we have coverage and buffers) ─────────────────────────────────────────
       gapEmitter = new GapEmitter(buffers, metrics, null, coverage);
