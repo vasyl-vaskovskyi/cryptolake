@@ -1,4 +1,9 @@
-# VPS production overrides for medium servers (2-4 vCPU, 4-8 GB RAM).
+# VPS production overrides for medium servers (6-8 GB RAM, 2-4 vCPU).
+# Java stack — every service except postgres/redpanda/prometheus is a JVM,
+# so cgroup `memory:` limits MUST sit above each service's -Xmx + ~128M overhead
+# or the kernel will SIGKILL the container before the JVM can log an OOM.
+#
+# Total ceiling: ~5.1 GB. Fits a 6 GB VPS comfortably; tight on 4 GB.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
 
 services:
@@ -42,12 +47,63 @@ services:
           cpus: "1.0"
 
   collector:
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx256m -Xms128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  collector-backup:
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx256m -Xms128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  # writer keeps the base 768M / -Xmx512m sizing — buffer manager needs the room.
+  writer:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  backfill:
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx128m -Xms64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:
           memory: 256M
 
-  writer:
+  consolidation:
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx128m -Xms64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:

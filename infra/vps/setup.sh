@@ -55,9 +55,10 @@ if ! groups "$REAL_USER" | grep -q '\bdocker\b'; then
     warn "Log out and back in for docker group to take effect"
 fi
 
-# --- 3. Install host dependencies (needed by sampler config) ---
-info "Installing dependencies (curl, jq)..."
-apt-get install -y -qq curl jq
+# --- 3. Install host dependencies (curl/jq for tooling, ufw + fail2ban for hardening) ---
+info "Installing host dependencies (curl, jq, ufw, fail2ban)..."
+apt-get install -y -qq curl jq ufw fail2ban
+systemctl enable --now fail2ban
 
 # --- 4. SSH hardening ---
 SSH_HARDENING="/etc/ssh/sshd_config.d/99-cryptolake-hardening.conf"
@@ -183,14 +184,15 @@ if ! crontab -l 2>/dev/null | grep -q cryptolake-disk-monitor; then
 fi
 info "Installed disk monitoring cron (every 6 hours)"
 
-# --- 13. UFW verification ---
-info "Verifying firewall..."
-if ufw status | grep -q "Status: active"; then
-    info "UFW is active:"
-    ufw status | grep -v "^$"
-else
-    warn "UFW is not active! Run: sudo ufw allow 22 && sudo ufw enable"
+# --- 13. UFW: ensure SSH is allowed and firewall is active ---
+info "Configuring UFW firewall..."
+ufw allow 22/tcp >/dev/null
+if ! ufw status | grep -q "Status: active"; then
+    info "Enabling UFW..."
+    ufw --force enable >/dev/null
 fi
+info "UFW status:"
+ufw status | grep -v "^$"
 
 # --- Summary ---
 echo ""
@@ -202,6 +204,8 @@ echo "  Next steps:"
 echo "  1. Edit $ENV_FILE with your secrets"
 echo "  2. Log out and back in (for docker group)"
 echo "  3. Run: bash infra/vps/deploy.sh"
+echo "     (deploy.sh will run scripts/setup-backup-topics.sh on first boot"
+echo "      to apply 30-min retention to backup.binance.* topics)"
 echo ""
 echo "  Commands:"
 echo "    Start:   sudo systemctl start cryptolake"

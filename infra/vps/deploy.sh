@@ -69,4 +69,16 @@ else
     info "All services healthy"
 fi
 
+# --- First-boot only: apply 30-min retention to backup.binance.* topics ---
+SENTINEL="$REPO_DIR/.cryptolake-backup-topics-configured"
+if [[ ! -f "$SENTINEL" ]]; then
+    info "Applying retention to backup.binance.* topics (first boot)..."
+    if bash "$REPO_DIR/scripts/setup-backup-topics.sh"; then
+        touch "$SENTINEL"
+        info "Backup topic retention configured"
+    else
+        warn "setup-backup-topics.sh failed — re-run manually once Redpanda is healthy"
+    fi
+fi
+
 info "Deploy complete. Monitor: sampler -c $REPO_DIR/infra/sampler/sampler.yml"
