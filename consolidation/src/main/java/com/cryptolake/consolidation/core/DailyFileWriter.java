@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.ZstdOutputStream;
 import java.io.BufferedOutputStream;
+import java.io.FilterOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -19,7 +21,11 @@ import java.util.List;
  * Writer"). The previous "build all 24 hour batches in memory, then write" shape multiplied peak
  * memory by 24 — unsafe on the 8 GB VPS for depth on busy days.
  *
- * <p>Tier 5 I1, I3: explicit {@code force(true)} before close (Q14 preferred path).
+ * <p>Close ordering: write zstd frame epilogue first (by closing the buffered + zstd chain), then
+ * {@code fsync}, then close the channel. Calling {@code fsync} before the epilogue would persist an
+ * incomplete zstd frame; the chain is wrapped in a non-closing OutputStream so closing the zstd
+ * stream does not also close the FileChannel — we want to fsync between epilogue-write and
+ * channel-close.
  *
  * <p>Thread safety: not safe for concurrent use; one instance per consolidation run.
  */
@@ -34,7 +40,6 @@ public final class DailyFileWriter implements AutoCloseable {
   public record HourCounts(long dataRecords, long gapRecords) {}
 
   private final FileChannel channel;
-  private final ZstdOutputStream zstdOut;
   private final BufferedOutputStream bufOut;
 
   private long total;
@@ -42,9 +47,8 @@ public final class DailyFileWriter implements AutoCloseable {
   private long gapCount;
   private boolean closed;
 
-  private DailyFileWriter(FileChannel channel, ZstdOutputStream zstdOut, BufferedOutputStream buf) {
+  private DailyFileWriter(FileChannel channel, BufferedOutputStream buf) {
     this.channel = channel;
-    this.zstdOut = zstdOut;
     this.bufOut = buf;
   }
 
@@ -57,8 +61,22 @@ public final class DailyFileWriter implements AutoCloseable {
             StandardOpenOption.CREATE,
             StandardOpenOption.WRITE,
             StandardOpenOption.TRUNCATE_EXISTING);
-    ZstdOutputStream zstd = new ZstdOutputStream(Channels.newOutputStream(fc), ZSTD_LEVEL);
-    return new DailyFileWriter(fc, zstd, new BufferedOutputStream(zstd));
+    // Wrap so the close cascade (bufOut → zstd → here) does NOT close the FileChannel —
+    // we need the channel open after the zstd epilogue is written so we can fsync it.
+    OutputStream nonClosing =
+        new FilterOutputStream(Channels.newOutputStream(fc)) {
+          @Override
+          public void write(byte[] b, int off, int len) throws IOException {
+            out.write(b, off, len); // FilterOutputStream's default loops one byte at a time
+          }
+
+          @Override
+          public void close() throws IOException {
+            flush();
+          }
+        };
+    ZstdOutputStream zstd = new ZstdOutputStream(nonClosing, ZSTD_LEVEL);
+    return new DailyFileWriter(fc, new BufferedOutputStream(zstd));
   }
 
   /**
@@ -69,9 +87,9 @@ public final class DailyFileWriter implements AutoCloseable {
     long hourData = 0L;
     long hourGap = 0L;
     for (JsonNode record : envelopes) {
-      byte[] bytes = mapper.writeValueAsBytes(record); // compact (Tier 5 B2)
+      byte[] bytes = mapper.writeValueAsBytes(record);
       bufOut.write(bytes);
-      bufOut.write(0x0A); // newline (Tier 5 B2)
+      bufOut.write(0x0A); // newline
       total++;
       if ("gap".equals(record.path("type").asText())) {
         gapCount++;
@@ -89,15 +107,15 @@ public final class DailyFileWriter implements AutoCloseable {
     return new WriteStats(total, dataCount, gapCount);
   }
 
-  /** Closes the streams and fsyncs the file to disk. */
+  /** Closes the streams (writing the zstd frame epilogue), fsyncs, then closes the channel. */
   @Override
   public void close() throws IOException {
     if (closed) return;
     closed = true;
-    bufOut.flush();
-    zstdOut.flush();
-    channel.force(true); // Tier 5 I3: explicit fsync before close
-    bufOut.close(); // closes zstdOut and underlying channel-output-stream chain
+    // Cascade: bufOut.close() → zstd.close() (writes frame epilogue) → nonClosing.close() (no-op).
+    // FileChannel is intentionally NOT closed by this chain.
+    bufOut.close();
+    channel.force(true); // fsync after every byte (including the zstd epilogue) is on the channel
     channel.close();
   }
 }
