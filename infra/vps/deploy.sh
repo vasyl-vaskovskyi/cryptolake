@@ -16,7 +16,7 @@ warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1"; exit 1; }
 
 # --- Pre-checks ---
-[[ ! -f "$REPO_DIR/.env" ]] && error ".env not found. Run setup.sh first or copy from .env.example"
+[[ ! -f "$REPO_DIR/.env" ]] && error ".env not found. Run infra/vps/bootstrap.sh first to generate it."
 
 # Disk space check
 DISK_USAGE=$(df "$REPO_DIR" --output=pcent | tail -1 | tr -d ' %')
