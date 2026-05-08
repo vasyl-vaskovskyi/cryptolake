@@ -59,6 +59,7 @@ services:
       - redpanda_data:/var/lib/redpanda/data
 
   collector:
+    image: cryptolake/collector:${CRYPTOLAKE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.collector
@@ -92,6 +93,7 @@ services:
         max-file: "5"
 
   collector-backup:
+    image: cryptolake/collector:${CRYPTOLAKE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.collector
@@ -127,6 +129,7 @@ services:
         max-file: "5"
 
   writer:
+    image: cryptolake/writer:${CRYPTOLAKE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.writer
@@ -171,6 +174,7 @@ services:
         max-file: "5"
 
   backfill:
+    image: cryptolake/backfill:${CRYPTOLAKE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.backfill
@@ -194,6 +198,7 @@ services:
         max-file: "3"
 
   consolidation:
+    image: cryptolake/consolidation:${CRYPTOLAKE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.consolidation
