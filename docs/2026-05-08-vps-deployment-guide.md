@@ -2,7 +2,7 @@
 
 End-to-end instructions for bringing up CryptoLake on a fresh Ubuntu 24.04 LTS VPS, hardening the host, and running the Java stack from pre-built Docker images.
 
-Audience: operator who has just provisioned an empty VPS and has SSH access. Reuses `infra/vps/setup.sh` and `infra/vps/deploy.sh` for the parts they already automate, and the new `scripts/publish-images.sh` for shipping images without a registry.
+Audience: operator who has just provisioned an empty VPS and has SSH access. The host bring-up is split into two purpose-built scripts — `infra/vps/harden.sh` for security only and `infra/vps/bootstrap.sh` for components and interactive secret entry — plus `scripts/publish-images.sh` (run from your laptop) for shipping images without a registry. For day-2 updates without data loss, see `docs/2026-05-08-rolling-update-plan.md` and `scripts/rolling-update.sh`.
 
 ---
 
@@ -72,7 +72,7 @@ If your provider lets you, also disable root SSH at the cloud-firewall level. Th
 
 ---
 
-## 4. Clone the repo and run setup.sh
+## 4. Clone the repo and harden the host
 
 ```bash
 ssh cryptolake@$VPS_IP
@@ -82,55 +82,56 @@ sudo mkdir -p /opt/cryptolake
 sudo chown $USER:$USER /opt/cryptolake
 git clone https://github.com/<your-org>/cryptolake.git /opt/cryptolake
 cd /opt/cryptolake
-sudo bash infra/vps/setup.sh
+sudo bash infra/vps/harden.sh
 ```
 
-`setup.sh` is idempotent. It installs and configures:
+`harden.sh` does **security only** and is idempotent:
 
 | Step | Effect |
 |------|--------|
-| `apt upgrade` + `unattended-upgrades` | Latest patches; security updates auto-applied. |
-| Docker CE + compose plugin | Installs from Docker's apt repo. Adds your user to `docker` group. |
-| `ufw` | Allows 22/tcp, enables firewall. Everything else inbound is blocked. |
+| SSH hardening | `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `AuthenticationMethods publickey`. After this point the host is **SSH-key only** — no passwords accepted. |
+| `ufw` | Default deny incoming + allow 22/tcp. Everything else blocked. |
 | `fail2ban` | SSH jail: 3 retries / 10 min → 1 h ban. |
-| SSH hardening | `PermitRootLogin no`, `MaxAuthTries 3`, agent + X11 forwarding off. |
+| `unattended-upgrades` | Daily security updates auto-applied. |
+
+The script refuses to run if `~/.ssh/authorized_keys` is empty for your user — disabling password auth without a key in place would lock you out. Verify from a **second terminal** before closing the first:
+
+```bash
+ssh cryptolake@$VPS_IP                                    # must succeed via key
+ssh -o PreferredAuthentications=password cryptolake@$VPS_IP   # must FAIL
+```
+
+---
+
+## 5. Bootstrap the host (interactive)
+
+```bash
+sudo bash infra/vps/bootstrap.sh
+```
+
+`bootstrap.sh` walks you through the remaining setup. It prompts for:
+
+- `POSTGRES_PASSWORD` — auto-generate (recommended) or paste your own.
+- WhatsApp/CallMeBot alerting (optional, skip with `n`).
+- `HOST_DATA_DIR` (default `/data`).
+- Initial `CRYPTOLAKE_TAG` (default `latest`).
+
+It writes `/opt/cryptolake/.env` with `chmod 600`, then installs:
+
+| Step | Effect |
+|------|--------|
+| Docker CE + compose plugin | Installs from Docker's apt repo. Adds your user to `docker` group. |
 | 2 GB swap file | Avoids OOM on 4 GB hosts under transient pressure. |
-| `/data` directory | Owned by your user; this is `HOST_DATA_DIR`. |
+| `/data` directory | Owned by your user; matches `HOST_DATA_DIR`. |
 | Docker log rotation | 50 MB × 3 files per container at the daemon level. |
-| Disk-monitor cron | Every 6 h; warns when `/data` ≥ 80 %. |
 | systemd unit `cryptolake.service` | Brings the stack up on boot. |
-| `.env` | Copied from `.env.example` (edit it next). |
+| Disk-monitor cron | Every 6 h; warns when `/data` ≥ 80 %. |
 
 **Log out and back in** so the `docker` group takes effect:
 
 ```bash
 exit
 ssh cryptolake@$VPS_IP
-```
-
----
-
-## 5. Configure secrets
-
-```bash
-cd /opt/cryptolake
-nano .env
-```
-
-Required:
-
-```
-POSTGRES_PASSWORD=<strong random>
-HOST_DATA_DIR=/data
-WEBHOOK_URL=
-CALLMEBOT_PHONE=<or 0 if unused>
-CALLMEBOT_APIKEY=<or 0 if unused>
-```
-
-Tighten permissions:
-
-```bash
-chmod 600 .env
 ```
 
 ---
@@ -230,20 +231,20 @@ The last command requires `:verify:installDist` to have been built on the host �
 
 ### Updates
 
-Build new images on your laptop, ship them, recreate containers:
+Use the rolling-update flow — see `docs/2026-05-08-rolling-update-plan.md` for the rationale and guarantees.
 
 ```bash
 # laptop
 git pull
 CRYPTOLAKE_TAG=$(git rev-parse --short HEAD) \
     scripts/publish-images.sh cryptolake@$VPS_IP
-echo "Now SSH in and bounce the stack."
 
-# VPS
+# VPS — restart services one at a time, writer first, with healthcheck gating
 cd /opt/cryptolake
-sed -i "s/^CRYPTOLAKE_TAG=.*/CRYPTOLAKE_TAG=<sha>/" .env
-docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
+sudo ./scripts/rolling-update.sh $(git rev-parse --short HEAD)
 ```
+
+The script enforces preflight checks (images loaded, current stack healthy, not inside the 02:20–03:30 UTC consolidation window) and rolls back any service that fails to become `/ready` within 90 s. Services already on the new tag are skipped on re-run.
 
 For maintenance restarts that the writer should classify as `planned` (not `host_reboot`), use the wrapper described in `CLAUDE.md`:
 
