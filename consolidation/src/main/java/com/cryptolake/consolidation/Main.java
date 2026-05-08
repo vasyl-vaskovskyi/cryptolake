@@ -40,8 +40,8 @@ public final class Main {
 
     @Option(
         names = "--base-dir",
-        defaultValue = "/data/archive",
-        description = "Archive base directory")
+        defaultValue = "/data",
+        description = "Archive base directory (writer outputs <baseDir>/<exchange>/<symbol>/...)")
     private String baseDir;
 
     @Option(names = "--exchange", required = true, description = "Exchange name")
@@ -82,8 +82,8 @@ public final class Main {
 
     @Option(
         names = "--base-dir",
-        defaultValue = "/data/archive",
-        description = "Archive base directory")
+        defaultValue = "/data",
+        description = "Archive base directory (writer outputs <baseDir>/<exchange>/<symbol>/...)")
     private String baseDir;
 
     @Option(

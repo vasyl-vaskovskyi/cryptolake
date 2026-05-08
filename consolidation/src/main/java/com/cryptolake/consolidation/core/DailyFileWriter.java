@@ -13,74 +13,91 @@ import java.nio.file.StandardOpenOption;
 import java.util.List;
 
 /**
- * Writes all envelopes for a day into a single zstd-compressed JSONL file.
+ * Streams envelopes hour-by-hour into a zstd-compressed daily JSONL file.
  *
- * <p>Ports {@code write_daily_file} from {@code consolidate.py}. Daily files are SEALED in one shot
- * — {@link ZstdOutputStream} is acceptable (design §2.2). Explicit {@code fc.force(true)} before
- * close for durability (Tier 5 I1, I3; Q14 preferred path).
+ * <p>Streaming keeps peak memory bounded to one hour's worth of parsed envelopes (spec §"Streaming
+ * Writer"). The previous "build all 24 hour batches in memory, then write" shape multiplied peak
+ * memory by 24 — unsafe on the 8 GB VPS for depth on busy days.
  *
- * <p>Tier 5 B2: compact JSON, newline after each record. Tier 5 I1, I3.
+ * <p>Tier 5 I1, I3: explicit {@code force(true)} before close (Q14 preferred path).
  *
- * <p>Thread safety: each call opens its own channel; no shared mutable state.
+ * <p>Thread safety: not safe for concurrent use; one instance per consolidation run.
  */
-public final class DailyFileWriter {
+public final class DailyFileWriter implements AutoCloseable {
 
   private static final int ZSTD_LEVEL = 3;
 
-  private DailyFileWriter() {}
-
-  /**
-   * Write stats returned from {@link #write}.
-   *
-   * <p>Tier 2 §12 — record.
-   */
+  /** Cumulative write stats returned from {@link #stats()} after close. */
   public record WriteStats(long totalRecords, long dataRecords, long gapRecords) {}
 
-  /**
-   * Writes all envelope batches to the daily file.
-   *
-   * @param outputPath target {@code .jsonl.zst} file path
-   * @param batches list of envelope batches (one per hour or merged merge result)
-   * @param mapper shared {@link ObjectMapper} (Tier 5 B6)
-   * @return write statistics
-   * @throws IOException on I/O or serialization failure
-   */
-  public static WriteStats write(Path outputPath, List<List<JsonNode>> batches, ObjectMapper mapper)
-      throws IOException {
+  /** Per-hour counts returned from {@link #appendHour}. */
+  public record HourCounts(long dataRecords, long gapRecords) {}
+
+  private final FileChannel channel;
+  private final ZstdOutputStream zstdOut;
+  private final BufferedOutputStream bufOut;
+
+  private long total;
+  private long dataCount;
+  private long gapCount;
+  private boolean closed;
+
+  private DailyFileWriter(FileChannel channel, ZstdOutputStream zstdOut, BufferedOutputStream buf) {
+    this.channel = channel;
+    this.zstdOut = zstdOut;
+    this.bufOut = buf;
+  }
+
+  /** Opens a new daily file at {@code outputPath}, truncating any existing file. */
+  public static DailyFileWriter open(Path outputPath) throws IOException {
     Files.createDirectories(outputPath.getParent());
+    FileChannel fc =
+        FileChannel.open(
+            outputPath,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.WRITE,
+            StandardOpenOption.TRUNCATE_EXISTING);
+    ZstdOutputStream zstd = new ZstdOutputStream(Channels.newOutputStream(fc), ZSTD_LEVEL);
+    return new DailyFileWriter(fc, zstd, new BufferedOutputStream(zstd));
+  }
 
-    long total = 0L, dataCount = 0L, gapCount = 0L;
-
-    // Tier 5 I1, I3: FileChannel + ZstdOutputStream; explicit force(true) before close
-    try (var fc =
-            FileChannel.open(
-                outputPath,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.TRUNCATE_EXISTING);
-        var zstdOut = new ZstdOutputStream(Channels.newOutputStream(fc), ZSTD_LEVEL);
-        var bufOut = new BufferedOutputStream(zstdOut)) {
-
-      for (List<JsonNode> batch : batches) {
-        for (JsonNode record : batch) {
-          byte[] bytes = mapper.writeValueAsBytes(record); // compact (Tier 5 B2)
-          bufOut.write(bytes);
-          bufOut.write(0x0A); // newline (Tier 5 B2)
-          total++;
-          if ("gap".equals(record.path("type").asText())) {
-            gapCount++;
-          } else {
-            dataCount++;
-          }
-        }
+  /**
+   * Appends a single hour's envelopes to the daily file and returns the per-hour data/gap counts.
+   * The caller may release {@code envelopes} immediately after this returns.
+   */
+  public HourCounts appendHour(List<JsonNode> envelopes, ObjectMapper mapper) throws IOException {
+    long hourData = 0L;
+    long hourGap = 0L;
+    for (JsonNode record : envelopes) {
+      byte[] bytes = mapper.writeValueAsBytes(record); // compact (Tier 5 B2)
+      bufOut.write(bytes);
+      bufOut.write(0x0A); // newline (Tier 5 B2)
+      total++;
+      if ("gap".equals(record.path("type").asText())) {
+        gapCount++;
+        hourGap++;
+      } else {
+        dataCount++;
+        hourData++;
       }
-
-      // Tier 5 I3: flush all buffers, then fsync
-      bufOut.flush();
-      zstdOut.flush();
-      fc.force(true); // explicit fsync before close (Q14 preferred path)
     }
+    return new HourCounts(hourData, hourGap);
+  }
 
+  /** Cumulative stats since open. Call after {@link #close()} for the final value. */
+  public WriteStats stats() {
     return new WriteStats(total, dataCount, gapCount);
+  }
+
+  /** Closes the streams and fsyncs the file to disk. */
+  @Override
+  public void close() throws IOException {
+    if (closed) return;
+    closed = true;
+    bufOut.flush();
+    zstdOut.flush();
+    channel.force(true); // Tier 5 I3: explicit fsync before close
+    bufOut.close(); // closes zstdOut and underlying channel-output-stream chain
+    channel.close();
   }
 }

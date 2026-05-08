@@ -205,14 +205,23 @@ services:
     depends_on:
       writer:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8003:8003"
     networks:
       - cryptolake_internal
+      - host_access
     volumes:
       - ./config/config.yaml:/etc/cryptolake/config.yml:ro
       - ${HOST_DATA_DIR:-/data}:${HOST_DATA_DIR:-/data}
     environment:
       - LOG_LEVEL=INFO
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
+    command: ["scheduler", "--base-dir", "${HOST_DATA_DIR:-/data}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8003/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
     logging:
       driver: json-file

@@ -21,4 +21,19 @@ public record HourFileGroup(
   public boolean isEmpty() {
     return base == null && late.isEmpty() && backfill.isEmpty();
   }
+
+  /**
+   * Manifest hour-status classification (spec §Manifest):
+   *
+   * <ul>
+   *   <li>{@code "missing"} — no files at all (a synthetic gap envelope is emitted).
+   *   <li>{@code "backfilled"} — no base file, but backfill files exist.
+   *   <li>{@code "present"} — base file exists (may include late/backfill supplements).
+   * </ul>
+   */
+  public String status() {
+    if (isEmpty()) return "missing";
+    if (base == null && !backfill.isEmpty()) return "backfilled";
+    return "present";
+  }
 }

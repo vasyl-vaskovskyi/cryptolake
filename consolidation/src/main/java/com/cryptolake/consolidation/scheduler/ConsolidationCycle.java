@@ -118,11 +118,17 @@ public final class ConsolidationCycle {
                     stream,
                     "date",
                     date);
+              } else {
+                // Spec §Prometheus Metrics: days_processed counts (stream, day) tuples
+                // that completed successfully, not cycle invocations.
+                metrics.incDaysProcessed(1.0);
               }
 
               // Tier 1 §5: missing hour metric + log (log already in MissingHourGapFactory)
               metrics.incMissingHours(result.missingHours());
-              metrics.incFilesConsolidated(1.0);
+              // Spec §Prometheus Metrics: files_consolidated counts hourly source files
+              // actually merged into the daily archive.
+              metrics.incFilesConsolidated(result.sourceFilesCount());
 
             } catch (IOException e) {
               anyFailed = true;
@@ -148,7 +154,6 @@ public final class ConsolidationCycle {
       return new CycleSummary(symbolsProcessed, totalRecords, totalMissingHours, true);
     }
 
-    metrics.incDaysProcessed(1.0);
     log.info(
         "consolidation_cycle_finished",
         "date",

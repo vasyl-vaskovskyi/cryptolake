@@ -1,12 +1,15 @@
 package com.cryptolake.consolidation.scheduler;
 
+import com.cryptolake.common.health.HealthServer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -27,20 +30,28 @@ public final class ConsolidationScheduler {
 
   private static final Logger log = LoggerFactory.getLogger(ConsolidationScheduler.class);
   private static final int DEFAULT_START_HOUR_UTC = 2; // 02:30 UTC
+  private static final int DEFAULT_HEALTH_PORT = 8003; // matches infra/prometheus/prometheus.yml
 
   private final Path baseDir;
   private final int startHourUtc;
+  private final int healthPort;
   private final ObjectMapper mapper;
   private final CountDownLatch stopLatch = new CountDownLatch(1); // Tier 5 A3
 
-  public ConsolidationScheduler(Path baseDir, int startHourUtc, ObjectMapper mapper) {
+  public ConsolidationScheduler(
+      Path baseDir, int startHourUtc, int healthPort, ObjectMapper mapper) {
     this.baseDir = baseDir;
     this.startHourUtc = startHourUtc;
+    this.healthPort = healthPort;
     this.mapper = mapper;
   }
 
+  public ConsolidationScheduler(Path baseDir, int startHourUtc, ObjectMapper mapper) {
+    this(baseDir, startHourUtc, DEFAULT_HEALTH_PORT, mapper);
+  }
+
   public ConsolidationScheduler(Path baseDir, ObjectMapper mapper) {
-    this(baseDir, DEFAULT_START_HOUR_UTC, mapper);
+    this(baseDir, DEFAULT_START_HOUR_UTC, DEFAULT_HEALTH_PORT, mapper);
   }
 
   /**
@@ -50,8 +61,30 @@ public final class ConsolidationScheduler {
     PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
     ConsolidationMetrics metrics = new ConsolidationMetrics(registry);
 
-    log.info("consolidation_scheduler_started", "start_hour_utc", startHourUtc);
+    // /ready always reports the scheduler healthy once the loop is running.
+    // /metrics serves the Prometheus scrape — port matches the prometheus.yml job.
+    HealthServer health =
+        new HealthServer(
+            healthPort,
+            () -> Map.of("scheduler", true),
+            () -> registry.scrape().getBytes(StandardCharsets.UTF_8));
+    health.start();
 
+    log.info(
+        "consolidation_scheduler_started",
+        "start_hour_utc",
+        startHourUtc,
+        "health_port",
+        healthPort);
+
+    try {
+      runLoop(metrics);
+    } finally {
+      health.stop();
+    }
+  }
+
+  private void runLoop(ConsolidationMetrics metrics) {
     while (true) {
       Instant nextRun = ScheduleClock.nextRunInstant(Instant.now(), startHourUtc);
       long sleepNanos = Duration.between(Instant.now(), nextRun).toNanos();
