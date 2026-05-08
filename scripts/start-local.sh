@@ -94,6 +94,15 @@ green "config.yaml: symbols=${SYMBOLS}"
 green "Starting cryptolake stack..."
 docker compose up -d
 
+# 6. First-run only: apply 30-min retention to backup.* topics. Sentinel-gated
+# so re-running this script doesn't re-do the work. Failure is non-fatal —
+# the stack is already running.
+if [[ ! -f .cryptolake-backup-topics-configured ]]; then
+  yellow "First run detected; configuring backup.* topic retention in background..."
+  (bash scripts/setup-backup-topics.sh \
+    || red "setup-backup-topics.sh failed — re-run manually once collector-backup is healthy.") &
+fi
+
 echo
 green "Stack started. Health endpoints (loopback only):"
 cat <<EOF

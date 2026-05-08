@@ -8,8 +8,12 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/cryptolake
 ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
+# First-boot only: apply 30-min retention to backup.* topics. The script
+# is sentinel-gated, so it's a no-op once the file exists. Leading '-'
+# means non-fatal — never let a topic-config hiccup block startup.
+ExecStartPost=-/bin/bash -c 'test -f /opt/cryptolake/.cryptolake-backup-topics-configured || /bin/bash /opt/cryptolake/scripts/setup-backup-topics.sh'
 ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.vps.yml down
-TimeoutStartSec=120
+TimeoutStartSec=600
 TimeoutStopSec=60
 
 [Install]
