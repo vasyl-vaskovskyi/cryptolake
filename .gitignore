@@ -14,6 +14,10 @@ build/
 *.class
 *.iml
 
+# Local sentinel written by scripts/start-local.sh after the first-run
+# backup-topic retention setup completes. Per-host state, never shared.
+.cryptolake-backup-topics-configured
+
 # Ignore most of .claude/ (local settings, worktree metadata) but track the
 # shared skill bundle and slash commands that are part of the repo.
 .claude/*
