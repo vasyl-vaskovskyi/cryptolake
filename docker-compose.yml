@@ -93,10 +93,17 @@ services:
         max-file: "5"
 
   collector-backup:
+    # Shares the cryptolake/collector image with the primary collector — only
+    # env (COLLECTOR_ID, TOPIC_PREFIX) differs. NO build: directive: when both
+    # services declared build: + the same explicit image tag, BuildKit raced
+    # to write the tag in parallel and the second build failed with
+    # `image "cryptolake/collector:latest": already exists`. The primary
+    # builds the image; we just consume it. pull_policy=never keeps Compose
+    # from attempting a registry pull when the image isn't yet built locally
+    # (there is no registry — images are loaded via scripts/publish-images.sh
+    # in production).
     image: cryptolake/collector:${CRYPTOLAKE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.collector
+    pull_policy: never
     depends_on:
       redpanda:
         condition: service_healthy
