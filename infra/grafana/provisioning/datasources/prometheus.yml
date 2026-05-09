@@ -1,0 +1,19 @@
+# Datasource provisioning — auto-wires the existing Prometheus instance
+# at startup. Grafana reads this on every boot; if the datasource already
+# exists with a different config, `editable: false` keeps it from being
+# silently mutated through the UI (changes belong in this file).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Stable UID so the dashboard JSON can reference the datasource
+    # without depending on Grafana's auto-generated random UIDs.
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST

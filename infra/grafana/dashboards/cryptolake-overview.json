@@ -1,0 +1,576 @@
+{
+  "uid": "cryptolake-overview",
+  "title": "CryptoLake — Overview",
+  "tags": ["cryptolake"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "15s",
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "15s", "30s", "1m", "5m", "15m", "1h"]
+  },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "collector",
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"collector\"}", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "collector-backup",
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"collector-backup\"}", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "writer",
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"writer\"}", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "backfill",
+      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"backfill\"}", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "consolidation",
+      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"consolidation\"}", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "redpanda",
+      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"redpanda\"}", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Alerts firing",
+      "description": "Count of Prometheus alert rules currently in firing state. Click to see details in the Alertmanager UI at :9093.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\"}) or vector(0)", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Produce rate per stream (msg/s)",
+      "description": "rate(collector_messages_produced_total[1m]) — non-zero everywhere means data is flowing from Binance through Kafka.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stream) (rate(collector_messages_produced_total[1m]))",
+          "legendFormat": "{{stream}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8, "showPoints": "never", "stacking": { "mode": "none" } },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }] }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Exchange→ingest latency p99 (ms)",
+      "description": "Wall-clock delay between the WS event timestamp and the moment the collector saw it. p99 over the last 5 minutes.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, stream) (rate(collector_exchange_latency_ms_bucket[5m])))",
+          "legendFormat": "p99 {{stream}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 0, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 250 },
+              { "color": "red", "value": 500 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Writer consumer lag (records)",
+      "description": "Records pending in Kafka the writer hasn't consumed yet. Should hover near 0; sustained growth means writer is falling behind.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "max(writer_consumer_lag)", "legendFormat": "lag" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 12, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000 },
+              { "color": "red", "value": 100000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Writer flush duration p99 (ms)",
+      "description": "histogram_quantile(0.99, ... writer_flush_duration_ms_bucket ...). Spikes indicate disk or zstd contention.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(writer_flush_duration_ms_bucket[5m])))",
+          "legendFormat": "p99"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(writer_flush_duration_ms_bucket[5m])))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 4, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }] }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Failover source",
+      "description": "writer_failover_active — 0 = archiving from MAIN collector, 1 = archiving from BACKUP.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "writer_failover_active", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "MAIN", "color": "green" }, "1": { "text": "BACKUP", "color": "yellow" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Compression ratio",
+      "description": "writer_compression_ratio — uncompressed/compressed. Higher = better packing. Steady ~3-5× for crypto data is normal.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "avg(writer_compression_ratio)", "legendFormat": "ratio" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue" }] }
+        }
+      },
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "hidden" } }
+    },
+    {
+      "id": 14,
+      "type": "gauge",
+      "title": "Disk usage %",
+      "description": "writer_disk_usage_pct — fraction of $HOST_DATA_DIR consumed. Alerts at 85% (warn) and 95% (critical).",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "writer_disk_usage_pct", "instant": true }
+      ],
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "orange", "value": 85 },
+              { "color": "red", "value": 95 }
+            ]
+          },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Bytes written / sec",
+      "description": "rate(writer_bytes_written[1m]) — post-compression archive throughput.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(writer_bytes_written_total[1m])" }
+      ],
+      "options": {
+        "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue" }] }
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Hours sealed today",
+      "description": "writer_hours_sealed_today — out of 24 expected by end of UTC day.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "max(writer_hours_sealed_today)", "instant": true }
+      ],
+      "options": {
+        "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 24, "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }] },
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Hours sealed previous day",
+      "description": "writer_hours_sealed_previous_day — should reach 24 by ~02:00 UTC after consolidation runs.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "max(writer_hours_sealed_previous_day)", "instant": true }
+      ],
+      "options": {
+        "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 24, "unit": "short",
+          "mappings": [
+            { "type": "range", "options": { "from": 0, "to": 23, "result": { "color": "yellow" } } },
+            { "type": "value", "options": { "24": { "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow" }] },
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Time since last consolidation run",
+      "description": "Should be < ~26h (consolidation runs daily at 02:00 UTC). Red = consolidation hasn't run in over a day, archive may be missing yesterday's daily seal.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "time() - consolidation_last_run_timestamp_seconds", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 86400 },
+              { "color": "red", "value": 100800 }
+            ]
+          },
+          "noValue": "never"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Missing hours (consolidation)",
+      "description": "consolidation_missing_hours_total — running count of hours where the writer never produced an archive file (real data loss). Should stay 0 in steady state.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "consolidation_missing_hours_total", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Gap envelopes suppressed (per second)",
+      "description": "rate(writer_gap_envelopes_suppressed[1m]) — how often the coverage filter saved a gap from being archived (because the OTHER collector was fresh on that stream). Healthy redundancy = non-zero.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(writer_gap_envelopes_suppressed_total[1m])", "legendFormat": "suppressed/s" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }] }
+        }
+      },
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Gap candidates parked",
+      "description": "writer_gap_pending_size — gap candidates currently waiting in the 10s grace window for the other collector to cover. Sustained > 0 means the coverage filter is actively working.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "writer_gap_pending_size", "legendFormat": "pending" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 12, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue" }] }
+        }
+      },
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Gaps archived by reason (per minute)",
+      "description": "rate(collector_gaps_detected_total[5m]) by reason — what kinds of gaps are landing in the archive. Non-zero is normal at startup and during reconnects; sustained means a real coverage issue.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(collector_gaps_detected_total[5m])) * 60",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "lineWidth": 0, "fillOpacity": 80, "showPoints": "never", "stacking": { "mode": "normal" } },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow" }] }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "lastNotNull"] }
+      }
+    }
+  ]
+}

@@ -125,7 +125,7 @@ docker compose ps
 - **CloudWatch Metrics**: `CryptoLake` namespace — memory, disk, disk I/O
 - **CloudWatch Logs**: `/cryptolake/docker` log group — all container logs
 - **AWS Backup**: Daily EBS snapshots at 05:00 UTC, 7-day retention
-- **Sampler**: Real-time terminal dashboard over SSH — run `sampler -c infra/sampler/sampler.yml` (no port forwarding needed)
+- **Prometheus UI**: SSH-tunnel `127.0.0.1:9090` and open in a browser for /targets, /alerts, and ad-hoc PromQL graphs.
 
 ## Host Lifecycle Agent
 

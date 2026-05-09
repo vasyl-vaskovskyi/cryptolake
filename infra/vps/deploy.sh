@@ -81,4 +81,4 @@ if [[ ! -f "$SENTINEL" ]]; then
     fi
 fi
 
-info "Deploy complete. Monitor: sampler -c $REPO_DIR/infra/sampler/sampler.yml"
+info "Deploy complete. Monitor: tunnel Prometheus over SSH — see docs/2026-05-08-vps-deployment-guide.md."
