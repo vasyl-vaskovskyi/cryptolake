@@ -188,6 +188,11 @@ services:
     depends_on:
       writer:
         condition: service_healthy
+    ports:
+      # Publish the HealthServer's /ready and /metrics on a host port for
+      # parity with collector / writer / consolidation. Internal port 8000
+      # matches infra/prometheus/prometheus.yml's backfill scrape target.
+      - "127.0.0.1:8002:8000"
     networks:
       - cryptolake_internal
       - collector_egress
@@ -202,6 +207,11 @@ services:
     # produces a tight crash-loop. Run the 6-hourly scheduler in the
     # container, same shape as consolidation.
     command: ["scheduler"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
     logging:
       driver: json-file

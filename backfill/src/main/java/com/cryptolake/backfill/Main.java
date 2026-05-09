@@ -87,10 +87,16 @@ public final class Main {
     @Option(names = "--interval-hours", defaultValue = "6")
     private int intervalHours;
 
+    @Option(
+        names = "--health-port",
+        defaultValue = "8000",
+        description = "Port for /ready and /metrics. Matches the prometheus.yml backfill job.")
+    private int healthPort;
+
     @Override
     public Integer call() throws InterruptedException {
       BackfillScheduler scheduler =
-          new BackfillScheduler(Path.of(baseDir), (long) intervalHours * 3600L, MAPPER);
+          new BackfillScheduler(Path.of(baseDir), (long) intervalHours * 3600L, healthPort, MAPPER);
 
       CountDownLatch shutdownLatch = new CountDownLatch(1);
       Runtime.getRuntime()
