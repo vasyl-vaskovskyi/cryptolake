@@ -195,9 +195,11 @@ All control-plane ports are bound to **127.0.0.1 only**, so verifying from your 
 
 ```bash
 # From your laptop
-ssh -L 9090:127.0.0.1:9090 \
+ssh -L 3000:127.0.0.1:3000 \
+    -L 9090:127.0.0.1:9090 \
     -L 8000:127.0.0.1:8000 \
     -L 8001:127.0.0.1:8001 \
+    -L 8002:127.0.0.1:8002 \
     -L 8003:127.0.0.1:8003 \
     -L 8004:127.0.0.1:8004 \
     cryptolake@$VPS_IP
@@ -209,8 +211,10 @@ Then in another terminal:
 curl -s http://127.0.0.1:8000/ready    # collector primary
 curl -s http://127.0.0.1:8004/ready    # collector backup
 curl -s http://127.0.0.1:8001/ready    # writer
+curl -s http://127.0.0.1:8002/ready    # backfill scheduler
 curl -s http://127.0.0.1:8003/ready    # consolidation scheduler
 open http://127.0.0.1:9090/targets     # all prometheus jobs should be UP
+open http://127.0.0.1:3000             # Grafana — single-page CryptoLake overview
 ```
 
 The consolidation `/ready` and `/metrics` endpoints are new — they were added when fixing the `8003` exposure. If `consolidation:8003` shows as DOWN in Prometheus targets after a few minutes, your image is older than the fix.

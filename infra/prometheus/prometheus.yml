@@ -24,7 +24,9 @@ scrape_configs:
 
   - job_name: backfill
     static_configs:
-      # Backfill's HealthServer binds to 8000 (config.yaml monitoring.prometheus_port).
+      # Backfill's HealthServer is wired in BackfillScheduler.run() (see commit
+      # 77e1f5c — "feat(backfill): expose /metrics via HealthServer"). Default
+      # port 8000 inside the container, published as 8002 on the host.
       # Same gotcha as writer — service-discovery uses container-internal ports.
       - targets: ["backfill:8000"]
 

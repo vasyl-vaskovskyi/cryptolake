@@ -385,11 +385,11 @@
       "id": 15,
       "type": "stat",
       "title": "Bytes written / sec",
-      "description": "rate(writer_bytes_written[1m]) — post-compression archive throughput.",
+      "description": "sum(rate(writer_bytes_written_total[1m])) across all (symbol, stream) pairs — total post-compression archive throughput.",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "rate(writer_bytes_written_total[1m])" }
+        { "refId": "A", "expr": "sum(rate(writer_bytes_written_total[1m]))" }
       ],
       "options": {
         "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
@@ -405,12 +405,12 @@
     {
       "id": 16,
       "type": "stat",
-      "title": "Hours sealed today",
-      "description": "writer_hours_sealed_today — out of 24 expected by end of UTC day.",
+      "title": "Hours sealed today (worst stream)",
+      "description": "min(writer_hours_sealed_today) — the slowest stream's count, out of 24. Using min() so the panel surfaces 'are we falling behind on any stream?' rather than 'is at least one stream caught up?'",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "max(writer_hours_sealed_today)", "instant": true }
+        { "refId": "A", "expr": "min(writer_hours_sealed_today)", "instant": true }
       ],
       "options": {
         "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value",
@@ -427,12 +427,12 @@
     {
       "id": 17,
       "type": "stat",
-      "title": "Hours sealed previous day",
-      "description": "writer_hours_sealed_previous_day — should reach 24 by ~02:00 UTC after consolidation runs.",
+      "title": "Hours sealed previous day (worst stream)",
+      "description": "min(writer_hours_sealed_previous_day) — should reach 24 by ~02:00 UTC after consolidation runs. min() over streams so a single stuck stream is visible.",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "max(writer_hours_sealed_previous_day)", "instant": true }
+        { "refId": "A", "expr": "min(writer_hours_sealed_previous_day)", "instant": true }
       ],
       "options": {
         "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value",
@@ -482,12 +482,12 @@
     {
       "id": 19,
       "type": "stat",
-      "title": "Missing hours (consolidation)",
-      "description": "consolidation_missing_hours_total — running count of hours where the writer never produced an archive file (real data loss). Should stay 0 in steady state.",
+      "title": "Missing hours (last 24h)",
+      "description": "increase(consolidation_missing_hours_total[24h]) — hours where consolidation found no archive file in the last 24h, i.e. recent real data loss. Using increase() over the lifetime counter so the panel goes back to 0 once the operator backfills, instead of staying red forever.",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 24 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "consolidation_missing_hours_total", "instant": true }
+        { "refId": "A", "expr": "increase(consolidation_missing_hours_total[24h])", "instant": true }
       ],
       "options": {
         "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
@@ -570,6 +570,103 @@
       "options": {
         "tooltip": { "mode": "multi", "sort": "desc" },
         "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Backfill last run",
+      "description": "backfill_last_run_success — 1 = last cycle succeeded, 0 = failed OR never run yet (gauge initializes to 0). After ~6h of green you'll know it has actually run; until then trust the cycle hasn't fired yet.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "backfill_last_run_success", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "FAIL/PENDING", "color": "yellow" }, "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow" }] },
+          "noValue": "—"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Backfill last run age",
+      "description": "Time since the last backfill cycle. Scheduler runs every 6h; red after 7h indicates a stuck or failed scheduler. Note: shows a huge number until first run because backfill_last_run_timestamp_seconds initializes to 0.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "time() - backfill_last_run_timestamp_seconds", "instant": true }
+      ],
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 21600 },
+              { "color": "red", "value": 25200 }
+            ]
+          },
+          "noValue": "never"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Backfill last cycle duration",
+      "description": "backfill_last_run_duration_seconds — how long the most recent cycle took. Sustained spikes mean Binance REST is slow or there are many gaps to fill.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "backfill_last_run_duration_seconds", "instant": true }
+      ],
+      "options": {
+        "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue" }] },
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "stat",
+      "title": "Backfill runs (lifetime)",
+      "description": "backfill_runs_total — how many cycles have fired since the container started. Useful for sanity-checking that the scheduler is actually firing every 6h.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "backfill_runs_total", "instant": true }
+      ],
+      "options": {
+        "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue" }] },
+          "noValue": "0"
+        }
       }
     }
   ]
