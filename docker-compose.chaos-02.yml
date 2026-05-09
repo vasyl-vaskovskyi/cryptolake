@@ -1,0 +1,48 @@
+# Chaos scenario 02 (writer_disk_full_brief) override.
+#
+# Replaces the writer's host-bind /data mount with a 300 MiB tmpfs Docker
+# volume served by the local volume driver. Same disk-full behaviour as
+# the previous chaosfs-NFS sidecar (writes return ENOSPC at the cap), but
+# the filesystem lives entirely inside the writer's mount namespace — there
+# is no separate NFS server container, and no NFS mount on the writer whose
+# `hard,sync` flags could leave the writer in D-state when the server goes
+# away on teardown. That D-state is what produced the dead-but-undeletable
+# zombie containers (`Container <id> Recreate / No such container`) that
+# blocked the next chaos-02 run on most laptops.
+#
+# How the disk-full simulation still works:
+#   - The local volume driver runs `mount -t tmpfs ... -o size=300m` when
+#     the volume is created. It is a real kernel tmpfs with the size cap
+#     enforced at VFS — the writer's writes return ENOSPC exactly the same
+#     way they would on a host filesystem.
+#   - The volume is owned by the Docker daemon, so `docker compose down -v`
+#     unmounts it cleanly. No NFS, no second container, no D-state.
+#   - The volume survives writer-container restart (Docker restart policy
+#     unless-stopped recreates the container, the volume stays). That
+#     property — preserving archive data across an OOM-restart cascade —
+#     was the original reason chaosfs existed; this delivers it without
+#     the NFS coupling.
+#
+# Filling and freeing the disk is done via `docker compose exec writer …`
+# (see fill_via_writer / free_via_writer in tests/chaos/common.sh) — the
+# writer image is Eclipse Temurin (Ubuntu base) and ships dd, df, rm.
+
+services:
+  writer:
+    # !override replaces the entire list rather than appending. Without it,
+    # compose merges the override list into the base list and the writer
+    # ends up with BOTH the host bind-mount and the tmpfs volume on the
+    # same path, which is undefined behaviour.
+    volumes: !override
+      - ./config/config.yaml:/etc/cryptolake/config.yml:ro
+      - chaos02_data:${HOST_DATA_DIR:-/data}
+
+volumes:
+  chaos02_data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      # mode=0777 so the writer process (whatever uid the JRE image runs
+      # as) can write to the mountpoint without further chowning.
+      o: "size=300m,mode=0777"

@@ -88,6 +88,19 @@ init_scenario() {
     msg "HOST_DATA_DIR=${HOST_DATA_DIR}"
     msg "COMPOSE_PROJECT=${COMPOSE_PROJECT}"
 
+    # Defensive pre-up cleanup. The runner's pre-suite sweep handles the common
+    # case (idle leftover projects), but it can miss state where a previous
+    # scenario's teardown was interrupted (Ctrl-C, OOM-kill, Docker Desktop
+    # restart) and left containers, NFS volumes, or stale compose-project
+    # state references that look fine to `compose ls` but cause the next `up`
+    # to fail with errors like:
+    #     Container <id> Recreate
+    #     Error response from daemon: No such container: <id>
+    # `down -v --remove-orphans` against THIS scenario's project name forces
+    # a clean slate before start_stack runs. No-op if nothing is left over.
+    docker compose "${COMPOSE_OPTS[@]}" down -v --remove-orphans --timeout 5 \
+        >/dev/null 2>&1 || true
+
     # Guarantee cleanup even on set -e failures
     trap 'teardown_stack' EXIT
     # Make assertion / command failures unmissable: any non-zero exit under
@@ -344,28 +357,29 @@ wait_data_flowing() {
 }
 
 # ---------------------------------------------------------------------------
-# wait_data_flowing_chaosfs [stream] [timeout_secs]
-# Like wait_data_flowing, but probes inside the chaosfs sidecar container
-# rather than HOST_DATA_DIR. Required by scenarios that NFS-mount the
-# writer's /data from chaosfs (e.g. 02_fill_disk.sh) — the host dir is
+# wait_data_flowing_writer [stream] [timeout_secs]
+# Like wait_data_flowing, but probes inside the writer container itself
+# rather than HOST_DATA_DIR. Required by scenarios where the writer's
+# /data is a tmpfs Docker volume (e.g. 02_fill_disk.sh) — the host dir is
 # empty until materialize_archive_to_host runs at end of scenario.
 # ---------------------------------------------------------------------------
-wait_data_flowing_chaosfs() {
+wait_data_flowing_writer() {
     local stream="${1:-bookticker}"
     local timeout="${2:-90}"
     local deadline=$(( SECONDS + timeout ))
-    msg "Waiting for data to flow (stream=${stream}, in chaosfs:/exports, timeout=${timeout}s)…"
+    local data_dir="${HOST_DATA_DIR:-/data}"
+    msg "Waiting for data to flow (stream=${stream}, in writer:${data_dir}, timeout=${timeout}s)…"
 
     while true; do
         local count
-        count=$(dc exec -T chaosfs sh -c "find /exports -name 'hour-*.jsonl.zst' -path '*/${stream}/*' 2>/dev/null | wc -l" 2>/dev/null | tr -d '[:space:]\r')
+        count=$(dc exec -T writer sh -c "find ${data_dir} -name 'hour-*.jsonl.zst' -path '*/${stream}/*' 2>/dev/null | wc -l" 2>/dev/null | tr -d '[:space:]\r')
         if [[ -n "${count}" ]] && [[ "${count}" =~ ^[0-9]+$ ]] && (( count > 0 )); then
-            msg "Data flowing in chaosfs:/exports: found ${count} archive file(s) for ${stream}."
+            msg "Data flowing in writer:${data_dir}: found ${count} archive file(s) for ${stream}."
             return 0
         fi
         if (( SECONDS >= deadline )); then
-            msg "Timeout: no archive files found for stream=${stream} in chaosfs:/exports (last count='${count:-?}')"
-            dc exec -T chaosfs sh -c 'find /exports -type f 2>/dev/null | head -10' || true
+            msg "Timeout: no archive files found for stream=${stream} in writer:${data_dir} (last count='${count:-?}')"
+            dc exec -T writer sh -c "find ${data_dir} -type f 2>/dev/null | head -10" || true
             return 1
         fi
         sleep 5
@@ -975,58 +989,62 @@ free_disk() {
 }
 
 # ---------------------------------------------------------------------------
-# fill_via_chaosfs <megabytes>
-# Fills the chaosfs sidecar's /exports tmpfs (capped to 300 MiB by the
-# scenario-02 compose override) by writing a single filler file inside the
-# chaosfs container. The writer mounts /exports over NFS as its /data, so
-# this is what triggers ENOSPC on the writer's next fsync.
+# fill_via_writer <megabytes>
+# Fills the writer's tmpfs-backed /data volume (capped to 300 MiB by the
+# scenario-02 compose override) by writing a single filler file from
+# inside the writer container. This triggers ENOSPC on the writer's next
+# fsync exactly the same way the previous chaosfs-NFS approach did, but
+# without a separate filesystem-server container.
 # ---------------------------------------------------------------------------
-fill_via_chaosfs() {
-    local megs="${1:?fill_via_chaosfs requires a megabyte count}"
-    local min_used_pct="${FILL_VIA_CHAOSFS_MIN_USED_PCT:-95}"
-    msg "Filling chaosfs:/exports with ${megs} MiB filler…"
+fill_via_writer() {
+    local megs="${1:?fill_via_writer requires a megabyte count}"
+    local min_used_pct="${FILL_VIA_WRITER_MIN_USED_PCT:-95}"
+    local data_dir="${HOST_DATA_DIR:-/data}"
+    msg "Filling writer:${data_dir} with ${megs} MiB filler…"
     # conv=fsync forces metadata flush so the tmpfs cap is hit synchronously
     # rather than at some later writeback. status=none keeps the chaos log
     # readable; dd's progress lines mangle the [chaos] prefix layout.
     # We deliberately ignore dd's exit code: ENOSPC mid-write is the success
     # case. The post-condition that matters is "tmpfs is now nearly full",
     # which we verify explicitly below.
-    dc exec -T chaosfs sh -c "dd if=/dev/zero of=/exports/_chaos_filler bs=1M count=${megs} conv=fsync status=none" || true
+    dc exec -T writer sh -c "dd if=/dev/zero of=${data_dir}/_chaos_filler bs=1M count=${megs} conv=fsync status=none" || true
 
     # Post-condition: tmpfs must be at least ${min_used_pct}% full. This
     # rules out failure modes where dd exited non-zero for reasons OTHER
-    # than ENOSPC (chaosfs unreachable, busybox dd flag mismatch, SIGKILL,
-    # etc.) and we'd otherwise proceed to the 120s hold without an actual
+    # than ENOSPC (writer unreachable, dd flag mismatch, SIGKILL, etc.)
+    # and we'd otherwise proceed to the 120s hold without an actual
     # disk-full condition.
     local used_pct
-    used_pct=$(dc exec -T chaosfs sh -c "df /exports | awk 'NR==2{gsub(\"%\",\"\",\$5); print \$5}'" 2>/dev/null | tr -d '\r\n[:space:]' || echo 0)
-    msg "chaosfs:/exports usage after fill:"
-    dc exec -T chaosfs sh -c 'df -h /exports' || true
+    used_pct=$(dc exec -T writer sh -c "df ${data_dir} | awk 'NR==2{gsub(\"%\",\"\",\$5); print \$5}'" 2>/dev/null | tr -d '\r\n[:space:]' || echo 0)
+    msg "writer:${data_dir} usage after fill:"
+    dc exec -T writer sh -c "df -h ${data_dir}" || true
     if [[ -z "${used_pct}" ]] || ! [[ "${used_pct}" =~ ^[0-9]+$ ]] || (( used_pct < min_used_pct )); then
-        die "fill_via_chaosfs: tmpfs only ${used_pct:-?}% full after dd; expected ≥${min_used_pct}%"
+        die "fill_via_writer: tmpfs only ${used_pct:-?}% full after dd; expected ≥${min_used_pct}%"
     fi
-    CHAOSFS_FILLED=1
+    WRITER_FILLED=1
 }
 
 # ---------------------------------------------------------------------------
-# free_via_chaosfs
-# Removes the chaosfs filler file. Idempotent; safe to call from teardown.
+# free_via_writer
+# Removes the filler file from inside the writer container. Idempotent; safe
+# to call from teardown.
 # ---------------------------------------------------------------------------
-free_via_chaosfs() {
-    [[ -z "${CHAOSFS_FILLED:-}" ]] && return 0
-    msg "Removing chaosfs:/exports/_chaos_filler…"
-    dc exec -T chaosfs sh -c 'rm -f /exports/_chaos_filler' || true
-    dc exec -T chaosfs sh -c 'df -h /exports' || true
-    unset CHAOSFS_FILLED
+free_via_writer() {
+    [[ -z "${WRITER_FILLED:-}" ]] && return 0
+    local data_dir="${HOST_DATA_DIR:-/data}"
+    msg "Removing writer:${data_dir}/_chaos_filler…"
+    dc exec -T writer sh -c "rm -f ${data_dir}/_chaos_filler" || true
+    dc exec -T writer sh -c "df -h ${data_dir}" || true
+    unset WRITER_FILLED
 }
 
 # ---------------------------------------------------------------------------
 # materialize_archive_to_host
-# When the writer's /data is backed by an NFS volume served by chaosfs, the
-# archive lives inside the chaosfs container's tmpfs and is invisible to
-# the host-side `verify` CLI. This helper copies the archive tree out of
-# chaosfs into $HOST_DATA_DIR so the existing `run_verify` invocation can
-# read it without changes.
+# When the writer's /data is backed by a tmpfs Docker volume (chaos-02), the
+# archive lives inside the writer container and is invisible to the
+# host-side `verify` CLI. This helper copies the archive tree out of the
+# stopped writer into $HOST_DATA_DIR so the existing `run_verify`
+# invocation can read it without changes.
 #
 # Using `docker compose cp` (not bind-mount tricks) keeps this hermetic:
 # the host dir is empty before copy and gets populated only with what the
@@ -1034,21 +1052,16 @@ free_via_chaosfs() {
 # ---------------------------------------------------------------------------
 materialize_archive_to_host() {
     [[ -z "${HOST_DATA_DIR:-}" ]] && die "materialize_archive_to_host: HOST_DATA_DIR unset"
-    msg "Copying archive from chaosfs:/exports → ${HOST_DATA_DIR}…"
+    msg "Copying archive from writer:${HOST_DATA_DIR} → ${HOST_DATA_DIR}…"
     mkdir -p "$HOST_DATA_DIR"
-    # `cp -a` preserves mtimes; `dc cp` doesn't have -a, so use tar over a pipe.
-    # Producer stderr is intentionally NOT swallowed — a failing producer
-    # (chaosfs dead, /exports unreadable) must surface as a diagnostic, not
-    # as a silently empty copy. The consumer's stderr is also kept.
-    # Both legs are checked via PIPESTATUS because under `set -o pipefail`
-    # only the rightmost non-zero is surfaced — and `tar -xf -` happily
-    # accepts an empty stream and returns 0, which would mask producer
-    # failures.
-    dc exec -T chaosfs sh -c 'tar -C /exports -cf - .' \
-        | tar -C "$HOST_DATA_DIR" -xf -
-    local pipe_status=("${PIPESTATUS[@]}")
-    if [[ "${pipe_status[0]}" -ne 0 || "${pipe_status[1]}" -ne 0 ]]; then
-        die "materialize_archive_to_host: copy failed (chaosfs-tar=${pipe_status[0]} host-tar=${pipe_status[1]})"
+    # `docker compose cp` works on stopped containers (it streams the
+    # container's filesystem via tar internally without needing the
+    # process to be alive). The caller stops the writer cleanly first
+    # so its shutdown hook flushes pending records, then we copy the
+    # frozen on-disk state out — that guarantees the host-side archive
+    # is exactly what verify will read, with no torn-mid-write surprises.
+    if ! dc cp "writer:${HOST_DATA_DIR}/." "${HOST_DATA_DIR}/"; then
+        die "materialize_archive_to_host: dc cp from writer:${HOST_DATA_DIR} failed"
     fi
     msg "Archive materialized. Top-level entries:"
     ls -la "$HOST_DATA_DIR" | head -10
@@ -1071,7 +1084,7 @@ teardown_stack() {
     # `dc logs -f` doesn't error noisily on shutdown.
     stop_lifecycle_tail
     free_disk 2>/dev/null || true
-    free_via_chaosfs 2>/dev/null || true
+    free_via_writer 2>/dev/null || true
 
     # Dump full per-service logs to ${REPO_ROOT}/build/chaos-logs/<NN>/<svc>.log
     # before tearing down. The lifecycle tail filters to LIFECYCLE-tagged
@@ -1095,14 +1108,6 @@ teardown_stack() {
         rm -rf "$HOST_DATA_DIR"
         msg "Removed ${HOST_DATA_DIR}"
     fi
-
-    # Free the cached chaosfs upstream image so each scenario start is hermetic. The image
-    # is pinned by digest in docker-compose.chaos-02-nfs.yml; we rmi by the same digest here
-    # so the rmi targets exactly that image regardless of any other tagged variant. Best-
-    # effort; harmless when no chaosfs scenario was loaded (image not present, rmi exits 1).
-    docker rmi itsthenetwork/nfs-server-alpine@sha256:7fa99ae65c23c5af87dd4300e543a86b119ed15ba61422444207efc7abd0ba20 2>/dev/null \
-        && msg "Removed cached chaosfs image" \
-        || true
 
     msg "=== Teardown complete ==="
 }

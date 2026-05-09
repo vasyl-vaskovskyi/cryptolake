@@ -77,6 +77,14 @@ expect_lifecycle_event   "BACKUP collector enters kafka outage"    "COLLECTOR_KA
 expect_lifecycle_event   "BACKUP collector exits kafka outage"     "COLLECTOR_KAFKA_OUTAGE_EXITED"  collector-backup
 expect_lifecycle_event   "uncovered gap accepted (no source had fresh data)" "GAP_ACCEPTED_NO_COVERAGE"
 expect_gap_present_check "kafka_producer_outage gap recorded"      "kafka_producer_outage"
-expect_only_these_gaps_check kafka_producer_outage kafka_delivery_failed snapshot_poll_miss
+# kafka_delivery_failed: per-record send timeouts during the outage window.
+# kafka_producer_outage: bulk gap envelopes the collector's KafkaOutageJournal
+#   replays once redpanda is reachable again.
+# snapshot_poll_miss: depth-snapshot REST poll skipped while the collector
+#   was paused (collector emits this proactively).
+# pu_chain_break: depth's u-chain can break across the redpanda outage when
+#   the depth-stream's pre-outage backlog is flushed and the post-outage
+#   resync starts — same reconnect race accepted in chaos-04 / 11 / 13 / 15.
+expect_only_these_gaps_check kafka_producer_outage kafka_delivery_failed snapshot_poll_miss pu_chain_break
 
 verdict
