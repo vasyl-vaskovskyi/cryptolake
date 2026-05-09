@@ -17,11 +17,16 @@ scrape_configs:
 
   - job_name: writer
     static_configs:
-      - targets: ["writer:8001"]
+      # Writer's HealthServer binds to 8000 inside the container; 8001 is
+      # the host-published port. Inside the docker network we use the
+      # container-internal port.
+      - targets: ["writer:8000"]
 
   - job_name: backfill
     static_configs:
-      - targets: ["backfill:8002"]
+      # Backfill's HealthServer binds to 8000 (config.yaml monitoring.prometheus_port).
+      # Same gotcha as writer — service-discovery uses container-internal ports.
+      - targets: ["backfill:8000"]
 
   - job_name: consolidation
     static_configs:

@@ -197,6 +197,11 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - HOST_DATA_DIR=${HOST_DATA_DIR:-/data}
+    # The backfill CLI requires a subcommand (run-once | scheduler);
+    # without one it prints usage and exits, which under restart=unless-stopped
+    # produces a tight crash-loop. Run the 6-hourly scheduler in the
+    # container, same shape as consolidation.
+    command: ["scheduler"]
     restart: unless-stopped
     logging:
       driver: json-file
@@ -305,10 +310,50 @@ services:
       whatsapp-bridge:
         condition: service_healthy
 
+  grafana:
+    image: grafana/grafana-oss:11.2.0
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - cryptolake_internal
+      - host_access
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      # Loopback-only port binding + anonymous Admin = open the browser at
+      # http://127.0.0.1:3000 on the host with no login wall. The service
+      # itself is unreachable from anywhere except this machine, same
+      # security model as Prometheus.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_USERS_DEFAULT_THEME=dark
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/cryptolake-overview.json
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   postgres_data:
   redpanda_data:
   prometheus_data:
+  grafana_data:
 
 networks:
   cryptolake_internal:
