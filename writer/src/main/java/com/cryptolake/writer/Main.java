@@ -194,10 +194,17 @@ public final class Main {
     }
 
     // ── Kafka consumer ────────────────────────────────────────────────────────────────────────
+    // Construction is wrapped in a small retry loop because under chaos (writer OOM-restarts
+    // during a backlog drain, the container is recreated faster than Docker re-publishes its
+    // service DNS) the first attempt can fail with
+    //   ConfigException: No resolvable bootstrap urls given in bootstrap.servers
+    // The JVM would then exit, Docker would restart again, and the dance can cascade through
+    // half a dozen short-lived containers before DNS settles — long enough that an in-flight
+    // archive write left behind a torn zstd frame for each restart. Production sees the same
+    // pattern after VPS-level transient blips. A few seconds of backoff resolves it without
+    // the container churn. Real config errors still surface — just after maxAttempts.
     Properties consumerProps = buildConsumerProps(config);
-    KafkaConsumer<byte[], byte[]> primaryConsumer =
-        new KafkaConsumer<>(
-            consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    KafkaConsumer<byte[], byte[]> primaryConsumer = newKafkaConsumerWithRetry(consumerProps, 5);
 
     // ── Backup tail Kafka consumer (plan 2026-05-03 — continuous dual-source tailing) ─────────
     // Distinct group.id so it does not share the primary's offsets; auto.offset.reset=latest
@@ -212,9 +219,7 @@ public final class Main {
     Properties backupTailProps =
         buildBackupTailConsumerProps(config, "writer-backup-tail-" + UUID.randomUUID());
     try {
-      backupTailKafka =
-          new KafkaConsumer<>(
-              backupTailProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+      backupTailKafka = newKafkaConsumerWithRetry(backupTailProps, 5);
     } catch (RuntimeException e) {
       // Backup-tail constructor failed; primary consumer is already alive — close it before
       // propagating so its background threads do not leak.
@@ -537,6 +542,41 @@ public final class Main {
 
     // Deduplicate
     return topics.stream().distinct().toList();
+  }
+
+  /**
+   * Constructs a {@link KafkaConsumer}, retrying on transient failures (typically DNS resolution
+   * for the broker hostname) up to {@code maxAttempts} times with exponential backoff. Real
+   * configuration errors still surface — they just take {@code maxAttempts} attempts to escape the
+   * loop instead of one. Backoffs: 1s, 2s, 4s, 8s, 16s (capped at 16s).
+   */
+  private static KafkaConsumer<byte[], byte[]> newKafkaConsumerWithRetry(
+      Properties props, int maxAttempts) {
+    RuntimeException last = null;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return new KafkaConsumer<>(props, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+      } catch (RuntimeException e) {
+        last = e;
+        if (attempt == maxAttempts) {
+          break;
+        }
+        long sleepMs = Math.min(16_000L, 1000L * (1L << (attempt - 1)));
+        log.warn(
+            "kafka_consumer_construct_failed_retrying attempt={}/{} sleep_ms={} error={}",
+            attempt,
+            maxAttempts,
+            sleepMs,
+            e.getMessage());
+        try {
+          Thread.sleep(sleepMs);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          throw new RuntimeException("interrupted during kafka consumer retry", ie);
+        }
+      }
+    }
+    throw last;
   }
 
   private static Properties buildConsumerProps(AppConfig config) {
