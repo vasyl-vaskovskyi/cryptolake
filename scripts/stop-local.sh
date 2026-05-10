@@ -37,17 +37,35 @@ red()    { printf '\033[0;31m[x]\033[0m %s\n' "$*" >&2; }
 yellow() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 green()  { printf '\033[0;32m[+]\033[0m %s\n' "$*"; }
 
+# Kill the caffeinate watchdog that start-local.sh launched (macOS only).
+# Idempotent — no error if the PID file is missing or the process is already
+# gone.
+release_caffeinate() {
+    local pid_file=".cryptolake-caffeinate.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            green "caffeinate stopped (pid=$pid) — system can idle-sleep again."
+        fi
+        rm -f "$pid_file"
+    fi
+}
+
 MODE="${1:-stop}"
 
 case "$MODE" in
     "" | stop)
         green "Stopping CryptoLake stack (containers preserved)…"
         docker compose stop
+        release_caffeinate
         green "Stopped. Restart with: scripts/start-local.sh"
         ;;
     --remove|-r)
         yellow "Removing CryptoLake containers + networks (volumes preserved)…"
         docker compose down
+        release_caffeinate
         green "Removed. Postgres / Redpanda / Prometheus / Grafana state intact."
         green "Restart with: scripts/start-local.sh"
         ;;
@@ -62,6 +80,7 @@ case "$MODE" in
             exit 1
         fi
         docker compose down -v
+        release_caffeinate
         green "Wiped. Next start-local.sh will start with empty PG / Redpanda / Grafana."
         ;;
     -h|--help)

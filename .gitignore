@@ -18,6 +18,11 @@ build/
 # backup-topic retention setup completes. Per-host state, never shared.
 .cryptolake-backup-topics-configured
 
+# PID file for the macOS `caffeinate` watchdog start-local.sh launches to
+# keep the system idle-sleep-disabled while the stack runs. Per-host
+# transient state.
+.cryptolake-caffeinate.pid
+
 # Ignore most of .claude/ (local settings, worktree metadata) but track the
 # shared skill bundle and slash commands that are part of the repo.
 .claude/*

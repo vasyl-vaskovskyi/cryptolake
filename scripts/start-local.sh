@@ -103,14 +103,50 @@ if [[ ! -f .cryptolake-backup-topics-configured ]]; then
     || red "setup-backup-topics.sh failed — re-run manually once collector-backup is healthy.") &
 fi
 
+# 7. macOS only: prevent the system from idle-sleeping while the stack
+# is running. Without this, locking the screen on a MacBook lets the
+# system idle-sleep after ~2 min on battery (a few minutes longer on
+# AC), Docker Desktop pauses, and the writer + collectors miss minutes
+# of data — gap envelopes everywhere when the laptop wakes back up.
+#
+# `caffeinate -i -s` asserts:
+#   -i  prevent idle sleep (works on AC and battery)
+#   -s  prevent system sleep (only effective when on AC power)
+# Display can still sleep — locked screen with display off is fine.
+#
+# We background it via nohup+disown so it survives this script exiting,
+# and stash the PID in a sentinel file so stop-local.sh can kill it.
+# Idempotent: re-running start-local.sh re-uses an existing caffeinate
+# rather than stacking a new one.
+#
+# Caveat: closing the lid still puts the MacBook to sleep regardless of
+# caffeinate (Apple owns that policy). Keep the lid open. If you need
+# closed-lid operation, look at `pmset disablesleep` (system-wide,
+# requires sudo) or run on AC with an external monitor + clamshell.
+PID_FILE=".cryptolake-caffeinate.pid"
+if [[ "$(uname)" == "Darwin" ]]; then
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
+    green "caffeinate already running (pid=$(cat "$PID_FILE")) — leaving it alone."
+  else
+    rm -f "$PID_FILE"
+    nohup caffeinate -i -s >/dev/null 2>&1 &
+    CAFFEINATE_PID=$!
+    disown 2>/dev/null || true
+    echo "$CAFFEINATE_PID" > "$PID_FILE"
+    green "caffeinate started (pid=$CAFFEINATE_PID) — system idle-sleep disabled while the stack runs."
+  fi
+fi
+
 echo
 green "Stack started. Health endpoints (loopback only):"
 cat <<EOF
   collector primary  http://127.0.0.1:8000/ready
   collector backup   http://127.0.0.1:8004/ready
   writer             http://127.0.0.1:8001/ready
+  backfill           http://127.0.0.1:8002/ready
   consolidation      http://127.0.0.1:8003/ready
   prometheus         http://127.0.0.1:9090
+  grafana            http://127.0.0.1:3000
 EOF
 
 if [[ "${1:-}" == "--logs" ]]; then
