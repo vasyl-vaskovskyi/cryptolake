@@ -6,12 +6,17 @@ import java.util.Set;
 /**
  * Binance WebSocket stream-key mapping constants.
  *
- * <p>Ports {@code _STREAM_KEY_MAP}, {@code _WS_STREAMS}, and {@code _SUBSCRIPTION_MAP} from {@code
- * src/exchanges/binance.py} (Tier 5 M2). Uses static maps — NOT derived from an enum because the
- * mapping is asymmetric ({@code bookTicker} → {@code bookticker} → {@code @bookTicker}).
+ * <p>Subscription suffixes and the stream-name dictionary that turns {@code "btcusdt@aggTrade"}
+ * back into the pair {@code ("btcusdt", "trades")}. Uses static maps — NOT derived from an enum
+ * because the mapping is asymmetric ({@code bookTicker} → {@code bookticker} →
+ * {@code @bookTicker}).
  *
- * <p>Single consolidated socket design (commit 9e40d25): the prior public/market split is gone;
- * {@link #WS_STREAMS} covers all five stream types on one connection.
+ * <p>Dual-socket routing (post-Binance routed-endpoint change, May 2026): Binance now splits its
+ * USD-M Futures WS streams into routed endpoints {@code /public/stream} and {@code /market/stream}.
+ * An unrouted {@code /stream} silently delivers only {@code /public} streams, which is what caused
+ * trades / funding_rate / liquidations to go dark on the prior single-socket build. Streams are
+ * bucketed via {@link #PUBLIC_WS_STREAMS} and {@link #MARKET_WS_STREAMS}; {@link #WS_STREAMS}
+ * remains as the union for "is this a WS stream at all" checks.
  *
  * <p>Stateless utility. Thread-safe.
  */
@@ -26,21 +31,52 @@ public final class StreamKey {
           "markPrice", "funding_rate",
           "forceOrder", "liquidations");
 
-  /** All streams delivered over the single WebSocket connection (commit 9e40d25). */
+  /** Streams delivered via Binance's {@code /public/stream} routed endpoint. */
+  public static final Set<String> PUBLIC_WS_STREAMS = Set.of("depth", "bookticker");
+
+  /** Streams delivered via Binance's {@code /market/stream} routed endpoint. */
+  public static final Set<String> MARKET_WS_STREAMS =
+      Set.of("trades", "funding_rate", "liquidations");
+
+  /** All streams delivered over any WebSocket connection (union of public + market). */
   public static final Set<String> WS_STREAMS =
       Set.of("depth", "bookticker", "trades", "funding_rate", "liquidations");
 
   /** REST-only streams that must NOT receive WS subscriptions. */
   public static final Set<String> REST_ONLY_STREAMS = Set.of("depth_snapshot", "open_interest");
 
-  /** Maps internal stream type name to Binance subscription suffix (e.g. {@code @aggTrade}). */
+  /** Socket key name for the {@code /public/stream} connection. */
+  public static final String SOCKET_PUBLIC = "public";
+
+  /** Socket key name for the {@code /market/stream} connection. */
+  public static final String SOCKET_MARKET = "market";
+
+  /**
+   * Maps internal stream type name to Binance per-symbol subscription suffix (e.g. {@code
+   * "@aggTrade"}).
+   *
+   * <p>Note: {@code liquidations} is NOT here — its wire subscription is the single all-market
+   * broadcast {@code "!forceOrder@arr"}, not a per-symbol suffix (see {@link
+   * #LIQUIDATIONS_BROADCAST_SUBSCRIPTION}).
+   */
   public static final Map<String, String> SUBSCRIPTION_MAP =
       Map.of(
           "depth", "@depth@100ms",
           "bookticker", "@bookTicker",
           "trades", "@aggTrade",
-          "funding_rate", "@markPrice@1s",
-          "liquidations", "@forceOrder");
+          "funding_rate", "@markPrice@1s");
+
+  /**
+   * The single all-market liquidation broadcast subscription. Binance no longer reliably delivers
+   * per-symbol {@code <symbol>@forceOrder}; using the broadcast and filtering downstream gives
+   * dense-enough data for the liveness watchdog to detect silent-drop bugs.
+   */
+  public static final String LIQUIDATIONS_BROADCAST_SUBSCRIPTION = "!forceOrder@arr";
+
+  /**
+   * Binance wire stream-key for the all-market liquidation broadcast (matches the subscription).
+   */
+  public static final String LIQUIDATIONS_BROADCAST_STREAM_KEY = "!forceOrder@arr";
 
   private StreamKey() {}
 
@@ -54,10 +90,20 @@ public final class StreamKey {
 
   /**
    * Returns the WS subscription suffix for an internal stream name (e.g. {@code "trades"} → {@code
-   * "@aggTrade"}). Returns {@code null} if not a WS stream.
+   * "@aggTrade"}). Returns {@code null} if the stream has no per-symbol suffix (notably {@code
+   * liquidations}, which uses the broadcast subscription instead).
    */
   public static String subscriptionSuffix(String stream) {
     return SUBSCRIPTION_MAP.get(stream);
+  }
+
+  /**
+   * Returns the socket key that carries this stream, or {@code null} if the stream is not WS-bound.
+   */
+  public static String socketFor(String stream) {
+    if (PUBLIC_WS_STREAMS.contains(stream)) return SOCKET_PUBLIC;
+    if (MARKET_WS_STREAMS.contains(stream)) return SOCKET_MARKET;
+    return null;
   }
 
   /**

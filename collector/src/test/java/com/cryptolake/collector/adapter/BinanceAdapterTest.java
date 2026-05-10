@@ -20,7 +20,10 @@ class BinanceAdapterTest {
   void setUp() {
     adapter =
         new BinanceAdapter(
-            "wss://fstream.binance.com", "https://fapi.binance.com", EnvelopeCodec.newMapper());
+            "wss://fstream.binance.com",
+            "https://fapi.binance.com",
+            EnvelopeCodec.newMapper(),
+            java.util.List.of("btcusdt"));
   }
 
   @Test
@@ -58,13 +61,64 @@ class BinanceAdapterTest {
   }
 
   @Test
-  // ports: (new) BinanceAdapterTest::getWsUrlsSplitsPublicMarket
-  void getWsUrlsSingleSocket() {
+  void getWsUrlsSplitsPublicAndMarket() {
     java.util.List<String> symbols = java.util.List.of("btcusdt");
     java.util.List<String> streams = java.util.List.of("trades", "depth");
     java.util.Map<String, String> urls = adapter.getWsUrls(symbols, streams);
-    assertThat(urls).containsKey("ws");
-    assertThat(urls.get("ws")).endsWith("/stream");
+    assertThat(urls).containsOnlyKeys("public", "market");
+    assertThat(urls.get("public")).endsWith("/public/stream");
+    assertThat(urls.get("market")).endsWith("/market/stream");
+  }
+
+  @Test
+  void getWsUrlsOnlyPublicWhenOnlyPublicStreams() {
+    java.util.Map<String, String> urls =
+        adapter.getWsUrls(java.util.List.of("btcusdt"), java.util.List.of("depth", "bookticker"));
+    assertThat(urls).containsOnlyKeys("public");
+  }
+
+  @Test
+  void getSubscriptionsPerSocket() {
+    java.util.List<String> symbols = java.util.List.of("btcusdt", "ethusdt");
+    java.util.List<String> streams =
+        java.util.List.of("depth", "bookticker", "trades", "funding_rate", "liquidations");
+    java.util.List<String> publicSubs =
+        adapter.getSubscriptionsForSocket("public", symbols, streams);
+    java.util.List<String> marketSubs =
+        adapter.getSubscriptionsForSocket("market", symbols, streams);
+    assertThat(publicSubs)
+        .containsExactlyInAnyOrder(
+            "btcusdt@depth@100ms",
+            "btcusdt@bookTicker",
+            "ethusdt@depth@100ms",
+            "ethusdt@bookTicker");
+    assertThat(marketSubs)
+        .containsExactlyInAnyOrder(
+            "btcusdt@aggTrade",
+            "btcusdt@markPrice@1s",
+            "ethusdt@aggTrade",
+            "ethusdt@markPrice@1s",
+            "!forceOrder@arr");
+  }
+
+  @Test
+  void routeStreamHandlesBroadcastLiquidationsForSubscribedSymbol() {
+    String inner =
+        "{\"e\":\"forceOrder\",\"E\":1,\"o\":{\"s\":\"BTCUSDT\",\"S\":\"SELL\",\"q\":\"0.5\"}}";
+    String frame = "{\"stream\":\"!forceOrder@arr\",\"data\":" + inner + "}";
+    FrameRoute route = adapter.routeStream(frame);
+    assertThat(route).isNotNull();
+    assertThat(route.streamType()).isEqualTo("liquidations");
+    assertThat(route.symbol()).isEqualTo("btcusdt");
+    assertThat(route.rawText()).isEqualTo(inner);
+  }
+
+  @Test
+  void routeStreamDropsBroadcastLiquidationsForForeignSymbol() {
+    String inner =
+        "{\"e\":\"forceOrder\",\"E\":1,\"o\":{\"s\":\"SUIUSDT\",\"S\":\"BUY\",\"q\":\"100\"}}";
+    String frame = "{\"stream\":\"!forceOrder@arr\",\"data\":" + inner + "}";
+    assertThat(adapter.routeStream(frame)).isNull();
   }
 
   @Test

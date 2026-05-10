@@ -39,7 +39,10 @@ class DepthStreamHandlerTest {
     gapEmitter = new GapEmitter("binance", session, producer, metrics, clock);
     adapter =
         new BinanceAdapter(
-            "wss://fstream.binance.com", "https://fapi.binance.com", EnvelopeCodec.newMapper());
+            "wss://fstream.binance.com",
+            "https://fapi.binance.com",
+            EnvelopeCodec.newMapper(),
+            java.util.List.of("btcusdt"));
     puBreakTriggers = new ArrayList<>();
     handler =
         new DepthStreamHandler(

@@ -122,10 +122,11 @@ public final class StreamHeartbeatEmitter {
         Long lastDataNs = capture.lastReceivedAt.get(key);
         long lastSeq = seqAllocator.current(symbol, stream);
 
-        // Determine status
+        // Determine status — each stream lives on either the /public or /market socket; consult
+        // the right one (Binance routed-endpoint split, May 2026).
         HeartbeatStatus status;
-        Boolean connected = wsConnected.get("ws");
-        boolean wsUp = Boolean.TRUE.equals(connected);
+        String socket = com.cryptolake.collector.adapter.StreamKey.socketFor(stream);
+        boolean wsUp = socket != null && Boolean.TRUE.equals(wsConnected.get(socket));
 
         if (!wsUp) {
           status = HeartbeatStatus.DISCONNECTED;

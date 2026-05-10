@@ -129,7 +129,8 @@ public final class Main {
 
     // ── Adapters + capture chain ──────────────────────────────────────────
     var adapter =
-        new BinanceAdapter(binance.wsBase(), binance.restBase(), EnvelopeCodec.newMapper());
+        new BinanceAdapter(
+            binance.wsBase(), binance.restBase(), EnvelopeCodec.newMapper(), symbols);
 
     var seqAllocator = new SessionSeqAllocator();
     var disconnectGapCoalescer = new DisconnectGapCoalescer();
@@ -323,7 +324,15 @@ public final class Main {
     var healthServer =
         new HealthServer(
             healthPort,
-            () -> java.util.Map.of("ws_connected", supervisor.isConnected()),
+            () ->
+                java.util.Map.of(
+                    "ws_connected", supervisor.isConnected(),
+                    "ws_public_connected",
+                        supervisor.isConnected(
+                            com.cryptolake.collector.adapter.StreamKey.SOCKET_PUBLIC),
+                    "ws_market_connected",
+                        supervisor.isConnected(
+                            com.cryptolake.collector.adapter.StreamKey.SOCKET_MARKET)),
             () -> registry.scrape().getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
     // ── SIGTERM hook ──────────────────────────────────────────────────────

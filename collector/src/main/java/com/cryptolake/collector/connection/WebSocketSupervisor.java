@@ -26,19 +26,29 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Top-level WebSocket connection coordinator for the collector.
  *
- * <p>Owns one WebSocket ({@code "ws"} socket, all 5 subscribable streams). Manages the connect →
- * SUBSCRIBE+ack → FirstFrameWatchdog → receive loop with exponential reconnect backoff.
+ * <p>Owns up to two parallel WebSocket connections — one per Binance routed endpoint:
  *
- * <p>On the first data frame after a successful connect+ack, triggers {@link
- * DepthSnapshotResync#start(String)} for each depth-enabled symbol.
+ * <ul>
+ *   <li>{@link StreamKey#SOCKET_PUBLIC} → {@code wss://.../public/stream} (depth, bookTicker)
+ *   <li>{@link StreamKey#SOCKET_MARKET} → {@code wss://.../market/stream} (aggTrade, markPrice,
+ *       forceOrder broadcast)
+ * </ul>
  *
- * <p>Thread safety: {@link ConcurrentHashMap} for cross-thread state; {@code volatile} flags.
+ * <p>Each socket runs its own independent connect → SUBSCRIBE+ack → watchdog → receive loop with
+ * its own exponential reconnect backoff. The two loops share the rest of the collector wiring
+ * ({@link RawFrameCapture}, {@link BinanceAdapter}, {@link DepthSnapshotResync}). Either socket can
+ * go down and reconnect without affecting the other.
+ *
+ * <p>On the first data frame on the public socket, triggers {@link
+ * DepthSnapshotResync#start(String)} for each depth-enabled symbol (depth lives on /public).
+ *
+ * <p>Thread safety: per-socket state lives in concurrent maps and per-loop locals; {@code volatile}
+ * flags for shared booleans.
  */
 public final class WebSocketSupervisor {
 
   private static final StructuredLogger log = StructuredLogger.of(WebSocketSupervisor.class);
 
-  private static final String SOCKET_NAME = "ws";
   private static final Duration WATCHDOG_DEADLINE = Duration.ofSeconds(30);
 
   // Ping interval injected here so unit tests can use a sub-second interval without sleeping 30s.
@@ -56,15 +66,20 @@ public final class WebSocketSupervisor {
   private final CountDownLatch globalStop;
   private final ExecutorService virtualExec;
   private final String exchange;
-  private final ReconnectPolicy reconnectPolicy = new ReconnectPolicy();
+
+  /** Per-socket reconnect backoff state. */
+  private final ConcurrentHashMap<String, ReconnectPolicy> reconnectPolicies =
+      new ConcurrentHashMap<>();
 
   /**
-   * Cross-thread readable map: {@code "ws"} → connected. Shared with {@code
+   * Cross-thread readable map: {@code socketName} → connected. Shared with {@code
    * StreamHeartbeatEmitter}.
    */
   public final ConcurrentHashMap<String, Boolean> wsConnected = new ConcurrentHashMap<>();
 
-  private volatile WebSocket activeWs;
+  /** Per-socket active WebSocket reference; populated/cleared by the socket's loop. */
+  private final ConcurrentHashMap<String, WebSocket> activeWebSockets = new ConcurrentHashMap<>();
+
   private volatile boolean stopped = false;
 
   public WebSocketSupervisor(
@@ -124,30 +139,50 @@ public final class WebSocketSupervisor {
     this.pingIntervalSeconds = pingIntervalSeconds;
   }
 
-  /** Starts the connection supervisor loop on a virtual thread. */
+  /** Starts the supervisor — one virtual-thread loop per routed socket. */
   public void start() {
-    Thread.ofVirtual().name("ws-supervisor").start(this::supervisorLoop);
+    Map<String, String> urls =
+        adapter == null ? Map.of() : adapter.getWsUrls(symbols, enabledStreams);
+    if (urls.isEmpty()) {
+      log.info("ws_no_subscriptions");
+      return;
+    }
+    for (String socketName : urls.keySet()) {
+      Thread.ofVirtual()
+          .name("ws-supervisor-" + socketName)
+          .start(() -> supervisorLoop(socketName));
+    }
   }
 
-  /** Stops the supervisor and closes the active WebSocket. */
+  /** Stops the supervisor and closes all active WebSockets. */
   public void stop() {
     stopped = true;
-    WebSocket ws = activeWs;
-    if (ws != null) {
+    for (Map.Entry<String, WebSocket> e : activeWebSockets.entrySet()) {
+      WebSocket ws = e.getValue();
+      if (ws == null) continue;
       try {
         ws.sendClose(WebSocket.NORMAL_CLOSURE, "shutdown").join();
       } catch (Exception ignored) {
-        // best-effort (Tier 5 G1)
+        // best-effort
       }
     }
   }
 
+  /** True if at least one socket is currently connected. */
   public boolean isConnected() {
-    return Boolean.TRUE.equals(wsConnected.get(SOCKET_NAME));
+    for (Boolean v : wsConnected.values()) {
+      if (Boolean.TRUE.equals(v)) return true;
+    }
+    return false;
+  }
+
+  /** True if a specific socket is currently connected. */
+  public boolean isConnected(String socketName) {
+    return Boolean.TRUE.equals(wsConnected.get(socketName));
   }
 
   public boolean hasWsStreams() {
-    return enabledStreams.stream().anyMatch(s -> StreamKey.WS_STREAMS.contains(s));
+    return enabledStreams.stream().anyMatch(StreamKey.WS_STREAMS::contains);
   }
 
   /**
@@ -165,20 +200,22 @@ public final class WebSocketSupervisor {
         });
   }
 
-  private void supervisorLoop() {
-    log.info("ws_supervisor_started");
+  private void supervisorLoop(String socketName) {
+    log.info("ws_supervisor_started", "socket", socketName);
+    ReconnectPolicy policy =
+        reconnectPolicies.computeIfAbsent(socketName, k -> new ReconnectPolicy());
     while (!stopped) {
       try {
-        connectionLoop();
+        connectionLoop(socketName);
       } catch (Exception e) {
         if (stopped) break;
-        log.warn("ws_connection_failed", "error", e.getMessage());
+        log.warn("ws_connection_failed", "socket", socketName, "error", e.getMessage());
       }
 
       if (stopped) break;
 
-      long backoffMs = reconnectPolicy.nextBackoffMillis();
-      log.info("ws_reconnect_backoff", "backoff_ms", backoffMs);
+      long backoffMs = policy.nextBackoffMillis();
+      log.info("ws_reconnect_backoff", "socket", socketName, "backoff_ms", backoffMs);
       try {
         if (globalStop.await(backoffMs, TimeUnit.MILLISECONDS)) break;
       } catch (InterruptedException e) {
@@ -186,19 +223,22 @@ public final class WebSocketSupervisor {
         break;
       }
     }
-    log.info("ws_supervisor_stopped");
+    log.info("ws_supervisor_stopped", "socket", socketName);
   }
 
-  private void connectionLoop() throws Exception {
-    // Reset stateful handlers (e.g. depth detector) at the START of every connection iteration.
-    // This is the abort()-path safety net: ws.abort() in pingLoop bypasses Listener.onClose, so
-    // capture.onDisconnect would not fire on socket-death cleanup — leaving the depth detector
-    // with stale lastU from the previous connection and producing a false pu_chain_break gap on
-    // the very first diff after reconnect.
-    capture.resetStatefulHandlers(symbols);
+  private void connectionLoop(String socketName) throws Exception {
+    // Reset stateful handlers (e.g. depth detector) at the START of every public-socket connection
+    // iteration. Public is the socket that carries depth; the market socket carries no stateful
+    // streams, so resetting on its reconnect would only burn cycles. The reset is the abort()-path
+    // safety net (ws.abort() in pingLoop bypasses Listener.onClose, leaving the depth detector
+    // with stale lastU from the previous connection).
+    if (StreamKey.SOCKET_PUBLIC.equals(socketName)) {
+      capture.resetStatefulHandlers(symbols);
+    }
     Map<String, String> urls = adapter.getWsUrls(symbols, enabledStreams);
-    if (urls.isEmpty()) {
-      log.info("ws_no_subscriptions");
+    String url = urls.get(socketName);
+    if (url == null) {
+      // This socket has no subscriptions — block on shutdown.
       try {
         globalStop.await();
       } catch (InterruptedException e) {
@@ -206,8 +246,6 @@ public final class WebSocketSupervisor {
       }
       return;
     }
-    String url = urls.get(SOCKET_NAME);
-    if (url == null) return;
 
     SubscriptionHandshake.QueueAckListener ackListener =
         new SubscriptionHandshake.QueueAckListener(mapper);
@@ -215,67 +253,70 @@ public final class WebSocketSupervisor {
     CountDownLatch disconnectLatch = new CountDownLatch(1);
     AtomicBoolean firstFrameReceived = new AtomicBoolean(false);
     AtomicLong subscribeAckAtNsRef = new AtomicLong(0L);
+    final boolean isPublicSocket = StreamKey.SOCKET_PUBLIC.equals(socketName);
+    final boolean depthEnabled = enabledStreams.contains("depth");
 
     WebSocketListenerImpl listener =
         new WebSocketListenerImpl(
-            SOCKET_NAME,
-            (socketName, rawFrame) -> {
-              if (firstFrameReceived.compareAndSet(false, true)) {
+            socketName,
+            (sn, rawFrame) -> {
+              // Depth resync trigger lives on the public socket (depth is /public-only).
+              if (isPublicSocket && depthEnabled && firstFrameReceived.compareAndSet(false, true)) {
                 for (String symbol : symbols) {
-                  if (enabledStreams.contains("depth")) {
-                    triggerDepthResync(symbol);
-                  }
+                  triggerDepthResync(symbol);
                 }
               }
-              capture.onFrame(socketName, rawFrame);
+              capture.onFrame(sn, rawFrame);
             },
-            socketName -> {
-              wsConnected.put(SOCKET_NAME, false);
-              metrics.setWsConnectionsActive(exchange, 0);
+            sn -> {
+              wsConnected.put(socketName, false);
+              setActiveCount();
               metrics.wsReconnects(exchange).increment();
-              capture.onDisconnect(socketName, symbols, subscribeAckAtNsRef.get());
+              capture.onDisconnect(sn, symbols, subscribeAckAtNsRef.get());
               disconnectLatch.countDown();
             },
             ackListener);
 
-    log.info("ws_connecting", "url", url);
+    log.info("ws_connecting", "socket", socketName, "url", url);
     WebSocket ws =
         httpClient
             .newWebSocketBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .buildAsync(URI.create(url), listener)
             .get(30, TimeUnit.SECONDS);
-    activeWs = ws;
+    activeWebSockets.put(socketName, ws);
 
-    List<String> subscriptions = adapter.getSubscriptions(symbols, enabledStreams);
+    List<String> subscriptions =
+        adapter.getSubscriptionsForSocket(socketName, symbols, enabledStreams);
     try {
       new SubscriptionHandshake(mapper).subscribe(ws, subscriptions, ackListener);
       subscribeAckAtNsRef.set(capture.getClock().nowNs());
     } catch (SubscriptionHandshake.ConnectionException e) {
-      log.warn("subscribe_ack_failed", "error", e.getMessage());
+      log.warn("subscribe_ack_failed", "socket", socketName, "error", e.getMessage());
       ws.sendClose(WebSocket.NORMAL_CLOSURE, "subscribe_failed").join();
       return;
     }
 
-    boolean wasDisconnected = !wsConnected.getOrDefault(SOCKET_NAME, false);
-    wsConnected.put(SOCKET_NAME, true);
-    metrics.setWsConnectionsActive(exchange, 1);
-    reconnectPolicy.reset();
-    log.info("ws_connected", "socket", SOCKET_NAME, "url", url);
+    boolean wasDisconnected = !wsConnected.getOrDefault(socketName, false);
+    wsConnected.put(socketName, true);
+    setActiveCount();
+    reconnectPolicies.get(socketName).reset();
+    log.info("ws_connected", "socket", socketName, "url", url);
     if (wasDisconnected) {
       log.info(
           "LIFECYCLE COLLECTOR_UPSTREAM_WS_CONNECTED: WebSocket to the exchange is open"
               + " — this collector is receiving market data again. socket={} url={}",
-          SOCKET_NAME,
+          socketName,
           url);
     }
 
-    // Start FirstFrameWatchdog (one-shot: ensures every subscription gets >=1 frame post-connect)
-    Set<String> expectedTuples = buildExpectedTuples();
+    // Start FirstFrameWatchdog (one-shot: ensures every subscription on this socket gets >=1 frame
+    // post-connect)
+    Set<String> expectedTuples = buildExpectedTuples(socketName);
     CountDownLatch watchdogStop = new CountDownLatch(1);
     FirstFrameWatchdog watchdog = new FirstFrameWatchdog(capture, watchdogStop);
     Thread.ofVirtual()
-        .name("ws-watchdog")
+        .name("ws-watchdog-" + socketName)
         .start(() -> watchdog.watch(ws, expectedTuples, WATCHDOG_DEADLINE));
 
     // Start OngoingLivenessWatchdog — runs for the life of the connection, forces reconnect if
@@ -284,11 +325,11 @@ public final class WebSocketSupervisor {
     CountDownLatch ongoingStop = new CountDownLatch(1);
     OngoingLivenessWatchdog ongoingWatchdog = new OngoingLivenessWatchdog(capture, ongoingStop);
     Thread.ofVirtual()
-        .name("ws-ongoing-watchdog")
+        .name("ws-ongoing-watchdog-" + socketName)
         .start(() -> ongoingWatchdog.watch(ws, expectedTuples));
 
     // Start ping loop
-    Thread.ofVirtual().name("ws-ping").start(() -> pingLoop(ws, disconnectLatch));
+    Thread.ofVirtual().name("ws-ping-" + socketName).start(() -> pingLoop(ws, disconnectLatch));
 
     // Wait for disconnect
     try {
@@ -298,20 +339,30 @@ public final class WebSocketSupervisor {
     } finally {
       watchdogStop.countDown();
       ongoingStop.countDown();
+      activeWebSockets.remove(socketName);
     }
   }
 
-  private Set<String> buildExpectedTuples() {
+  private Set<String> buildExpectedTuples(String socketName) {
+    Set<String> socketStreams =
+        StreamKey.SOCKET_PUBLIC.equals(socketName)
+            ? StreamKey.PUBLIC_WS_STREAMS
+            : StreamKey.MARKET_WS_STREAMS;
     Set<String> expected = new HashSet<>();
     for (String symbol : symbols) {
       for (String stream : enabledStreams) {
-        if (!StreamKey.REST_ONLY_STREAMS.contains(stream)
-            && StreamKey.WS_STREAMS.contains(stream)) {
-          expected.add(RawFrameCapture.tupleKey(symbol, stream));
-        }
+        if (StreamKey.REST_ONLY_STREAMS.contains(stream)) continue;
+        if (!socketStreams.contains(stream)) continue;
+        expected.add(RawFrameCapture.tupleKey(symbol, stream));
       }
     }
     return expected;
+  }
+
+  private void setActiveCount() {
+    int active = 0;
+    for (Boolean v : wsConnected.values()) if (Boolean.TRUE.equals(v)) active++;
+    metrics.setWsConnectionsActive(exchange, active);
   }
 
   // package-private for testing
@@ -327,7 +378,7 @@ public final class WebSocketSupervisor {
         log.warn("ws_ping_failed", "error", e.getMessage());
         // Abort the dead WebSocket so the listener's onError/onClose fires and the
         // main loop exits its disconnectLatch.await(); then release the latch ourselves
-        // in case the listener never fires (half-open connection — Tier 5 D1).
+        // in case the listener never fires (half-open connection).
         ws.abort();
         disconnectLatch.countDown();
         break;
