@@ -16,6 +16,12 @@ public record IntegrityCheckResult(int recordCount, List<Break> breaks) {
    * Represents a single continuity break in the stream.
    *
    * <p>Fields match Python's {@code integrity.py} break representation.
+   *
+   * <p>{@code atReceived} is the nanosecond {@code received_at} of the BREAKING record (the one
+   * with the unexpected ID), not the time the gap began. The true gap window is {@code
+   * [previous_record.received_at, atReceived)}, which the walker does not surface; callers
+   * converting this break to a {@link com.cryptolake.verify.audit.GapRecord} should treat {@code
+   * startMs == endMs}.
    */
   public record Break(String field, long expected, long actual, long missing, long atReceived) {}
 }

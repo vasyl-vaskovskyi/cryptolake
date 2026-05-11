@@ -103,10 +103,16 @@ public final class SequenceIdGapSource implements GapSource {
 
         for (IntegrityCheckResult.Break brk : checkResult.breaks()) {
           long atMs = brk.atReceived() / 1_000_000L;
+          // Depth pu-chain and bookticker u-backwards breaks are reference-mismatches, not
+          // additive skips — their walkers report missing=0. Don't print "(missing 0)".
           String detail =
-              String.format(
-                  "%s: expected %d, got %d (missing %d)",
-                  brk.field(), brk.expected(), brk.actual(), brk.missing());
+              brk.missing() > 0
+                  ? String.format(
+                      "%s: expected %d, got %d (missing %d)",
+                      brk.field(), brk.expected(), brk.actual(), brk.missing())
+                  : String.format(
+                      "%s: expected %d, got %d (chain break)",
+                      brk.field(), brk.expected(), brk.actual());
           result.add(
               new GapRecord(
                   SOURCE_LABEL,
