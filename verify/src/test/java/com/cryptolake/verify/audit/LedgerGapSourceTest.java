@@ -311,4 +311,50 @@ class LedgerGapSourceTest {
   void nameReturnsExpectedLabel() {
     assertThat(new LedgerGapSource(tmpDir, mapper).name()).isEqualTo("LedgerGapSource");
   }
+
+  // -------------------------------------------------------------------------
+  // Fan-out: one journal event + scoped symbols/streams → one record per tuple
+  // -------------------------------------------------------------------------
+
+  /**
+   * Fan-out: one lifecycle entry + scope with symbol=btcusdt and streams=[depth, trades] → 2
+   * GapRecords, one per (symbol, stream) tuple, each with populated exchange/symbol/stream and
+   * detail containing "fanout=true".
+   */
+  @Test
+  void fanOutWithMultipleStreams_emitsOneRecordPerTuple() throws IOException {
+    String startLine =
+        "{\"ts_ns\":"
+            + START_NS
+            + ",\"event\":\"start\",\"host_boot_id\":\"boot-fo\","
+            + "\"collector_session_id\":\"sess-fo\"}";
+    String stopLine =
+        "{\"ts_ns\":"
+            + END_NS
+            + ",\"event\":\"clean_shutdown\",\"host_boot_id\":\"boot-fo\","
+            + "\"collector_session_id\":\"sess-fo\",\"planned\":true,\"maintenance_id\":\"maint-fo\"}";
+
+    writeJournal("binance-collector-primary", startLine, stopLine);
+
+    AuditScope fanOutScope =
+        new AuditScope(
+            START_MS - 1,
+            END_MS + 1,
+            List.of("binance"),
+            List.of("btcusdt"),
+            List.of("depth", "trades"),
+            tmpDir.toString());
+
+    LedgerGapSource source = new LedgerGapSource(tmpDir, mapper);
+    List<GapRecord> records = source.read(fanOutScope);
+
+    assertThat(records).hasSize(2);
+    assertThat(records).allMatch(r -> r.exchange().equals("binance"));
+    assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
+    assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
+    assertThat(records).allMatch(r -> r.reason().equals("collector_restart"));
+    assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
+    assertThat(records).allMatch(r -> r.startMs() == START_MS);
+    assertThat(records).allMatch(r -> r.endMs() == END_MS);
+  }
 }

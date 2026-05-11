@@ -224,4 +224,39 @@ class PgComponentRuntimeGapSourceIT {
     assertThat(new PgComponentRuntimeGapSource(config()).name())
         .isEqualTo("PgComponentRuntimeGapSource");
   }
+
+  /**
+   * Fan-out: one PG row + scope with symbol=btcusdt and streams=[depth, trades] → 2 GapRecords, one
+   * per (symbol, stream) tuple, each with populated exchange/symbol/stream and detail containing
+   * "fanout=true".
+   */
+  @Test
+  void fanOutWithMultipleStreams_emitsOneRecordPerTuple() throws Exception {
+    Instant startedAt = Instant.parse("2026-05-10T09:00:00Z");
+    Instant heartbeat = Instant.parse("2026-05-10T10:30:00Z");
+    Instant shutdown = Instant.parse("2026-05-10T11:00:00Z");
+
+    insert("collector", "inst-fo", "boot-fo", startedAt, heartbeat, shutdown, true, "maint-fo");
+
+    AuditScope fanOutScope =
+        new AuditScope(
+            SCOPE_START_MS,
+            SCOPE_END_MS,
+            List.of("binance"),
+            List.of("btcusdt"),
+            List.of("depth", "trades"),
+            "/data");
+
+    PgComponentRuntimeGapSource source = new PgComponentRuntimeGapSource(config());
+    List<GapRecord> records = source.read(fanOutScope);
+
+    assertThat(records).hasSize(2);
+    assertThat(records).allMatch(r -> r.exchange().equals("binance"));
+    assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
+    assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
+    assertThat(records).allMatch(r -> r.reason().equals("collector_restart"));
+    assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
+    assertThat(records).allMatch(r -> r.startMs() == heartbeat.toEpochMilli());
+    assertThat(records).allMatch(r -> r.endMs() == shutdown.toEpochMilli());
+  }
 }

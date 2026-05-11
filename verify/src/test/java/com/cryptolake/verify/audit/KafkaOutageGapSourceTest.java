@@ -223,4 +223,39 @@ class KafkaOutageGapSourceTest {
     assertThat(new KafkaOutageGapSource(tmpDir, mapper, () -> NOW).name())
         .isEqualTo("KafkaOutageGapSource");
   }
+
+  // -------------------------------------------------------------------------
+  // Fan-out: one outage file + scoped symbols/streams → one record per tuple
+  // -------------------------------------------------------------------------
+
+  /**
+   * Fan-out: one kafka_outage.json + scope with symbol=btcusdt and streams=[depth, trades] → 2
+   * GapRecords, one per (symbol, stream) tuple, each with populated exchange/symbol/stream and
+   * detail containing "fanout=true".
+   */
+  @Test
+  void fanOutWithMultipleStreams_emitsOneRecordPerTuple() throws IOException {
+    writeOutageFile("binance-collector-primary", OUTAGE_START_NS);
+
+    AuditScope fanOutScope =
+        new AuditScope(
+            OUTAGE_START_MS - 1,
+            NOW.toEpochMilli() + 1,
+            List.of("binance"),
+            List.of("btcusdt"),
+            List.of("depth", "trades"),
+            tmpDir.toString());
+
+    KafkaOutageGapSource source = new KafkaOutageGapSource(tmpDir, mapper, () -> NOW);
+    List<GapRecord> records = source.read(fanOutScope);
+
+    assertThat(records).hasSize(2);
+    assertThat(records).allMatch(r -> r.exchange().equals("binance"));
+    assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
+    assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
+    assertThat(records).allMatch(r -> r.reason().equals("kafka_producer_outage"));
+    assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
+    assertThat(records).allMatch(r -> r.startMs() == OUTAGE_START_MS);
+    assertThat(records).allMatch(r -> r.endMs() == NOW.toEpochMilli());
+  }
 }

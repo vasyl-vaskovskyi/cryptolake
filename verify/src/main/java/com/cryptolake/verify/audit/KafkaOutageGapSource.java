@@ -114,9 +114,7 @@ public final class KafkaOutageGapSource implements GapSource {
 
         String detail = "collector_id=" + collectorId + "; outage_started_at_ns=" + outageNs;
 
-        result.add(
-            new GapRecord(
-                SOURCE_LABEL, "", "", "", outageMs, endMs, "kafka_producer_outage", detail));
+        result.addAll(fanOut(scope, "kafka_producer_outage", outageMs, endMs, detail));
 
       } catch (Exception e) {
         log.warn(
@@ -129,5 +127,43 @@ public final class KafkaOutageGapSource implements GapSource {
     }
 
     return result;
+  }
+
+  // ── private helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Fans out a single system-wide Kafka outage event into one {@link GapRecord} per {@code (symbol,
+   * stream)} tuple in the scope. When the scope has no symbols or streams, falls back to a single
+   * record with empty fields (preserving backward-compatible system-wide behaviour).
+   *
+   * <p>When fan-out actually expands to a non-empty symbol/stream, the detail string is annotated
+   * with {@code ; fanout=true} so consumers can tell the record was derived from a system-wide
+   * event.
+   */
+  private List<GapRecord> fanOut(
+      AuditScope scope, String reason, long startMs, long endMs, String baseDetail) {
+    List<String> symbols =
+        (scope.symbols() == null || scope.symbols().isEmpty()) ? List.of("") : scope.symbols();
+    List<String> streams =
+        (scope.streams() == null || scope.streams().isEmpty()) ? List.of("") : scope.streams();
+    String exchange =
+        (scope.exchanges() != null && scope.exchanges().size() == 1)
+            ? scope.exchanges().get(0)
+            : "";
+
+    boolean isFanout =
+        symbols.size() > 1
+            || streams.size() > 1
+            || (symbols.size() == 1 && !symbols.get(0).isEmpty())
+            || (streams.size() == 1 && !streams.get(0).isEmpty());
+    String detail = isFanout ? baseDetail + "; fanout=true" : baseDetail;
+
+    List<GapRecord> out = new ArrayList<>();
+    for (String sym : symbols) {
+      for (String str : streams) {
+        out.add(new GapRecord(SOURCE_LABEL, exchange, sym, str, startMs, endMs, reason, detail));
+      }
+    }
+    return out;
   }
 }

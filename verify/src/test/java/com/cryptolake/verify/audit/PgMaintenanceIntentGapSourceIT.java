@@ -190,4 +190,39 @@ class PgMaintenanceIntentGapSourceIT {
     assertThat(new PgMaintenanceIntentGapSource(config()).name())
         .isEqualTo("PgMaintenanceIntentGapSource");
   }
+
+  /**
+   * Fan-out: one maintenance_intent row + scope with symbol=btcusdt and streams=[depth, trades] → 2
+   * GapRecords, one per (symbol, stream) tuple, each with populated exchange/symbol/stream and
+   * detail containing "fanout=true".
+   */
+  @Test
+  void fanOutWithMultipleStreams_emitsOneRecordPerTuple() throws Exception {
+    Instant createdAt = Instant.parse("2026-05-10T10:00:00Z");
+    Instant expiresAt = Instant.parse("2026-05-10T11:30:00Z");
+    Instant consumedAt = Instant.parse("2026-05-10T10:45:00Z");
+
+    insert("maint-fo", "all", "operator", "rolling update", createdAt, expiresAt, consumedAt);
+
+    AuditScope fanOutScope =
+        new AuditScope(
+            SCOPE_START_MS,
+            SCOPE_END_MS,
+            List.of("binance"),
+            List.of("btcusdt"),
+            List.of("depth", "trades"),
+            "/data");
+
+    PgMaintenanceIntentGapSource source = new PgMaintenanceIntentGapSource(config());
+    List<GapRecord> records = source.read(fanOutScope);
+
+    assertThat(records).hasSize(2);
+    assertThat(records).allMatch(r -> r.exchange().equals("binance"));
+    assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
+    assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
+    assertThat(records).allMatch(r -> r.reason().equals("collector_restart"));
+    assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
+    assertThat(records).allMatch(r -> r.startMs() == createdAt.toEpochMilli());
+    assertThat(records).allMatch(r -> r.endMs() == consumedAt.toEpochMilli());
+  }
 }
