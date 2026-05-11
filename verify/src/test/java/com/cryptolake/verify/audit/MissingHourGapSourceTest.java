@@ -34,12 +34,6 @@ class MissingHourGapSourceTest {
     }
   }
 
-  /** Creates an empty file (not a valid zstd, but enough for presence-detection). */
-  private void createFile(Path path) throws IOException {
-    Files.createDirectories(path.getParent());
-    Files.createFile(path);
-  }
-
   // ---- helper to build a path for an hourly file ----
   private Path hourFile(String exchange, String symbol, String stream, String date, int hour) {
     return tmpDir
