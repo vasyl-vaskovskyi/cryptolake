@@ -28,11 +28,12 @@ import picocli.CommandLine;
  * <p>Four scenarios:
  *
  * <ol>
- *   <li>Clean diff with a real match (manifest + missing-hour for btcusdt/bookticker hour-9) +
- *       {@code --dry-run} → exit 0, "1 matched" in stdout.
- *   <li>Only-in-files divergence → alert POSTed to stub, exit 2.
- *   <li>Only-in-state divergence → alert POSTed to stub, exit 2.
- *   <li>Safety-valve path: clean diff but no {@code --symbol}//{@code --stream} provided → exit 0
+ *   <li>Clean reconcile with a real match (manifest + missing-hour for btcusdt/bookticker hour-9) +
+ *       {@code --dry-run} → exit 0, "1 explained" in stdout.
+ *   <li>Unexplained file gap divergence → alert POSTed to stub, exit 2.
+ *   <li>Unexplained file gap WITH an orphan-state record → alert POSTed, exit 2; orphan-state is
+ *       informational and present in the report but does NOT itself trigger the gate.
+ *   <li>Safety-valve path: clean result but no {@code --symbol}/{@code --stream} provided → exit 0
  *       with warning on stderr, no backfill invoked.
  * </ol>
  *
@@ -46,6 +47,14 @@ class AuditBackfillCommandTest {
   // 2026-05-11T00:00:00Z in millis
   private static final long DAY_START_MS = 1_778_457_600_000L;
   private static final long HOUR_MS = 3_600_000L;
+
+  // 2026-05-11T05:00:00Z  (hour-5 start — used for orphan-state ledger in test 3)
+  private static final long HOUR_5_START_MS = DAY_START_MS + 5 * HOUR_MS;
+  private static final long HOUR_5_START_NS = HOUR_5_START_MS * 1_000_000L;
+
+  // 2026-05-11T06:00:00Z  (hour-6 start — end of the orphan-state ledger window)
+  private static final long HOUR_6_START_MS = DAY_START_MS + 6 * HOUR_MS;
+  private static final long HOUR_6_START_NS = HOUR_6_START_MS * 1_000_000L;
 
   // 2026-05-11T09:00:00Z  (hour-9 start)
   private static final long HOUR_9_START_MS = DAY_START_MS + 9 * HOUR_MS;
@@ -141,8 +150,8 @@ class AuditBackfillCommandTest {
   }
 
   /**
-   * Creates a gap envelope with a {@code collector_restart} reason (a PERSISTENT_CLASS reason) so
-   * it participates in the diff.
+   * Creates a gap envelope with a {@code collector_restart} reason (a persistent reason) so it
+   * participates in reconciliation.
    */
   private GapEnvelope collectorRestartGapEnvelope(
       String exchange, String symbol, String stream, long startNs, long endNs) {
@@ -181,13 +190,13 @@ class AuditBackfillCommandTest {
   }
 
   // -------------------------------------------------------------------------
-  // Test 1: Clean diff — real persistent-class match via manifest + missing-hour
+  // Test 1: Clean reconcile — real match via manifest + missing-hour
   // -------------------------------------------------------------------------
 
   /**
    * Both the FILE side and the STATE side produce the same {@code missing_hour} gap record for
-   * btcusdt/bookticker hour-9 of 2026-05-11, so the diff yields exactly 1 matched record, 0
-   * only-in-files, and 0 only-in-state.
+   * btcusdt/bookticker hour-9 of 2026-05-11, so reconciliation yields exactly 1 explained record, 0
+   * unexplained, and 0 orphan-state.
    *
    * <p>Setup:
    *
@@ -198,14 +207,14 @@ class AuditBackfillCommandTest {
    *       missing_hours:[9]}.
    * </ul>
    *
-   * <p>Both records share the same {@link GapRecord.DiffKey}: (binance, btcusdt, bookticker,
-   * HOUR_9_START_MS, HOUR_9_START_MS+3_599_999, missing_hour).
+   * <p>Both records share the same (exchange, symbol, stream, time window, reason) and reconcile
+   * cleanly.
    *
    * <p>Scope is narrowed to exactly hour-9 via {@code --hour=2026-05-11T09} so that other absent
-   * hours don't leak into the diff.
+   * hours don't leak into the reconciliation.
    */
   @Test
-  void cleanDiff_trulyMatchedMissingHour_dryRun_returnsZero_andPrintsMatchCount()
+  void cleanReconcile_trulyMatchedMissingHour_dryRun_returnsZero_andPrintsExplainedCount()
       throws IOException {
     // hour-0.jsonl.zst establishes "presence" for the (binance, btcusdt, bookticker) tuple so
     // that MissingHourGapSource actually scans for absent hours within the scope.
@@ -239,25 +248,25 @@ class AuditBackfillCommandTest {
     assertThat(exitCode).isEqualTo(0);
 
     String stdout = capturedOut.toString(StandardCharsets.UTF_8);
-    assertThat(stdout).contains("1 matched records");
+    assertThat(stdout).contains("1 explained records");
 
-    // No alert should have been fired for a clean diff
+    // No alert should have been fired for a clean reconcile
     assertThat(alertPosted.get()).isFalse();
   }
 
   // -------------------------------------------------------------------------
-  // Test 2: Only-in-files divergence → alert POSTed + exit 2
+  // Test 2: Unexplained file gap divergence → alert POSTed + exit 2
   // -------------------------------------------------------------------------
 
   /**
    * The archive has a {@code collector_restart} gap envelope for btcusdt/bookticker, but the state
-   * side (ledger + others) has nothing matching. This produces an only-in-files divergence: the
-   * command must fire an alert and return exit code 2.
+   * side (ledger + others) has nothing matching. This produces an unexplained file gap: the command
+   * must fire an alert and return exit code 2.
    *
    * <p>The divergence report JSON must also be written to {@code archiveOutputDir}.
    */
   @Test
-  void onlyInFiles_divergence_firesAlert_andReturns2() throws IOException {
+  void unexplainedDivergence_firesAlert_andReturns2() throws IOException {
     // File side: one collector_restart gap envelope
     Path hour9File = baseDir.resolve("binance/btcusdt/bookticker/2026-05-11/hour-9.jsonl.zst");
     GapEnvelope env =
@@ -305,31 +314,52 @@ class AuditBackfillCommandTest {
             .count();
     assertThat(reportCount).isGreaterThanOrEqualTo(1);
 
+    // Report must have non-empty unexplained array and explained_count field
+    Path reportFile =
+        Files.list(archiveOutputDir)
+            .filter(p -> p.getFileName().toString().startsWith("divergence-"))
+            .findFirst()
+            .orElseThrow();
+    JsonNode report = MAPPER.readTree(reportFile.toFile());
+    assertThat(report.has("explained_count")).isTrue();
+    assertThat(report.path("unexplained").isArray()).isTrue();
+    assertThat(report.path("unexplained").size()).isGreaterThanOrEqualTo(1);
+
     // Stderr must contain a summary
     String stderr = capturedErr.toString(StandardCharsets.UTF_8);
     assertThat(stderr).containsIgnoringCase("divergence");
   }
 
   // -------------------------------------------------------------------------
-  // Test 3: Only-in-state divergence → alert POSTed + exit 2
+  // Test 3: Unexplained file gap WITH orphan-state → alert POSTed + exit 2
   // -------------------------------------------------------------------------
 
   /**
-   * The state side (lifecycle ledger) emits a {@code collector_restart} gap that has no matching
-   * file envelope. The command must fire an alert and return exit code 2.
+   * The file side has a {@code collector_restart} gap envelope for btcusdt/bookticker at hour-9
+   * (unexplained). The state side (lifecycle ledger) has a {@code collector_restart} event at
+   * hour-5 → hour-6 — a completely different time window that does NOT overlap the file record, so
+   * the reconciler cannot use it to explain the file gap. The ledger record therefore becomes an
+   * orphan-state record.
    *
-   * <p>The ledger produces records with empty exchange/symbol/stream, so those participate in the
-   * diff against an empty file side. Specifically, the diff key for ledger records is ("", "", "",
-   * startMs, endMs, "collector_restart") and nothing on the file side matches that key.
+   * <p>The gate fires (exit 2) because there is one unexplained file gap. The orphan-state record
+   * is informational: it appears in the report's {@code orphan_state} array but is NOT itself the
+   * reason for the gate firing.
    */
   @Test
-  void onlyInState_divergence_firesAlert_andReturns2() throws IOException {
-    // State side: lifecycle ledger with a planned (collector_restart) shutdown
-    writeLedgerFixture("binance-collector-primary", HOUR_9_START_NS, HOUR_10_START_NS);
+  void unexplainedFileWithSomeOrphanState_firesAlert_andReturns2() throws IOException {
+    // File side: one collector_restart gap envelope for btcusdt/bookticker at hour-9
+    Path hour9File = baseDir.resolve("binance/btcusdt/bookticker/2026-05-11/hour-9.jsonl.zst");
+    GapEnvelope env =
+        collectorRestartGapEnvelope(
+            "binance", "btcusdt", "bookticker", HOUR_9_START_NS, HOUR_10_START_NS);
+    writeZstdJsonl(hour9File, env);
 
-    // File side: empty archive (no gap envelopes with persistent reasons)
+    // State side: ledger event at hour-5 → hour-6 — time window is disjoint from the file-side
+    // gap (hour-9 → hour-10) plus the 2s tolerance, so it cannot explain the file record and
+    // becomes an orphan-state entry in the report.
+    writeLedgerFixture("binance-collector-primary", HOUR_5_START_NS, HOUR_6_START_NS);
 
-    Path archiveOutputDir = tmpDir.resolve("audit-out-state");
+    Path archiveOutputDir = tmpDir.resolve("audit-out-orphan");
 
     int exitCode =
         new CommandLine(new AuditCli())
@@ -339,10 +369,13 @@ class AuditBackfillCommandTest {
                 "--base-dir=" + baseDir,
                 "--data-dir=" + dataDir,
                 "--db-url=",
-                "--alertmanager-url=" + alertmanagerUrl(),
+                "--symbol=btcusdt",
+                "--stream=bookticker",
                 "--archive-output-dir=" + archiveOutputDir,
+                "--alertmanager-url=" + alertmanagerUrl(),
                 "--now-override-iso=" + NOW_ISO);
 
+    // Gate fires because there is an unexplained file gap
     assertThat(exitCode).isEqualTo(2);
 
     // Alert must have been POSTed
@@ -355,22 +388,26 @@ class AuditBackfillCommandTest {
     assertThat(labels.get("alertname").asText()).isEqualTo("AuditDivergence");
     assertThat(labels.get("severity").asText()).isEqualTo("critical");
 
-    // Divergence report file must exist
-    long reportCount =
-        Files.list(archiveOutputDir)
-            .filter(p -> p.getFileName().toString().startsWith("divergence-"))
-            .count();
-    assertThat(reportCount).isGreaterThanOrEqualTo(1);
-
-    // Divergence report JSON must have non-empty only_in_state array
+    // Report must exist and contain both unexplained and orphan_state arrays
+    assertThat(Files.exists(archiveOutputDir)).isTrue();
     Path reportFile =
         Files.list(archiveOutputDir)
             .filter(p -> p.getFileName().toString().startsWith("divergence-"))
             .findFirst()
             .orElseThrow();
     JsonNode report = MAPPER.readTree(reportFile.toFile());
-    assertThat(report.path("only_in_state").isArray()).isTrue();
-    assertThat(report.path("only_in_state").size()).isGreaterThanOrEqualTo(1);
+
+    // unexplained: the file-side btcusdt/bookticker gap that has no state match
+    assertThat(report.path("unexplained").isArray()).isTrue();
+    assertThat(report.path("unexplained").size()).isGreaterThanOrEqualTo(1);
+
+    // orphan_state: the ledger record that was never used to explain a file gap
+    assertThat(report.path("orphan_state").isArray()).isTrue();
+    assertThat(report.path("orphan_state").size()).isGreaterThanOrEqualTo(1);
+
+    // Alert summary must mention both counts
+    String stderr = capturedErr.toString(StandardCharsets.UTF_8);
+    assertThat(stderr).containsIgnoringCase("divergence");
   }
 
   // -------------------------------------------------------------------------
@@ -378,18 +415,18 @@ class AuditBackfillCommandTest {
   // -------------------------------------------------------------------------
 
   /**
-   * When the diff is clean but neither {@code --symbol} nor {@code --stream} is provided, the
+   * When the reconcile is clean but neither {@code --symbol} nor {@code --stream} is provided, the
    * command must print a warning on stderr and return exit code 0 instead of attempting to invoke
    * the backfill orchestrator (which would fail without those filters). No {@link BackfillCommand}
    * invocation occurs — verified by the absence of any backfill output.
    *
-   * <p>The archive is empty so the diff is trivially clean (0 matched, 0 only-in-files, 0
-   * only-in-state). Without {@code --dry-run} the command reaches {@code invokeBackfill}, detects
+   * <p>The archive is empty so the reconcile is trivially clean (0 explained, 0 unexplained, 0
+   * orphan-state). Without {@code --dry-run} the command reaches {@code invokeBackfill}, detects
    * empty filters, prints the warning, and returns 0.
    */
   @Test
   void noSymbolOrStream_safetyValve_printsWarning_andReturnsZero() {
-    // Empty archive — diff will be clean (0/0/0).  No fixtures needed.
+    // Empty archive — reconcile will be clean (0/0/0).  No fixtures needed.
 
     int exitCode =
         new CommandLine(new AuditCli())
@@ -410,10 +447,10 @@ class AuditBackfillCommandTest {
     assertThat(stderr).contains("--symbol");
     assertThat(stderr).contains("--stream");
 
-    // No alert should have been fired — the diff was clean
+    // No alert should have been fired — the reconcile was clean
     assertThat(alertPosted.get()).isFalse();
 
-    // stdout should still print the clean-diff message
+    // stdout should still print the clean-reconcile message
     String stdout = capturedOut.toString(StandardCharsets.UTF_8);
     assertThat(stdout).contains("Audit clean");
   }

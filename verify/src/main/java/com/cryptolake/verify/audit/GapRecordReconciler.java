@@ -9,9 +9,9 @@ import java.util.Set;
  * Matches file-side gap records against state-side gap records using interval-overlap and
  * reason-equivalence (see {@link ReasonCausedBy}).
  *
- * <p>Replaces {@link GapRecordDiff}'s exact-tuple match, which cannot bridge the 1-to-N
- * relationship between a single state event (one PG row for a planned restart) and the N file-side
- * gap envelopes it produces — one per active stream.
+ * <p>Replaces the old exact-tuple diff, which could not bridge the 1-to-N relationship between a
+ * single state event (one PG row for a planned restart) and the N file-side gap envelopes it
+ * produces — one per active stream.
  *
  * <h3>Matching algorithm</h3>
  *

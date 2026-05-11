@@ -23,23 +23,28 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 /**
- * Keystone audit command: runs the full file + state gap diff and gates backfill on the result.
+ * Keystone audit command: runs the full file + state gap reconciliation and gates backfill on the
+ * result.
  *
  * <p>Executes all three file sources ({@link FileGapSource}, {@link MissingHourGapSource}, {@link
  * SequenceIdGapSource}) and all five state sources ({@link PgComponentRuntimeGapSource}, {@link
  * PgMaintenanceIntentGapSource}, {@link LedgerGapSource}, {@link KafkaOutageGapSource}, {@link
- * ManifestGapSource}), diffs them via {@link GapRecordDiff}, then:
+ * ManifestGapSource}), reconciles them via {@link GapRecordReconciler}, then:
  *
  * <ul>
- *   <li>Clean diff: prints a success message and (unless {@code --dry-run}) invokes the backfill
- *       orchestrator for each date × symbol × stream in scope.
- *   <li>Divergent diff: writes a divergence report to {@code archiveOutputDir}, fires a critical
+ *   <li>Clean result ({@link GapRecordReconciler.ReconcileResult#unexplained()} is empty): prints a
+ *       success message and (unless {@code --dry-run}) invokes the backfill orchestrator for each
+ *       date × symbol × stream in scope.
+ *   <li>Divergent result: writes a divergence report to {@code archiveOutputDir}, fires a critical
  *       alert via {@link AlertmanagerNotifier}, prints to stderr, and returns exit code 2.
  * </ul>
  *
+ * <p>Orphan state records (state events for which no file gap was emitted) are informational and do
+ * NOT fail the gate — a restart so fast it produced no gap envelope is expected behaviour.
+ *
  * <p>Alert failures are logged but do NOT change the exit code.
  */
-@Command(name = "backfill", description = "Diff file vs state gaps, then backfill if clean.")
+@Command(name = "backfill", description = "Reconcile file vs state gaps, then backfill if clean.")
 public final class AuditBackfillCommand implements Callable<Integer> {
 
   private static final StructuredLogger LOG = StructuredLogger.of(AuditBackfillCommand.class);
@@ -131,7 +136,7 @@ public final class AuditBackfillCommand implements Callable<Integer> {
 
   @Option(
       names = "--dry-run",
-      description = "Diff and report, but skip backfill invocation even when diff is clean")
+      description = "Reconcile and report, but skip backfill invocation even when result is clean")
   private boolean dryRun;
 
   /** Hidden option for test determinism: overrides "now" used by {@link MissingHourGapSource}. */
@@ -215,22 +220,23 @@ public final class AuditBackfillCommand implements Callable<Integer> {
         new KafkaOutageGapSource(Path.of(dataDir), mapper, nowSupplier).read(scope));
     stateRecords.addAll(new ManifestGapSource(Path.of(baseDir), mapper).read(scope));
 
-    // --- diff ---
-    GapRecordDiff.DiffResult diff = GapRecordDiff.diff(fileRecords, stateRecords);
+    // --- reconcile ---
+    GapRecordReconciler.ReconcileResult result =
+        GapRecordReconciler.reconcile(fileRecords, stateRecords);
 
     LOG.info(
-        "audit_backfill_diff",
-        "matched",
-        diff.matched().size(),
-        "onlyInFiles",
-        diff.onlyInFiles().size(),
-        "onlyInState",
-        diff.onlyInState().size());
+        "audit_backfill_reconcile",
+        "explained",
+        result.explained().size(),
+        "unexplained",
+        result.unexplained().size(),
+        "orphanState",
+        result.orphanState().size());
 
-    if (diff.isClean()) {
-      return handleCleanDiff(diff, period, scope);
+    if (result.isClean()) {
+      return handleCleanResult(result, period, scope);
     } else {
-      return handleDivergentDiff(diff, scope);
+      return handleDivergentResult(result, scope);
     }
   }
 
@@ -238,12 +244,15 @@ public final class AuditBackfillCommand implements Callable<Integer> {
   // Clean path
   // -------------------------------------------------------------------------
 
-  private int handleCleanDiff(
-      GapRecordDiff.DiffResult diff, PeriodSelector period, AuditScope scope) {
+  private int handleCleanResult(
+      GapRecordReconciler.ReconcileResult result, PeriodSelector period, AuditScope scope) {
     System.out.println(
-        "Audit clean: " + diff.matched().size() + " matched records, proceeding with backfill");
+        "Audit clean: "
+            + result.explained().size()
+            + " explained records, proceeding with"
+            + " backfill");
 
-    LOG.info("audit_backfill_clean", "matched", diff.matched().size(), "dryRun", dryRun);
+    LOG.info("audit_backfill_clean", "explained", result.explained().size(), "dryRun", dryRun);
 
     if (dryRun) {
       LOG.info("audit_backfill_dry_run_skip", "reason", "dry-run flag set");
@@ -315,19 +324,19 @@ public final class AuditBackfillCommand implements Callable<Integer> {
   // Divergence path
   // -------------------------------------------------------------------------
 
-  private int handleDivergentDiff(GapRecordDiff.DiffResult diff, AuditScope scope) {
-    int onlyFiles = diff.onlyInFiles().size();
-    int onlyState = diff.onlyInState().size();
-    int matched = diff.matched().size();
+  private int handleDivergentResult(GapRecordReconciler.ReconcileResult result, AuditScope scope) {
+    int unexplainedCount = result.unexplained().size();
+    int orphanStateCount = result.orphanState().size();
+    int explainedCount = result.explained().size();
 
     LOG.warn(
         "audit_backfill_divergence",
-        "onlyInFiles",
-        onlyFiles,
-        "onlyInState",
-        onlyState,
-        "matched",
-        matched);
+        "unexplained",
+        unexplainedCount,
+        "orphanState",
+        orphanStateCount,
+        "explained",
+        explainedCount);
 
     // --- build divergence report ---
     long epochMs = System.currentTimeMillis();
@@ -336,15 +345,15 @@ public final class AuditBackfillCommand implements Callable<Integer> {
     ObjectNode scopeNode = report.putObject("scope");
     scopeNode.put("start_ms", scope.startMs());
     scopeNode.put("end_ms", scope.endMs());
-    report.put("matched_count", matched);
+    report.put("explained_count", explainedCount);
 
-    ArrayNode onlyInFilesNode = report.putArray("only_in_files");
-    for (GapRecord r : diff.onlyInFiles()) {
-      onlyInFilesNode.add(mapper.valueToTree(r));
+    ArrayNode unexplainedNode = report.putArray("unexplained");
+    for (GapRecord r : result.unexplained()) {
+      unexplainedNode.add(mapper.valueToTree(r));
     }
-    ArrayNode onlyInStateNode = report.putArray("only_in_state");
-    for (GapRecord r : diff.onlyInState()) {
-      onlyInStateNode.add(mapper.valueToTree(r));
+    ArrayNode orphanStateNode = report.putArray("orphan_state");
+    for (GapRecord r : result.orphanState()) {
+      orphanStateNode.add(mapper.valueToTree(r));
     }
 
     // --- write divergence report to disk ---
@@ -371,14 +380,18 @@ public final class AuditBackfillCommand implements Callable<Integer> {
 
     // --- fire alert ---
     String summary =
-        "Audit divergence detected: " + onlyFiles + " file-only, " + onlyState + " state-only";
+        "Audit divergence: "
+            + unexplainedCount
+            + " unexplained, "
+            + orphanStateCount
+            + " orphan-state";
     String description =
-        "onlyInFiles="
-            + onlyFiles
-            + ", onlyInState="
-            + onlyState
-            + ", matched="
-            + matched
+        "unexplained="
+            + unexplainedCount
+            + ", orphanState="
+            + orphanStateCount
+            + ", explained="
+            + explainedCount
             + "; report="
             + reportPath;
 
@@ -386,16 +399,16 @@ public final class AuditBackfillCommand implements Callable<Integer> {
     boolean alertSent = notifier.post("AuditDivergence", "critical", summary, description, null);
     if (!alertSent) {
       LOG.warn("audit_backfill_alert_post_failed", "summary", summary);
-      // Do NOT change exit code — we still exit 2 because the diff was divergent
+      // Do NOT change exit code — we still exit 2 because the result was divergent
     }
 
     // --- stderr summary ---
     System.err.println(
         "Audit divergence: "
-            + onlyFiles
-            + " gap(s) only in files, "
-            + onlyState
-            + " gap(s) only in state. Report: "
+            + unexplainedCount
+            + " unexplained gap(s), "
+            + orphanStateCount
+            + " orphan-state gap(s). Report: "
             + reportPath);
 
     return 2;

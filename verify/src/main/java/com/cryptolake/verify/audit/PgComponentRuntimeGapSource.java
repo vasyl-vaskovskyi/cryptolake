@@ -27,7 +27,7 @@ import java.util.List;
  *       the graceful-but-unplanned case ({@code clean_shutdown_at IS NOT NULL} without a
  *       maintenance intent, e.g. {@code docker stop} outside the maintenance wrapper). Both are
  *       real periods of data loss from the operator's perspective and need a matching file-side gap
- *       envelope to pass the strict diff in {@link com.cryptolake.verify.audit.GapRecordDiff}.
+ *       envelope to be explained by {@link com.cryptolake.verify.audit.GapRecordReconciler}.
  * </ul>
  *
  * <p>{@code endMs} is {@code clean_shutdown_at} when present, otherwise {@code NOW()} (a still-
