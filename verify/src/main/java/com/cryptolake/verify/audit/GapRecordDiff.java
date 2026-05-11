@@ -17,7 +17,11 @@ import java.util.stream.Collectors;
  * <p>Two records match when their {@link GapRecord.DiffKey} is identical (exchange, symbol, stream,
  * startMs, endMs, reason). Duplicate keys on the state side are collapsed by keeping the first
  * occurrence.
+ *
+ * @deprecated Use {@link GapRecordReconciler} for the new interval-overlap + caused-by matching.
+ *     This class is kept until R4 migrates the last caller in {@code AuditBackfillCommand}.
  */
+@Deprecated
 public final class GapRecordDiff {
 
   public record DiffResult(
