@@ -1,5 +1,6 @@
 package com.cryptolake.verify;
 
+import com.cryptolake.verify.audit.AuditCli;
 import com.cryptolake.verify.cli.ManifestCommand;
 import com.cryptolake.verify.cli.MarkMaintenanceCommand;
 import com.cryptolake.verify.cli.VerifyCommand;
@@ -34,7 +35,8 @@ import picocli.CommandLine.Command;
       ManifestCommand.class,
       MarkMaintenanceCommand.class,
       GapsCli.class,
-      IntegrityCli.class
+      IntegrityCli.class,
+      AuditCli.class
     })
 public final class Main {
 
