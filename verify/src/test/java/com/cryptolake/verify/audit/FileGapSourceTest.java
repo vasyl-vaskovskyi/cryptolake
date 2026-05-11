@@ -28,6 +28,18 @@ class FileGapSourceTest {
     }
   }
 
+  /** Writes pre-serialized JSONL lines to a zstd-compressed file. */
+  private void writeZstdJsonlLines(Path target, String... lines) throws IOException {
+    Files.createDirectories(target.getParent());
+    try (var out = Files.newOutputStream(target);
+        var zstd = new ZstdOutputStream(out, 3)) {
+      for (String line : lines) {
+        zstd.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        zstd.write(0x0A);
+      }
+    }
+  }
+
   // 2026-05-11T09:00:00Z in millis
   private static final long HOUR_9_START_MS = 1778490000000L;
   // 2026-05-11T10:00:00Z in millis
@@ -82,12 +94,11 @@ class FileGapSourceTest {
   }
 
   @Test
-  void dataEnvelopesAreSkipped() throws IOException {
-    // Write a file that has no gap envelopes — source should return empty
+  void streamFilterExcludesNonMatchingFile() throws IOException {
+    // A file on the trades stream should not be opened when scope filters to bookticker.
     long gapStartNs = HOUR_9_START_MS * 1_000_000L;
     long gapEndNs = HOUR_9_END_MS * 1_000_000L;
 
-    // Write only a gap envelope but for a different stream not in scope filters
     GapEnvelope env =
         GapEnvelope.create(
             "binance",
@@ -104,15 +115,53 @@ class FileGapSourceTest {
     Path archiveFile = tmpDir.resolve("binance/btcusdt/trades/2026-05-11/hour-9.jsonl.zst");
     writeZstdJsonl(archiveFile, env);
 
-    // Scope filters to bookticker only — trades file should be excluded by filter
     AuditScope scope =
         new AuditScope(
             HOUR_9_START_MS, HOUR_9_END_MS, null, null, List.of("bookticker"), tmpDir.toString());
 
-    FileGapSource source = new FileGapSource(mapper);
-    List<GapRecord> records = source.read(scope);
-
+    List<GapRecord> records = new FileGapSource(mapper).read(scope);
     assertThat(records).isEmpty();
+  }
+
+  @Test
+  void nonGapRecordsAreSkippedAndNullDetailRoundTrips() throws IOException {
+    // A file containing both a type:"data" record and a type:"gap" record should yield
+    // only the gap record. Also asserts detail==null round-trips correctly.
+    long gapStartNs = HOUR_9_START_MS * 1_000_000L;
+    long gapEndNs = HOUR_9_END_MS * 1_000_000L;
+
+    GapEnvelope gap =
+        GapEnvelope.create(
+            "binance",
+            "btcusdt",
+            "bookticker",
+            "session-1",
+            1L,
+            gapStartNs,
+            gapEndNs,
+            "ws_disconnect",
+            null,
+            () -> gapStartNs);
+
+    String dataLine =
+        "{\"v\":1,\"type\":\"data\",\"exchange\":\"binance\",\"symbol\":\"btcusdt\","
+            + "\"stream\":\"bookticker\",\"received_at\":"
+            + gapStartNs
+            + ",\"exchange_ts\":1,\"collector_session_id\":\"session-1\",\"session_seq\":2,"
+            + "\"raw_text\":\"{\\\"u\\\":1}\",\"raw_sha256\":\"deadbeef\","
+            + "\"_topic\":\"t\",\"_partition\":0,\"_offset\":0}";
+
+    Path archiveFile = tmpDir.resolve("binance/btcusdt/bookticker/2026-05-11/hour-9.jsonl.zst");
+    writeZstdJsonlLines(archiveFile, dataLine, mapper.writeValueAsString(gap));
+
+    AuditScope scope =
+        new AuditScope(
+            HOUR_9_START_MS, HOUR_9_END_MS, null, null, List.of("bookticker"), tmpDir.toString());
+
+    List<GapRecord> records = new FileGapSource(mapper).read(scope);
+    assertThat(records).hasSize(1);
+    assertThat(records.get(0).reason()).isEqualTo("ws_disconnect");
+    assertThat(records.get(0).detail()).isNull();
   }
 
   @Test
