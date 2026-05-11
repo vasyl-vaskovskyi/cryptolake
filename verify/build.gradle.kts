@@ -17,5 +17,6 @@ dependencies {
     implementation(libs.logback.classic)
     implementation(libs.logstash.encoder)
     testImplementation(platform(libs.testcontainers.bom))
+    testImplementation(libs.testcontainers.junit.jupiter)
     testImplementation(libs.testcontainers.postgres)
 }
