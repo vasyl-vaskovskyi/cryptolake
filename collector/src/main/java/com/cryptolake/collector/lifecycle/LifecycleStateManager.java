@@ -64,7 +64,7 @@ public final class LifecycleStateManager {
             conn.prepareStatement(
                 "INSERT INTO component_runtime_state "
                     + "(component, instance_id, host_boot_id, started_at, last_heartbeat_at) "
-                    + "VALUES (?, ?, ?, ?, ?) "
+                    + "VALUES (?, ?, ?, ?::timestamptz, ?::timestamptz) "
                     + "ON CONFLICT (component, instance_id) DO UPDATE SET "
                     + "started_at = EXCLUDED.started_at, "
                     + "last_heartbeat_at = EXCLUDED.last_heartbeat_at")) {
@@ -87,7 +87,7 @@ public final class LifecycleStateManager {
     try (Connection conn = ds.getConnection();
         PreparedStatement ps =
             conn.prepareStatement(
-                "UPDATE component_runtime_state SET last_heartbeat_at = ? "
+                "UPDATE component_runtime_state SET last_heartbeat_at = ?::timestamptz "
                     + "WHERE component = ? AND instance_id = ?")) {
       ps.setString(1, now);
       ps.setString(2, state.component());
@@ -98,7 +98,13 @@ public final class LifecycleStateManager {
     }
   }
 
-  /** Marks the component as cleanly shutdown. */
+  /**
+   * Marks the component as cleanly shutdown.
+   *
+   * <p>Writes to the actual schema columns: {@code clean_shutdown_at TIMESTAMPTZ} (presence = clean
+   * shutdown happened) and {@code planned_shutdown BOOLEAN}. There is no separate {@code
+   * clean_shutdown} boolean — the timestamp's non-null state is the boolean signal.
+   */
   public void markCleanShutdown(
       String component, String instanceId, boolean planned, String maintenanceId) {
     HikariDataSource ds = dataSource;
@@ -106,8 +112,8 @@ public final class LifecycleStateManager {
     try (Connection conn = ds.getConnection();
         PreparedStatement ps =
             conn.prepareStatement(
-                "UPDATE component_runtime_state SET clean_shutdown = TRUE, shutdown_at = NOW(), "
-                    + "planned = ?, maintenance_id = ? "
+                "UPDATE component_runtime_state SET clean_shutdown_at = NOW(), "
+                    + "planned_shutdown = ?, maintenance_id = ? "
                     + "WHERE component = ? AND instance_id = ?")) {
       ps.setBoolean(1, planned);
       ps.setString(2, maintenanceId);
@@ -119,15 +125,23 @@ public final class LifecycleStateManager {
     }
   }
 
-  /** Loads an active maintenance intent, if any. */
+  /**
+   * Loads an active maintenance intent, if any.
+   *
+   * <p>The table is {@code maintenance_intent} (singular, per writer/StateManager DDL). An intent
+   * is "active" when {@code consumed_at IS NULL} AND ({@code expires_at IS NULL} OR {@code
+   * expires_at > NOW()}). There is no boolean {@code active} column.
+   */
   public Optional<MaintenanceIntent> loadActiveMaintenanceIntent() {
     HikariDataSource ds = dataSource;
     if (ds == null) return Optional.empty();
     try (Connection conn = ds.getConnection();
         PreparedStatement ps =
             conn.prepareStatement(
-                "SELECT maintenance_id, reason, created_at FROM maintenance_intents "
-                    + "WHERE active = TRUE ORDER BY created_at DESC LIMIT 1")) {
+                "SELECT maintenance_id, reason, created_at FROM maintenance_intent "
+                    + "WHERE consumed_at IS NULL "
+                    + "  AND (expires_at IS NULL OR expires_at > NOW()) "
+                    + "ORDER BY created_at DESC LIMIT 1")) {
       ResultSet rs = ps.executeQuery();
       if (rs.next()) {
         return Optional.of(
