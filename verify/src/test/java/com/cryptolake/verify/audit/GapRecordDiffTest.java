@@ -45,4 +45,16 @@ class GapRecordDiffTest {
     var d = GapRecordDiff.diff(List.of(), List.of(state(100, 200, "collector_restart")));
     assertThat(d.onlyInState()).hasSize(1);
   }
+
+  @Test
+  void partialMatchProducesCorrectThreeLists() {
+    var d =
+        GapRecordDiff.diff(
+            List.of(file(100, 200, "collector_restart"), file(300, 400, "restart_gap")),
+            List.of(state(100, 200, "collector_restart"), state(500, 600, "restart_gap")));
+    assertThat(d.matched()).hasSize(1);
+    assertThat(d.onlyInFiles()).hasSize(1); // (300,400,"restart_gap") has no state match
+    assertThat(d.onlyInState()).hasSize(1); // (500,600,"restart_gap") has no file match
+    assertThat(d.isClean()).isFalse();
+  }
 }

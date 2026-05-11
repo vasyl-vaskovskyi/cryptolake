@@ -10,11 +10,11 @@ import org.junit.jupiter.api.Test;
 class RuntimeOnlyReasonsTest {
 
   @Test
-  void unionCoversAllValidReasons() {
+  void unionPartitionsAllValidReasons() {
     Set<String> union = new HashSet<>(RuntimeOnlyReasons.RUNTIME_ONLY);
     union.addAll(RuntimeOnlyReasons.PERSISTENT_CLASS);
-    assertThat(union).containsAll(GapReasons.VALID);
-    // and no overlap
+    // Bidirectional equality: also catches typos that introduce a string not in VALID.
+    assertThat(union).containsExactlyInAnyOrderElementsOf(GapReasons.VALID);
     Set<String> overlap = new HashSet<>(RuntimeOnlyReasons.RUNTIME_ONLY);
     overlap.retainAll(RuntimeOnlyReasons.PERSISTENT_CLASS);
     assertThat(overlap).isEmpty();
