@@ -8,6 +8,7 @@ public record PeriodSelector(long startMs, long endMs) {
   public static PeriodSelector parse(
       String periodKind, String periodValue, String since, String until) {
     if (since != null && until != null) {
+      // endMs is inclusive; --since/--until callers pass the exact boundary millis.
       return new PeriodSelector(
           Instant.parse(since).toEpochMilli(), Instant.parse(until).toEpochMilli());
     }
