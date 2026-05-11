@@ -12,6 +12,8 @@ services:
       - POSTGRES_DB=cryptolake
     networks:
       - cryptolake_internal
+      - host_access  # required: cryptolake_internal is internal=true, so host port
+                     # publishing only works through the non-internal host_access bridge.
     # Loopback-only publish so cryptolake-verify CLI (audit-state, audit-reconcile)
     # can reach the DB from the host. NOT bound to 0.0.0.0 — local dev only.
     ports:
