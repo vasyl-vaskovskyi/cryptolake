@@ -12,7 +12,7 @@ import picocli.CommandLine.Command;
 @Command(
     name = "audit",
     description = "Audit data integrity end-to-end.",
-    subcommands = {AuditFilesCommand.class, AuditStateCommand.class})
+    subcommands = {AuditFilesCommand.class, AuditStateCommand.class, AuditBackfillCommand.class})
 public final class AuditCli implements Runnable {
 
   @Override
