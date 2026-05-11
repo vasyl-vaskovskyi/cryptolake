@@ -122,11 +122,6 @@ public final class LedgerGapSource implements GapSource {
           } else if ("clean_shutdown".equals(event) && sessionId != null) {
             long shutdownMs = tsNs / 1_000_000L;
 
-            // Only emit if the shutdown timestamp is within scope
-            if (shutdownMs < scope.startMs() || shutdownMs > scope.endMs()) {
-              continue;
-            }
-
             Long startNs = startNsBySession.get(sessionId);
             if (startNs == null) {
               // No matching start — skip
@@ -134,6 +129,13 @@ public final class LedgerGapSource implements GapSource {
             }
 
             long startMs = startNs / 1_000_000L;
+
+            // Interval overlap with scope (consistent with PgComponentRuntimeGapSource).
+            // Gap window [startMs, shutdownMs] intersects [scope.startMs, scope.endMs] iff
+            // startMs <= scope.endMs AND shutdownMs >= scope.startMs.
+            if (startMs > scope.endMs() || shutdownMs < scope.startMs()) {
+              continue;
+            }
             boolean planned = node.has("planned") && node.path("planned").asBoolean(false);
             String maintenanceId =
                 node.has("maintenance_id") ? node.path("maintenance_id").asText(null) : null;

@@ -120,6 +120,38 @@ class LedgerGapSourceTest {
   // Shutdown outside scope window is not emitted
   // -------------------------------------------------------------------------
 
+  /**
+   * Session that started before scope.endMs but shut down AFTER scope.endMs — interval overlap
+   * means the gap intersects the scope and should still be emitted (matches
+   * PgComponentRuntimeGapSource semantics).
+   */
+  @Test
+  void sessionStraddlesScopeEnd_emitted() throws IOException {
+    long startNs = (START_MS - 30 * 60_000L) * 1_000_000L; // start 30m before scope
+    long shutdownNs = (END_MS + 30 * 60_000L) * 1_000_000L; // shutdown 30m after scope end
+    String startLine =
+        "{\"ts_ns\":"
+            + startNs
+            + ",\"event\":\"start\",\"host_boot_id\":\"boot-1\","
+            + "\"collector_session_id\":\"sess-straddle\"}";
+    String stopLine =
+        "{\"ts_ns\":"
+            + shutdownNs
+            + ",\"event\":\"clean_shutdown\",\"host_boot_id\":\"boot-1\","
+            + "\"collector_session_id\":\"sess-straddle\",\"planned\":false}";
+
+    writeJournal("binance-collector-primary", startLine, stopLine);
+
+    AuditScope scope =
+        new AuditScope(START_MS, END_MS, List.of(), List.of(), List.of(), tmpDir.toString());
+    List<GapRecord> records = new LedgerGapSource(tmpDir, mapper).read(scope);
+
+    assertThat(records).hasSize(1);
+    assertThat(records.get(0).reason()).isEqualTo("restart_gap");
+    assertThat(records.get(0).startMs()).isEqualTo(startNs / 1_000_000L);
+    assertThat(records.get(0).endMs()).isEqualTo(shutdownNs / 1_000_000L);
+  }
+
   @Test
   void shutdownOutsideScope_notEmitted() throws IOException {
     // Scope is AFTER the shutdown — no overlap

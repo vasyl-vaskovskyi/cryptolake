@@ -107,11 +107,16 @@ public final class KafkaOutageGapSource implements GapSource {
           continue;
         }
 
+        // Clamp endMs to scope.endMs so downstream filters never see a record extending
+        // beyond the audit window. `now()` may be later than the audit window if the audit
+        // is run with --until in the past on an outage that's still active.
+        long endMs = Math.min(nowMs, scope.endMs());
+
         String detail = "collector_id=" + collectorId + "; outage_started_at_ns=" + outageNs;
 
         result.add(
             new GapRecord(
-                SOURCE_LABEL, "", "", "", outageMs, nowMs, "kafka_producer_outage", detail));
+                SOURCE_LABEL, "", "", "", outageMs, endMs, "kafka_producer_outage", detail));
 
       } catch (Exception e) {
         log.warn(

@@ -79,6 +79,25 @@ class KafkaOutageGapSourceTest {
   // Outage started after scope end → not emitted
   // -------------------------------------------------------------------------
 
+  /**
+   * Active outage whose "now" extends past scope.endMs — emitted record's endMs must be clamped to
+   * scope.endMs so downstream filters never see out-of-window records.
+   */
+  @Test
+  void outageActiveAfterScopeEnd_endMsClampedToScopeEnd() throws IOException {
+    writeOutageFile("binance-collector-primary", OUTAGE_START_NS);
+    long scopeEndMs = NOW.toEpochMilli() - 60_000L; // scope ends 1 minute before NOW
+
+    AuditScope scope =
+        new AuditScope(
+            OUTAGE_START_MS, scopeEndMs, List.of(), List.of(), List.of(), tmpDir.toString());
+
+    List<GapRecord> records = new KafkaOutageGapSource(tmpDir, mapper, () -> NOW).read(scope);
+
+    assertThat(records).hasSize(1);
+    assertThat(records.get(0).endMs()).isEqualTo(scopeEndMs);
+  }
+
   @Test
   void outageAfterScopeEnd_notEmitted() throws IOException {
     long futureNs = NOW.toEpochMilli() * 1_000_000L + 3_600_000_000_000L; // 1 hour after now
