@@ -25,12 +25,15 @@ import picocli.CommandLine;
 /**
  * Integration tests for {@link AuditBackfillCommand}.
  *
- * <p>Three scenarios:
+ * <p>Four scenarios:
  *
  * <ol>
- *   <li>Clean diff + {@code --dry-run} → exit 0, success message printed.
+ *   <li>Clean diff with a real match (manifest + missing-hour for btcusdt/bookticker hour-9) +
+ *       {@code --dry-run} → exit 0, "1 matched" in stdout.
  *   <li>Only-in-files divergence → alert POSTed to stub, exit 2.
  *   <li>Only-in-state divergence → alert POSTed to stub, exit 2.
+ *   <li>Safety-valve path: clean diff but no {@code --symbol}//{@code --stream} provided → exit 0
+ *       with warning on stderr, no backfill invoked.
  * </ol>
  *
  * <p>Uses {@code com.sun.net.httpserver.HttpServer} as an Alertmanager stub (same pattern as {@link
@@ -178,62 +181,65 @@ class AuditBackfillCommandTest {
   }
 
   // -------------------------------------------------------------------------
-  // Test 1: Clean diff + --dry-run → exit 0, success message on stdout
+  // Test 1: Clean diff — real persistent-class match via manifest + missing-hour
   // -------------------------------------------------------------------------
 
   /**
-   * Both sides produce an identical {@code collector_restart} gap for btcusdt/bookticker during
-   * hour-9 of 2026-05-11. {@code GapRecordDiff.diff()} produces a clean result. With {@code
-   * --dry-run} the command returns exit code 0 without invoking the backfill orchestrator and
-   * prints a 1-line success message.
+   * Both the FILE side and the STATE side produce the same {@code missing_hour} gap record for
+   * btcusdt/bookticker hour-9 of 2026-05-11, so the diff yields exactly 1 matched record, 0
+   * only-in-files, and 0 only-in-state.
+   *
+   * <p>Setup:
+   *
+   * <ul>
+   *   <li>FILE side: {@link MissingHourGapSource} emits a {@code missing_hour} record because
+   *       hour-9.jsonl.zst is absent but the tuple has presence (via a dummy hour-0.jsonl.zst).
+   *   <li>STATE side: {@link ManifestGapSource} reads a manifest that declares {@code
+   *       missing_hours:[9]}.
+   * </ul>
+   *
+   * <p>Both records share the same {@link GapRecord.DiffKey}: (binance, btcusdt, bookticker,
+   * HOUR_9_START_MS, HOUR_9_START_MS+3_599_999, missing_hour).
+   *
+   * <p>Scope is narrowed to exactly hour-9 via {@code --hour=2026-05-11T09} so that other absent
+   * hours don't leak into the diff.
    */
   @Test
-  void cleanDiff_dryRun_returnsZero_andPrintsSuccessMessage() throws IOException {
-    // File side: gap envelope with collector_restart reason
-    Path hour9File = baseDir.resolve("binance/btcusdt/bookticker/2026-05-11/hour-9.jsonl.zst");
-    GapEnvelope env =
-        collectorRestartGapEnvelope(
-            "binance", "btcusdt", "bookticker", HOUR_9_START_NS, HOUR_10_START_NS);
-    writeZstdJsonl(hour9File, env);
+  void cleanDiff_trulyMatchedMissingHour_dryRun_returnsZero_andPrintsMatchCount()
+      throws IOException {
+    // hour-0.jsonl.zst establishes "presence" for the (binance, btcusdt, bookticker) tuple so
+    // that MissingHourGapSource actually scans for absent hours within the scope.
+    Path hour0File = baseDir.resolve("binance/btcusdt/bookticker/2026-05-11/hour-0.jsonl.zst");
+    writeZstdJsonl(hour0File); // empty zstd file — just needs to exist
 
-    // State side: lifecycle ledger producing the same gap (collector_restart, planned=true)
-    // LedgerGapSource emits symbol="" and stream="" — the diff matches on (exchange, symbol,
-    // stream, startMs, endMs, reason).  For a clean diff both sides must match exactly.
-    // The file side record has exchange=binance, symbol=btcusdt, stream=bookticker,
-    // startMs=HOUR_9_START_MS, endMs=HOUR_10_START_MS, reason=collector_restart.
-    // The ledger record has exchange="", symbol="", stream="".
-    // These won't match — so we need to use a state source that produces matching records.
-    // ManifestGapSource emits missing_hour, PgSources need DB.
-    // Best approach: use a ManifestGapSource with "missing_hour" on the state side and
-    // a MissingHourGapSource on the file side.  BUT missing_hour is PERSISTENT_CLASS, so
-    // both participate in the diff.
-    //
-    // Simplest clean fixture: archive with NO persistent-class gaps, no persistent-class
-    // state records either → diff is clean (0 matched, 0 only-in-files, 0 only-in-state).
-    // Start fresh with empty dirs.
+    // Manifest declares hour-9 as missing → ManifestGapSource emits one missing_hour record.
+    Path manifestDir = baseDir.resolve("binance/btcusdt/bookticker/2026-05-11");
+    Files.createDirectories(manifestDir);
+    Files.writeString(
+        manifestDir.resolve("2026-05-11.manifest.json"),
+        "{\"missing_hours\":[9]}",
+        StandardCharsets.UTF_8);
 
-    // Remove the file we wrote above — empty base dir gives clean diff.
-    Files.deleteIfExists(hour9File);
-    // Remove its parent dirs if now empty (not required, just tidy)
-
+    // Scope = exactly hour-9 so only that one absence is in scope on the file side.
+    // now=2026-05-11T10:00:00Z → hour-9 (start=09:00:00Z) is in the past and gets emitted.
     int exitCode =
         new CommandLine(new AuditCli())
             .execute(
                 "backfill",
-                "--day=2026-05-11",
+                "--hour=2026-05-11T09",
                 "--base-dir=" + baseDir,
                 "--data-dir=" + dataDir,
                 "--db-url=",
                 "--symbol=btcusdt",
                 "--stream=bookticker",
                 "--alertmanager-url=" + alertmanagerUrl(),
-                "--now-override-iso=" + NOW_ISO,
+                "--now-override-iso=2026-05-11T10:00:00Z",
                 "--dry-run");
 
     assertThat(exitCode).isEqualTo(0);
 
     String stdout = capturedOut.toString(StandardCharsets.UTF_8);
-    assertThat(stdout).contains("Audit clean");
+    assertThat(stdout).contains("1 matched records");
 
     // No alert should have been fired for a clean diff
     assertThat(alertPosted.get()).isFalse();
@@ -365,5 +371,50 @@ class AuditBackfillCommandTest {
     JsonNode report = MAPPER.readTree(reportFile.toFile());
     assertThat(report.path("only_in_state").isArray()).isTrue();
     assertThat(report.path("only_in_state").size()).isGreaterThanOrEqualTo(1);
+  }
+
+  // -------------------------------------------------------------------------
+  // Test 4: Safety-valve — no --symbol or --stream → warning on stderr, exit 0
+  // -------------------------------------------------------------------------
+
+  /**
+   * When the diff is clean but neither {@code --symbol} nor {@code --stream} is provided, the
+   * command must print a warning on stderr and return exit code 0 instead of attempting to invoke
+   * the backfill orchestrator (which would fail without those filters). No {@link BackfillCommand}
+   * invocation occurs — verified by the absence of any backfill output.
+   *
+   * <p>The archive is empty so the diff is trivially clean (0 matched, 0 only-in-files, 0
+   * only-in-state). Without {@code --dry-run} the command reaches {@code invokeBackfill}, detects
+   * empty filters, prints the warning, and returns 0.
+   */
+  @Test
+  void noSymbolOrStream_safetyValve_printsWarning_andReturnsZero() {
+    // Empty archive — diff will be clean (0/0/0).  No fixtures needed.
+
+    int exitCode =
+        new CommandLine(new AuditCli())
+            .execute(
+                "backfill",
+                "--day=2026-05-11",
+                "--base-dir=" + baseDir,
+                "--data-dir=" + dataDir,
+                "--db-url=",
+                "--alertmanager-url=" + alertmanagerUrl(),
+                "--now-override-iso=" + NOW_ISO
+                // deliberately no --symbol, no --stream, no --dry-run
+                );
+
+    assertThat(exitCode).isEqualTo(0);
+
+    String stderr = capturedErr.toString(StandardCharsets.UTF_8);
+    assertThat(stderr).contains("--symbol");
+    assertThat(stderr).contains("--stream");
+
+    // No alert should have been fired — the diff was clean
+    assertThat(alertPosted.get()).isFalse();
+
+    // stdout should still print the clean-diff message
+    String stdout = capturedOut.toString(StandardCharsets.UTF_8);
+    assertThat(stdout).contains("Audit clean");
   }
 }
