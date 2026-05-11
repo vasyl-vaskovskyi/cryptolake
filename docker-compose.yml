@@ -12,6 +12,10 @@ services:
       - POSTGRES_DB=cryptolake
     networks:
       - cryptolake_internal
+    # Loopback-only publish so cryptolake-verify CLI (audit-state, audit-reconcile)
+    # can reach the DB from the host. NOT bound to 0.0.0.0 — local dev only.
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
