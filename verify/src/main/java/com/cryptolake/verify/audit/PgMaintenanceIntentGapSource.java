@@ -16,6 +16,13 @@ import java.util.List;
  * source="pg.maintenance_intent"} and {@code reason="collector_restart"}. Exchange/symbol/stream
  * are blank because maintenance intents are system-wide.
  *
+ * <p>Table name note: the authoritative DDL is in {@code
+ * writer/src/main/java/com/cryptolake/writer/state/StateManager.java} which creates {@code
+ * maintenance_intent} (singular). The {@code LifecycleStateManager} in the collector and {@code
+ * MaintenanceWriter} in this module use {@code maintenance_intents} (plural) in their SELECT/INSERT
+ * statements — that's a pre-existing inconsistency. This source matches the writer's DDL because
+ * that's the table that actually gets created at runtime.
+ *
  * <p>Graceful degradation: if the JDBC URL is null/empty, the DB is unreachable, or the table
  * doesn't exist (fresh deployment), logs a warning and returns an empty list without throwing.
  */

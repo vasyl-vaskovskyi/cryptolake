@@ -140,6 +140,28 @@ class PgComponentRuntimeGapSourceIT {
     assertThat(r.detail()).contains("maintenance_id=-");
   }
 
+  /**
+   * Graceful-but-unplanned: clean_shutdown_at set, planned_shutdown=false. This is the fourth
+   * (component_lifecycle × planned) quadrant — e.g. {@code docker stop} outside the
+   * cryptolake-maintenance wrapper. Must emit a {@code restart_gap} record so the file-side gap
+   * envelope has a matching state record in the diff.
+   */
+  @Test
+  void rowInScope_unplannedCleanShutdown_emitsRestartGap() throws Exception {
+    Instant startedAt = Instant.parse("2026-05-10T09:00:00Z");
+    Instant heartbeat = Instant.parse("2026-05-10T10:30:00Z");
+    Instant cleanShutdown = Instant.parse("2026-05-10T11:00:00Z");
+
+    insert("collector", "inst-4", "boot-z", startedAt, heartbeat, cleanShutdown, false, null);
+
+    List<GapRecord> records = new PgComponentRuntimeGapSource(config()).read(scope());
+    assertThat(records).hasSize(1);
+    GapRecord r = records.get(0);
+    assertThat(r.reason()).isEqualTo("restart_gap");
+    assertThat(r.startMs()).isEqualTo(heartbeat.toEpochMilli());
+    assertThat(r.endMs()).isEqualTo(cleanShutdown.toEpochMilli());
+  }
+
   /** Row where started_at is AFTER scope end — should not overlap scope, no record emitted. */
   @Test
   void rowStartedAfterScopeEnd_notEmitted() throws Exception {

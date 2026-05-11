@@ -16,6 +16,27 @@ import java.util.List;
  * carry {@code source="pg.component_runtime"} and have blank exchange/symbol/stream fields because
  * restart gaps are global (not stream-specific).
  *
+ * <p>Reason classification (one record per row that meets the overlap predicate; rows with null
+ * {@code last_heartbeat_at} are skipped):
+ *
+ * <ul>
+ *   <li>{@code planned_shutdown = TRUE} → {@code reason="collector_restart"} regardless of {@code
+ *       clean_shutdown_at}.
+ *   <li>{@code planned_shutdown = FALSE} → {@code reason="restart_gap"}. This covers both the
+ *       unclean-exit case ({@code clean_shutdown_at IS NULL}, e.g. crash, SIGKILL, host reboot) and
+ *       the graceful-but-unplanned case ({@code clean_shutdown_at IS NOT NULL} without a
+ *       maintenance intent, e.g. {@code docker stop} outside the maintenance wrapper). Both are
+ *       real periods of data loss from the operator's perspective and need a matching file-side gap
+ *       envelope to pass the strict diff in {@link com.cryptolake.verify.audit.GapRecordDiff}.
+ * </ul>
+ *
+ * <p>{@code endMs} is {@code clean_shutdown_at} when present, otherwise {@code NOW()} (a still-
+ * running process or one that never wrote a clean-shutdown row).
+ *
+ * <p>Connection management: uses plain {@link DriverManager#getConnection} per call rather than
+ * HikariCP — verify is a one-shot CLI invocation, not a long-running service, so a pool would add
+ * complexity without benefit. Each {@link #read} opens, queries, and closes one connection.
+ *
  * <p>Graceful degradation: if the JDBC URL is null/empty, or if the DB is unreachable, or if the
  * table doesn't exist (fresh deployment), the source logs a warning and returns an empty list
  * without throwing.
