@@ -75,6 +75,19 @@ Scenario index lives in `tests/chaos/README.md` with the gap-reason taxonomy eac
 | `consolidation` | hourly seal/consolidation; also hosts `ChaosVerifyIT` test harness | common, verify |
 | `verify` | `cryptolake-verify` CLI; archive integrity, gap analysis, manifest | common |
 
+## Audit trio (file reality vs recorded state)
+
+Three `audit` subcommands cross-check what is on disk against what PG/ledger/Kafka sources recorded. `audit files` reads gap envelopes from archive files (no PG needed). `audit state` compares file-sourced gaps against PG runtime rows and the lifecycle ledger to surface divergence. `audit backfill` gates a trades backfill on that same diff — it only runs the fill when the audit is clean. Use them when investigating data quality, before triggering a manual backfill, or in CI smoke tests. See `docs/superpowers/plans/2026-05-11-audit-trio.md` for the full design.
+
+```bash
+# Three audit entry points
+./scripts/audit-files.sh    --day 2026-05-11 --symbol btcusdt --stream depth --json
+./scripts/audit-state.sh    --day 2026-05-11 --symbol btcusdt --json
+./scripts/audit-backfill.sh --day 2026-05-11 --symbol btcusdt --stream trades  # gated backfill
+```
+
+Exact-tuple-match diff on `(symbol, stream, startMs, endMs, reason)`, runtime-only reasons (`ws_disconnect`, `pu_chain_break`, etc.) excluded by design. On divergence, POSTs a `AuditDivergence` alert via `CRYPTOLAKE_ALERTMANAGER_WEBHOOK` and exits 2.
+
 ## Conventions worth knowing
 
 - **Java 21, virtual threads.** Both services use `Executors.newVirtualThreadPerTaskExecutor()` for I/O loops. SIGTERM hooks must run on a platform thread (JVM requirement) — that one exception is intentional.
