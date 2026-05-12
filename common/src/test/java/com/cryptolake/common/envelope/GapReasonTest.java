@@ -82,6 +82,26 @@ class GapReasonTest {
   }
 
   @Test
+  void collectorRestartExplainsItself() {
+    assertThat(GapReason.COLLECTOR_RESTART.explains(GapReason.COLLECTOR_RESTART)).isTrue();
+  }
+
+  @Test
+  void restartGapExplainsTransients() {
+    assertThat(GapReason.RESTART_GAP.explains(GapReason.RESTART_GAP)).isTrue();
+    assertThat(GapReason.RESTART_GAP.explains(GapReason.WS_DISCONNECT)).isTrue();
+    assertThat(GapReason.RESTART_GAP.explains(GapReason.PU_CHAIN_BREAK)).isTrue();
+    assertThat(GapReason.RESTART_GAP.explains(GapReason.SESSION_SEQ_SKIP)).isTrue();
+    assertThat(GapReason.RESTART_GAP.explains(GapReason.RECOVERY_DEPTH_ANCHOR)).isTrue();
+  }
+
+  @Test
+  void kafkaProducerOutageDoesNotExplainUnrelatedTransients() {
+    assertThat(GapReason.KAFKA_PRODUCER_OUTAGE.explains(GapReason.WS_DISCONNECT)).isFalse();
+    assertThat(GapReason.KAFKA_PRODUCER_OUTAGE.explains(GapReason.PU_CHAIN_BREAK)).isFalse();
+  }
+
+  @Test
   void allKnownWireStringsRoundTrip() throws Exception {
     for (GapReason r : GapReason.values()) {
       String json = mapper.writeValueAsString(r);

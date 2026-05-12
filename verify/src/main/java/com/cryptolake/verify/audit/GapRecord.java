@@ -12,6 +12,9 @@ public record GapRecord(
     GapReason reason,
     String detail) {
 
+  /**
+   * Compact constructor: null-checks {@code reason}. Vocabulary is enforced by {@link GapReason}.
+   */
   public GapRecord {
     java.util.Objects.requireNonNull(reason, "reason");
   }
