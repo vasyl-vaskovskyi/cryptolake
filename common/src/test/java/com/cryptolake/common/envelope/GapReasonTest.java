@@ -88,4 +88,12 @@ class GapReasonTest {
       assertThat(mapper.readValue(json, GapReason.class)).isEqualTo(r);
     }
   }
+
+  @Test
+  void explainsThrowsOnNull() {
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> GapReason.COLLECTOR_RESTART.explains(null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("fileReason");
+  }
 }

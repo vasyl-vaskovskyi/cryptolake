@@ -2,10 +2,12 @@ package com.cryptolake.common.envelope;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 public enum GapReason {
 
@@ -33,6 +35,45 @@ public enum GapReason {
   DISK_FULL_HOLD("disk_full_hold", Classification.RUNTIME_ONLY),
   CROSS_SOURCE_PU_CHAIN_BREAK("cross_source_pu_chain_break", Classification.RUNTIME_ONLY),
   BOTH_COLLECTORS_SILENT("both_collectors_silent", Classification.RUNTIME_ONLY);
+
+  private static final Map<String, GapReason> BY_WIRE;
+  private static final Map<GapReason, Set<GapReason>> CAUSED_BY;
+
+  static {
+    Map<String, GapReason> byWire = new HashMap<>();
+    for (GapReason r : values()) {
+      byWire.put(r.wire, r);
+    }
+    BY_WIRE = Map.copyOf(byWire);
+
+    EnumMap<GapReason, Set<GapReason>> causedBy = new EnumMap<>(GapReason.class);
+    causedBy.put(
+        COLLECTOR_RESTART,
+        Collections.unmodifiableSet(
+            EnumSet.of(
+                COLLECTOR_RESTART,
+                RESTART_GAP,
+                WS_DISCONNECT,
+                PU_CHAIN_BREAK,
+                SESSION_SEQ_SKIP,
+                RECOVERY_DEPTH_ANCHOR)));
+    causedBy.put(
+        RESTART_GAP,
+        Collections.unmodifiableSet(
+            EnumSet.of(
+                RESTART_GAP,
+                WS_DISCONNECT,
+                PU_CHAIN_BREAK,
+                SESSION_SEQ_SKIP,
+                RECOVERY_DEPTH_ANCHOR)));
+    causedBy.put(
+        KAFKA_PRODUCER_OUTAGE,
+        Collections.unmodifiableSet(
+            EnumSet.of(
+                KAFKA_PRODUCER_OUTAGE, KAFKA_DELIVERY_FAILED, KAFKA_OFFSET_RESET, WRITE_ERROR)));
+    causedBy.put(MISSING_HOUR, Collections.unmodifiableSet(EnumSet.of(MISSING_HOUR)));
+    CAUSED_BY = Collections.unmodifiableMap(causedBy);
+  }
 
   public enum Classification {
     PERSISTENT,
@@ -69,7 +110,8 @@ public enum GapReason {
    * cause nothing (return false).
    */
   public boolean explains(GapReason fileReason) {
-    EnumSet<GapReason> set = CAUSED_BY.get(this);
+    java.util.Objects.requireNonNull(fileReason, "fileReason");
+    Set<GapReason> set = CAUSED_BY.get(this);
     return set != null && set.contains(fileReason);
   }
 
@@ -80,35 +122,5 @@ public enum GapReason {
       throw new IllegalArgumentException("Unknown gap reason: '" + wire + "'");
     }
     return r;
-  }
-
-  private static final Map<String, GapReason> BY_WIRE;
-  private static final EnumMap<GapReason, EnumSet<GapReason>> CAUSED_BY =
-      new EnumMap<>(GapReason.class);
-
-  static {
-    Map<String, GapReason> m = new HashMap<>();
-    for (GapReason r : values()) {
-      m.put(r.wire, r);
-    }
-    BY_WIRE = Map.copyOf(m);
-
-    CAUSED_BY.put(
-        COLLECTOR_RESTART,
-        EnumSet.of(
-            COLLECTOR_RESTART,
-            RESTART_GAP,
-            WS_DISCONNECT,
-            PU_CHAIN_BREAK,
-            SESSION_SEQ_SKIP,
-            RECOVERY_DEPTH_ANCHOR));
-    CAUSED_BY.put(
-        RESTART_GAP,
-        EnumSet.of(
-            RESTART_GAP, WS_DISCONNECT, PU_CHAIN_BREAK, SESSION_SEQ_SKIP, RECOVERY_DEPTH_ANCHOR));
-    CAUSED_BY.put(
-        KAFKA_PRODUCER_OUTAGE,
-        EnumSet.of(KAFKA_PRODUCER_OUTAGE, KAFKA_DELIVERY_FAILED, KAFKA_OFFSET_RESET, WRITE_ERROR));
-    CAUSED_BY.put(MISSING_HOUR, EnumSet.of(MISSING_HOUR));
   }
 }
