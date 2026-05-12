@@ -1,10 +1,11 @@
 package com.cryptolake.writer.gap;
 
 /**
- * Writer-private helpers on top of {@link com.cryptolake.common.envelope.GapReasons}.
+ * Writer-private string constants for coverage-filter metric labels (design §2.8).
  *
- * <p>Provides string constants used by the writer for coverage-filter reason labels and metrics
- * (design §2.8). No enum — reasons are strings for archival compatibility (Tier 5 M6).
+ * <p>Unrelated to the gap-envelope vocabulary in {@link com.cryptolake.common.envelope.GapReason} —
+ * these labels describe how a gap record was <em>handled</em> by the coverage filter, not the cause
+ * of the gap.
  */
 public final class GapReasonsLocal {
 

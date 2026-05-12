@@ -116,4 +116,15 @@ class GapReasonTest {
         .isInstanceOf(NullPointerException.class)
         .hasMessageContaining("fileReason");
   }
+
+  @Test
+  void everyPersistentReasonHasCausedBySet() {
+    for (GapReason r : GapReason.values()) {
+      if (r.isPersistent()) {
+        assertThat(r.explains(r))
+            .as("persistent reason %s must explain at least itself", r)
+            .isTrue();
+      }
+    }
+  }
 }
