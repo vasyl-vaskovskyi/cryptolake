@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -77,7 +78,7 @@ class LedgerGapSourceTest {
     assertThat(r.stream()).isEqualTo("");
     assertThat(r.startMs()).isEqualTo(START_MS);
     assertThat(r.endMs()).isEqualTo(END_MS);
-    assertThat(r.reason()).isEqualTo("collector_restart");
+    assertThat(r.reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
     assertThat(r.detail())
         .isEqualTo(
             "collector_id=binance-collector-primary; collector_session_id=sess-abc;"
@@ -112,7 +113,7 @@ class LedgerGapSourceTest {
 
     assertThat(records).hasSize(1);
     GapRecord r = records.get(0);
-    assertThat(r.reason()).isEqualTo("restart_gap");
+    assertThat(r.reason()).isEqualTo(GapReason.RESTART_GAP);
     assertThat(r.detail()).contains("maintenance_id=-");
   }
 
@@ -147,7 +148,7 @@ class LedgerGapSourceTest {
     List<GapRecord> records = new LedgerGapSource(tmpDir, mapper).read(scope);
 
     assertThat(records).hasSize(1);
-    assertThat(records.get(0).reason()).isEqualTo("restart_gap");
+    assertThat(records.get(0).reason()).isEqualTo(GapReason.RESTART_GAP);
     assertThat(records.get(0).startMs()).isEqualTo(startNs / 1_000_000L);
     assertThat(records.get(0).endMs()).isEqualTo(shutdownNs / 1_000_000L);
   }
@@ -228,7 +229,7 @@ class LedgerGapSourceTest {
     assertThat(records).hasSize(2);
     assertThat(records)
         .extracting(GapRecord::reason)
-        .containsExactlyInAnyOrder("collector_restart", "restart_gap");
+        .containsExactlyInAnyOrder(GapReason.COLLECTOR_RESTART, GapReason.RESTART_GAP);
   }
 
   // -------------------------------------------------------------------------
@@ -352,7 +353,7 @@ class LedgerGapSourceTest {
     assertThat(records).allMatch(r -> r.exchange().equals("binance"));
     assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
     assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
-    assertThat(records).allMatch(r -> r.reason().equals("collector_restart"));
+    assertThat(records).allMatch(r -> r.reason() == GapReason.COLLECTOR_RESTART);
     assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
     assertThat(records).allMatch(r -> r.startMs() == START_MS);
     assertThat(records).allMatch(r -> r.endMs() == END_MS);

@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.verify.archive.ArchiveScanner;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -34,7 +35,7 @@ import java.util.regex.Pattern;
 public final class MissingHourGapSource implements GapSource {
 
   private static final String SOURCE_LABEL = "file.missing_hour";
-  private static final String REASON = "missing_hour";
+  private static final GapReason REASON = GapReason.MISSING_HOUR;
   private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
   private static final long HOUR_MS = 3_600_000L;
   private static final Pattern HOUR_PATTERN =

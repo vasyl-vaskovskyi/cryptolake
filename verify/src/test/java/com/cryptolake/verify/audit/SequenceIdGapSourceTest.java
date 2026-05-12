@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.ZstdOutputStream;
 import java.io.IOException;
@@ -88,7 +89,7 @@ class SequenceIdGapSourceTest {
     assertThat(records).hasSize(1);
     GapRecord r = records.get(0);
     assertThat(r.source()).isEqualTo("file.sequence_id");
-    assertThat(r.reason()).isEqualTo("session_seq_skip");
+    assertThat(r.reason()).isEqualTo(GapReason.SESSION_SEQ_SKIP);
     assertThat(r.exchange()).isEqualTo("binance");
     assertThat(r.symbol()).isEqualTo("btcusdt");
     assertThat(r.stream()).isEqualTo("trades");

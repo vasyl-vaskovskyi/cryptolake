@@ -1,8 +1,10 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapEnvelope;
 import com.cryptolake.verify.archive.ArchiveFile;
 import com.cryptolake.verify.archive.ArchiveScanner;
 import com.cryptolake.verify.archive.DecompressAndParse;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -90,7 +92,14 @@ public final class FileGapSource implements GapSource {
           if (!"gap".equals(node.path("type").asText())) {
             continue;
           }
-          result.add(toGapRecord(node, archiveFile));
+          GapEnvelope envelope;
+          try {
+            envelope = mapper.treeToValue(node, GapEnvelope.class);
+          } catch (JsonProcessingException e) {
+            throw new IllegalStateException(
+                "Failed to parse gap envelope in " + archiveFile.path(), e);
+          }
+          result.add(toGapRecord(envelope, archiveFile));
         }
       }
     }
@@ -147,20 +156,16 @@ public final class FileGapSource implements GapSource {
     return d.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() + (long) hour * HOUR_MS;
   }
 
-  /** Converts a gap {@link JsonNode} to a {@link GapRecord}. */
-  private static GapRecord toGapRecord(JsonNode node, ArchiveFile archiveFile) {
-    long gapStartNs = node.path("gap_start_ts").asLong();
-    long gapEndNs = node.path("gap_end_ts").asLong();
-    String reason = node.path("reason").asText();
-    String detail = node.path("detail").isNull() ? null : node.path("detail").asText(null);
+  /** Converts a gap {@link GapEnvelope} to a {@link GapRecord}. */
+  private static GapRecord toGapRecord(GapEnvelope envelope, ArchiveFile archiveFile) {
     return new GapRecord(
         SOURCE_LABEL,
         archiveFile.exchange(),
         archiveFile.symbol(),
         archiveFile.stream(),
-        gapStartNs / 1_000_000L,
-        gapEndNs / 1_000_000L,
-        reason,
-        detail);
+        envelope.gapStartTs() / 1_000_000L,
+        envelope.gapEndTs() / 1_000_000L,
+        envelope.reason(),
+        envelope.detail());
   }
 }

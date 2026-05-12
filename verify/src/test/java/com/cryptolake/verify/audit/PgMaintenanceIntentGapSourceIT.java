@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import java.sql.DriverManager;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -100,7 +101,7 @@ class PgMaintenanceIntentGapSourceIT {
     assertThat(r.stream()).isEqualTo("");
     assertThat(r.startMs()).isEqualTo(createdAt.toEpochMilli());
     assertThat(r.endMs()).isEqualTo(consumedAt.toEpochMilli());
-    assertThat(r.reason()).isEqualTo("collector_restart");
+    assertThat(r.reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
     assertThat(r.detail()).contains("maintenance_id=maint-001");
     assertThat(r.detail()).contains("scope=all");
     assertThat(r.detail()).contains("reason=rolling update");
@@ -122,7 +123,7 @@ class PgMaintenanceIntentGapSourceIT {
     GapRecord r = records.get(0);
     assertThat(r.startMs()).isEqualTo(createdAt.toEpochMilli());
     assertThat(r.endMs()).isEqualTo(expiresAt.toEpochMilli());
-    assertThat(r.reason()).isEqualTo("collector_restart");
+    assertThat(r.reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
   }
 
   /** Intent with no consumed_at and no expires_at — endMs is approximately now. */
@@ -220,7 +221,7 @@ class PgMaintenanceIntentGapSourceIT {
     assertThat(records).allMatch(r -> r.exchange().equals("binance"));
     assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
     assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
-    assertThat(records).allMatch(r -> r.reason().equals("collector_restart"));
+    assertThat(records).allMatch(r -> r.reason() == GapReason.COLLECTOR_RESTART);
     assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
     assertThat(records).allMatch(r -> r.startMs() == createdAt.toEpochMilli());
     assertThat(records).allMatch(r -> r.endMs() == consumedAt.toEpochMilli());

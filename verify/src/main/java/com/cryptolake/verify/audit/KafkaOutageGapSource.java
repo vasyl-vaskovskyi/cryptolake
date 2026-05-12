@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
@@ -114,7 +115,7 @@ public final class KafkaOutageGapSource implements GapSource {
 
         String detail = "collector_id=" + collectorId + "; outage_started_at_ns=" + outageNs;
 
-        result.addAll(fanOut(scope, "kafka_producer_outage", outageMs, endMs, detail));
+        result.addAll(fanOut(scope, GapReason.KAFKA_PRODUCER_OUTAGE, outageMs, endMs, detail));
 
       } catch (Exception e) {
         log.warn(
@@ -141,7 +142,7 @@ public final class KafkaOutageGapSource implements GapSource {
    * event.
    */
   private List<GapRecord> fanOut(
-      AuditScope scope, String reason, long startMs, long endMs, String baseDetail) {
+      AuditScope scope, GapReason reason, long startMs, long endMs, String baseDetail) {
     List<String> symbols =
         (scope.symbols() == null || scope.symbols().isEmpty()) ? List.of("") : scope.symbols();
     List<String> streams =

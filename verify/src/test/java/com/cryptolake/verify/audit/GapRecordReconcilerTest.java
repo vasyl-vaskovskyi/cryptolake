@@ -2,16 +2,17 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class GapRecordReconcilerTest {
 
-  private static GapRecord fileRecord(String stream, long startMs, long endMs, String reason) {
+  private static GapRecord fileRecord(String stream, long startMs, long endMs, GapReason reason) {
     return new GapRecord("file.envelope", "binance", "btcusdt", stream, startMs, endMs, reason, "");
   }
 
-  private static GapRecord stateRecord(String stream, long startMs, long endMs, String reason) {
+  private static GapRecord stateRecord(String stream, long startMs, long endMs, GapReason reason) {
     return new GapRecord(
         "pg.component_runtime", "binance", "btcusdt", stream, startMs, endMs, reason, "");
   }
@@ -21,8 +22,8 @@ class GapRecordReconcilerTest {
   @Test
   void restartGapExplainsWsDisconnect() {
     // File: ws_disconnect in [100, 200]; State: restart_gap in [50, 300] — fully covers
-    var file = List.of(fileRecord("depth", 100, 200, "ws_disconnect"));
-    var state = List.of(stateRecord("depth", 50, 300, "restart_gap"));
+    var file = List.of(fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT));
+    var state = List.of(stateRecord("depth", 50, 300, GapReason.RESTART_GAP));
 
     var result = GapRecordReconciler.reconcile(file, state);
 
@@ -38,8 +39,8 @@ class GapRecordReconcilerTest {
   void toleranceAllowsOverlapWithin2s() {
     // State ends at 198; file ends at 200. Overlap check: F.startMs(100) <= S.endMs(198) + 2000 ✓
     // and F.endMs(200) >= S.startMs(50) - 2000 ✓ — should match with default tolerance
-    var file = List.of(fileRecord("depth", 100, 200, "ws_disconnect"));
-    var state = List.of(stateRecord("depth", 50, 198, "restart_gap"));
+    var file = List.of(fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT));
+    var state = List.of(stateRecord("depth", 50, 198, GapReason.RESTART_GAP));
 
     var withDefault = GapRecordReconciler.reconcile(file, state);
     assertThat(withDefault.explained()).hasSize(1);
@@ -49,8 +50,8 @@ class GapRecordReconcilerTest {
   @Test
   void zeroToleranceRejectsNonOverlap() {
     // State window [50, 98] ends before file window [100, 200] starts — no overlap at 0ms tolerance
-    var file = List.of(fileRecord("depth", 100, 200, "ws_disconnect"));
-    var state = List.of(stateRecord("depth", 50, 98, "restart_gap"));
+    var file = List.of(fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT));
+    var state = List.of(stateRecord("depth", 50, 98, GapReason.RESTART_GAP));
 
     var withZero = GapRecordReconciler.reconcile(file, state, 0L);
     assertThat(withZero.unexplained()).hasSize(1);
@@ -62,7 +63,7 @@ class GapRecordReconcilerTest {
 
   @Test
   void noStateRecordsProducesUnexplained() {
-    var file = List.of(fileRecord("depth", 100, 200, "ws_disconnect"));
+    var file = List.of(fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT));
 
     var result = GapRecordReconciler.reconcile(file, List.of());
 
@@ -76,7 +77,7 @@ class GapRecordReconcilerTest {
 
   @Test
   void stateWithNoFileConsequenceIsOrphan() {
-    var state = List.of(stateRecord("depth", 100, 200, "restart_gap"));
+    var state = List.of(stateRecord("depth", 100, 200, GapReason.RESTART_GAP));
 
     var result = GapRecordReconciler.reconcile(List.of(), state);
 
@@ -91,8 +92,8 @@ class GapRecordReconcilerTest {
 
   @Test
   void missingHourDoesNotExplainWsDisconnect() {
-    var file = List.of(fileRecord("depth", 100, 200, "ws_disconnect"));
-    var state = List.of(stateRecord("depth", 50, 300, "missing_hour"));
+    var file = List.of(fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT));
+    var state = List.of(stateRecord("depth", 50, 300, GapReason.MISSING_HOUR));
 
     var result = GapRecordReconciler.reconcile(file, state);
 
@@ -107,8 +108,8 @@ class GapRecordReconcilerTest {
   @Test
   void tupleMismatchOnStreamProducesUnexplainedAndOrphan() {
     // File is depth; state is bookticker — same reason range but different stream
-    var file = List.of(fileRecord("depth", 100, 200, "ws_disconnect"));
-    var state = List.of(stateRecord("bookticker", 100, 200, "restart_gap"));
+    var file = List.of(fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT));
+    var state = List.of(stateRecord("bookticker", 100, 200, GapReason.RESTART_GAP));
 
     var result = GapRecordReconciler.reconcile(file, state);
 
@@ -124,15 +125,15 @@ class GapRecordReconcilerTest {
     // Three file ws_disconnect records across three streams
     var files =
         List.of(
-            fileRecord("depth", 100, 200, "ws_disconnect"),
-            fileRecord("bookticker", 100, 200, "ws_disconnect"),
-            fileRecord("aggTrade", 100, 200, "ws_disconnect"));
+            fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT),
+            fileRecord("bookticker", 100, 200, GapReason.WS_DISCONNECT),
+            fileRecord("aggTrade", 100, 200, GapReason.WS_DISCONNECT));
     // Three state restart_gap records — one per stream, post-fan-out
     var states =
         List.of(
-            stateRecord("depth", 50, 300, "restart_gap"),
-            stateRecord("bookticker", 50, 300, "restart_gap"),
-            stateRecord("aggTrade", 50, 300, "restart_gap"));
+            stateRecord("depth", 50, 300, GapReason.RESTART_GAP),
+            stateRecord("bookticker", 50, 300, GapReason.RESTART_GAP),
+            stateRecord("aggTrade", 50, 300, GapReason.RESTART_GAP));
 
     var result = GapRecordReconciler.reconcile(files, states);
 
@@ -146,8 +147,8 @@ class GapRecordReconcilerTest {
 
   @Test
   void explainedRecordLinksFiileAndState() {
-    var file = fileRecord("depth", 100, 200, "ws_disconnect");
-    var state = stateRecord("depth", 50, 300, "restart_gap");
+    var file = fileRecord("depth", 100, 200, GapReason.WS_DISCONNECT);
+    var state = stateRecord("depth", 50, 300, GapReason.RESTART_GAP);
 
     var result = GapRecordReconciler.reconcile(List.of(file), List.of(state));
 
@@ -162,9 +163,9 @@ class GapRecordReconcilerTest {
   @Test
   void singleStateCanExplainMultipleFileRecordsForSameStream() {
     // Two ws_disconnect gaps in different sub-windows within one restart window
-    var file1 = fileRecord("depth", 100, 150, "ws_disconnect");
-    var file2 = fileRecord("depth", 160, 200, "ws_disconnect");
-    var state = stateRecord("depth", 50, 300, "restart_gap");
+    var file1 = fileRecord("depth", 100, 150, GapReason.WS_DISCONNECT);
+    var file2 = fileRecord("depth", 160, 200, GapReason.WS_DISCONNECT);
+    var state = stateRecord("depth", 50, 300, GapReason.RESTART_GAP);
 
     var result = GapRecordReconciler.reconcile(List.of(file1, file2), List.of(state));
 

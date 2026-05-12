@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -69,7 +70,7 @@ class KafkaOutageGapSourceTest {
     assertThat(r.stream()).isEqualTo("");
     assertThat(r.startMs()).isEqualTo(OUTAGE_START_MS);
     assertThat(r.endMs()).isEqualTo(NOW.toEpochMilli());
-    assertThat(r.reason()).isEqualTo("kafka_producer_outage");
+    assertThat(r.reason()).isEqualTo(GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(r.detail())
         .isEqualTo(
             "collector_id=binance-collector-primary; outage_started_at_ns=" + OUTAGE_START_NS);
@@ -210,7 +211,7 @@ class KafkaOutageGapSourceTest {
     List<GapRecord> records = source.read(scope);
 
     assertThat(records).hasSize(2);
-    assertThat(records).allMatch(r -> r.reason().equals("kafka_producer_outage"));
+    assertThat(records).allMatch(r -> r.reason() == GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(records).allMatch(r -> r.source().equals("kafka_outage"));
   }
 
@@ -253,7 +254,7 @@ class KafkaOutageGapSourceTest {
     assertThat(records).allMatch(r -> r.exchange().equals("binance"));
     assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
     assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
-    assertThat(records).allMatch(r -> r.reason().equals("kafka_producer_outage"));
+    assertThat(records).allMatch(r -> r.reason() == GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
     assertThat(records).allMatch(r -> r.startMs() == OUTAGE_START_MS);
     assertThat(records).allMatch(r -> r.endMs() == NOW.toEpochMilli());

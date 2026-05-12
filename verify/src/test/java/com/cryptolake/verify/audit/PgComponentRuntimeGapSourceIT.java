@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import java.sql.DriverManager;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -108,7 +109,7 @@ class PgComponentRuntimeGapSourceIT {
     assertThat(r.stream()).isEqualTo("");
     assertThat(r.startMs()).isEqualTo(heartbeat.toEpochMilli());
     assertThat(r.endMs()).isEqualTo(shutdown.toEpochMilli());
-    assertThat(r.reason()).isEqualTo("collector_restart");
+    assertThat(r.reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
     assertThat(r.detail()).contains("component=collector");
     assertThat(r.detail()).contains("instance_id=inst-1");
     assertThat(r.detail()).contains("host_boot_id=boot-abc");
@@ -133,7 +134,7 @@ class PgComponentRuntimeGapSourceIT {
 
     assertThat(records).hasSize(1);
     GapRecord r = records.get(0);
-    assertThat(r.reason()).isEqualTo("restart_gap");
+    assertThat(r.reason()).isEqualTo(GapReason.RESTART_GAP);
     assertThat(r.startMs()).isEqualTo(heartbeat.toEpochMilli());
     // endMs should be approximately now (within the window of the test run)
     assertThat(r.endMs()).isBetween(beforeMs - 1000, afterMs + 1000);
@@ -157,7 +158,7 @@ class PgComponentRuntimeGapSourceIT {
     List<GapRecord> records = new PgComponentRuntimeGapSource(config()).read(scope());
     assertThat(records).hasSize(1);
     GapRecord r = records.get(0);
-    assertThat(r.reason()).isEqualTo("restart_gap");
+    assertThat(r.reason()).isEqualTo(GapReason.RESTART_GAP);
     assertThat(r.startMs()).isEqualTo(heartbeat.toEpochMilli());
     assertThat(r.endMs()).isEqualTo(cleanShutdown.toEpochMilli());
   }
@@ -254,7 +255,7 @@ class PgComponentRuntimeGapSourceIT {
     assertThat(records).allMatch(r -> r.exchange().equals("binance"));
     assertThat(records).allMatch(r -> r.symbol().equals("btcusdt"));
     assertThat(records).extracting(GapRecord::stream).containsExactlyInAnyOrder("depth", "trades");
-    assertThat(records).allMatch(r -> r.reason().equals("collector_restart"));
+    assertThat(records).allMatch(r -> r.reason() == GapReason.COLLECTOR_RESTART);
     assertThat(records).allMatch(r -> r.detail().contains("fanout=true"));
     assertThat(records).allMatch(r -> r.startMs() == heartbeat.toEpochMilli());
     assertThat(records).allMatch(r -> r.endMs() == shutdown.toEpochMilli());

@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -43,7 +44,7 @@ public final class ManifestGapSource implements GapSource {
   private static final Logger log = LoggerFactory.getLogger(ManifestGapSource.class);
 
   private static final String SOURCE_LABEL = "manifest";
-  private static final String REASON = "missing_hour";
+  private static final GapReason REASON = GapReason.MISSING_HOUR;
   private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
   private static final long HOUR_MS = 3_600_000L;
 

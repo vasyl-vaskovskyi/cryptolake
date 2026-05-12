@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -104,7 +105,7 @@ public final class PgComponentRuntimeGapSource implements GapSource {
                   ? cleanShutdown.toInstant().toEpochMilli()
                   : Instant.now().toEpochMilli();
 
-          String reason = plannedShutdown ? "collector_restart" : "restart_gap";
+          GapReason reason = plannedShutdown ? GapReason.COLLECTOR_RESTART : GapReason.RESTART_GAP;
           String detail =
               "component="
                   + component
@@ -142,7 +143,7 @@ public final class PgComponentRuntimeGapSource implements GapSource {
    * event.
    */
   private List<GapRecord> fanOut(
-      AuditScope scope, String reason, long startMs, long endMs, String baseDetail) {
+      AuditScope scope, GapReason reason, long startMs, long endMs, String baseDetail) {
     List<String> symbols =
         (scope.symbols() == null || scope.symbols().isEmpty()) ? List.of("") : scope.symbols();
     List<String> streams =

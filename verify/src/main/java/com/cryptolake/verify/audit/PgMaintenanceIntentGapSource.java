@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -101,7 +102,7 @@ public final class PgMaintenanceIntentGapSource implements GapSource {
                   + "; planned_by="
                   + (plannedBy != null ? plannedBy : "-");
 
-          result.addAll(fanOut(scope, "collector_restart", startMs, endMs, detail));
+          result.addAll(fanOut(scope, GapReason.COLLECTOR_RESTART, startMs, endMs, detail));
         }
       }
     } catch (SQLException e) {
@@ -128,7 +129,7 @@ public final class PgMaintenanceIntentGapSource implements GapSource {
    * event.
    */
   private List<GapRecord> fanOut(
-      AuditScope scope, String reason, long startMs, long endMs, String baseDetail) {
+      AuditScope scope, GapReason reason, long startMs, long endMs, String baseDetail) {
     List<String> symbols =
         (scope.symbols() == null || scope.symbols().isEmpty()) ? List.of("") : scope.symbols();
     List<String> streams =

@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.github.luben.zstd.ZstdOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -89,7 +90,7 @@ class MissingHourGapSourceTest {
     assertThat(r.exchange()).isEqualTo("binance");
     assertThat(r.symbol()).isEqualTo("btcusdt");
     assertThat(r.stream()).isEqualTo("bookticker");
-    assertThat(r.reason()).isEqualTo("missing_hour");
+    assertThat(r.reason()).isEqualTo(GapReason.MISSING_HOUR);
     // hour 6 start = day start + 6h
     long hour6Start = DAY_START_MS + 6 * HOUR_MS;
     assertThat(r.startMs()).isEqualTo(hour6Start);
@@ -220,7 +221,7 @@ class MissingHourGapSourceTest {
 
     // 23 missing on day 1 + 23 missing on day 2 = 46
     assertThat(records).hasSize(46);
-    assertThat(records).allMatch(r -> r.reason().equals("missing_hour"));
+    assertThat(records).allMatch(r -> r.reason() == GapReason.MISSING_HOUR);
     assertThat(records).allMatch(r -> r.source().equals("file.missing_hour"));
   }
 }

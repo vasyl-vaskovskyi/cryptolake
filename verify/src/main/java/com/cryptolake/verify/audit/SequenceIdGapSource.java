@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.verify.archive.ArchiveFile;
 import com.cryptolake.verify.archive.ArchiveScanner;
 import com.cryptolake.verify.archive.DecompressAndParse;
@@ -43,7 +44,7 @@ import java.util.List;
 public final class SequenceIdGapSource implements GapSource {
 
   private static final String SOURCE_LABEL = "file.sequence_id";
-  private static final String REASON = "session_seq_skip";
+  private static final GapReason REASON = GapReason.SESSION_SEQ_SKIP;
   private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
   private static final long HOUR_MS = 3_600_000L;
 

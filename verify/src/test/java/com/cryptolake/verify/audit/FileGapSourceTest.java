@@ -90,7 +90,7 @@ class FileGapSourceTest {
     assertThat(r.stream()).isEqualTo("bookticker");
     assertThat(r.startMs()).isEqualTo(HOUR_9_START_MS);
     assertThat(r.endMs()).isEqualTo(HOUR_9_END_MS);
-    assertThat(r.reason()).isEqualTo("ws_disconnect");
+    assertThat(r.reason()).isEqualTo(GapReason.WS_DISCONNECT);
     assertThat(r.detail()).isEqualTo("test detail");
   }
 
@@ -161,7 +161,7 @@ class FileGapSourceTest {
 
     List<GapRecord> records = new FileGapSource(mapper).read(scope);
     assertThat(records).hasSize(1);
-    assertThat(records.get(0).reason()).isEqualTo("ws_disconnect");
+    assertThat(records.get(0).reason()).isEqualTo(GapReason.WS_DISCONNECT);
     assertThat(records.get(0).detail()).isNull();
   }
 

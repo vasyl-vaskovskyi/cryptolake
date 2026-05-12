@@ -2,6 +2,7 @@ package com.cryptolake.verify.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -97,7 +98,7 @@ class ManifestGapSourceTest {
     assertThat(r9.symbol()).isEqualTo("btcusdt");
     assertThat(r9.stream()).isEqualTo("bookticker");
     assertThat(r9.endMs()).isEqualTo(hour9Start + 3_599_999L);
-    assertThat(r9.reason()).isEqualTo("missing_hour");
+    assertThat(r9.reason()).isEqualTo(GapReason.MISSING_HOUR);
     assertThat(r9.detail()).isEqualTo("manifest=2026-05-11; hour=9");
 
     GapRecord r10 =

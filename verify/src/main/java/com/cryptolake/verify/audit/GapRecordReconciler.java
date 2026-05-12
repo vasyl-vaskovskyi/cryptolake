@@ -7,7 +7,7 @@ import java.util.Set;
 
 /**
  * Matches file-side gap records against state-side gap records using interval-overlap and
- * reason-equivalence (see {@link ReasonCausedBy}).
+ * reason-equivalence (see {@link com.cryptolake.common.envelope.GapReason#explains}).
  *
  * <p>Replaces the old exact-tuple diff, which could not bridge the 1-to-N relationship between a
  * single state event (one PG row for a planned restart) and the N file-side gap envelopes it
@@ -19,7 +19,7 @@ import java.util.Set;
  *
  * <ol>
  *   <li>Same (exchange, symbol, stream) tuple.
- *   <li>{@link ReasonCausedBy#explains(String, String) ReasonCausedBy.explains(S.reason, F.reason)}
+ *   <li>{@link com.cryptolake.common.envelope.GapReason#explains S.reason().explains(F.reason())}
  *       is {@code true}.
  *   <li>The time windows overlap within {@code toleranceMs}: {@code F.endMs >= S.startMs -
  *       toleranceMs && F.startMs <= S.endMs + toleranceMs}.
@@ -125,7 +125,8 @@ public final class GapRecordReconciler {
    *
    * <ol>
    *   <li>Same (exchange, symbol, stream) tuple.
-   *   <li>{@link ReasonCausedBy#explains} returns {@code true} for (s.reason, f.reason).
+   *   <li>{@link com.cryptolake.common.envelope.GapReason#explains} returns {@code true} for
+   *       (s.reason, f.reason).
    *   <li>Time windows overlap: {@code f.endMs >= s.startMs - toleranceMs && f.startMs <= s.endMs +
    *       toleranceMs}.
    * </ol>
@@ -138,7 +139,7 @@ public final class GapRecordReconciler {
       return false;
     }
     // 2. Reason-equivalence check
-    if (!ReasonCausedBy.explains(s.reason(), f.reason())) {
+    if (!s.reason().explains(f.reason())) {
       return false;
     }
     // 3. Interval-overlap check with tolerance

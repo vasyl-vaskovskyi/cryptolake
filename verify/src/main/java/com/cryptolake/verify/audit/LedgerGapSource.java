@@ -1,5 +1,6 @@
 package com.cryptolake.verify.audit;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.BufferedReader;
@@ -103,7 +104,7 @@ public final class LedgerGapSource implements GapSource {
    * event.
    */
   private List<GapRecord> fanOut(
-      AuditScope scope, String reason, long startMs, long endMs, String baseDetail) {
+      AuditScope scope, GapReason reason, long startMs, long endMs, String baseDetail) {
     List<String> symbols =
         (scope.symbols() == null || scope.symbols().isEmpty()) ? List.of("") : scope.symbols();
     List<String> streams =
@@ -179,7 +180,7 @@ public final class LedgerGapSource implements GapSource {
                 node.has("maintenance_id") ? node.path("maintenance_id").asText(null) : null;
             String bootId = hostBootBySession.getOrDefault(sessionId, hostBootId);
 
-            String reason = planned ? "collector_restart" : "restart_gap";
+            GapReason reason = planned ? GapReason.COLLECTOR_RESTART : GapReason.RESTART_GAP;
             String detail =
                 "collector_id="
                     + collectorId

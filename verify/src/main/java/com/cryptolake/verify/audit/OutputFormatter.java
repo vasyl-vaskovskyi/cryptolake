@@ -132,7 +132,7 @@ public final class OutputFormatter {
               truncate(r.stream(), W_STREAM),
               r.startMs(),
               r.endMs(),
-              truncate(r.reason(), W_REASON),
+              truncate(r.reason().wire(), W_REASON),
               r.detail() != null ? r.detail() : ""));
     }
     return sb.toString();
@@ -286,7 +286,7 @@ public final class OutputFormatter {
               "EXPLAINED",
               truncate(f.source(), W_FILE_SRC),
               truncate(s.source(), W_STATE_SRC),
-              truncate(f.reason(), W_REASON),
+              truncate(f.reason().wire(), W_REASON),
               truncate(f.exchange(), W_EXCHANGE),
               truncate(f.symbol(), W_SYMBOL),
               truncate(f.stream(), W_STREAM),
@@ -315,7 +315,7 @@ public final class OutputFormatter {
               "UNEXPLAINED",
               truncate(f.source(), W_FILE_SRC),
               "—",
-              truncate(f.reason(), W_REASON),
+              truncate(f.reason().wire(), W_REASON),
               truncate(f.exchange(), W_EXCHANGE),
               truncate(f.symbol(), W_SYMBOL),
               truncate(f.stream(), W_STREAM),
@@ -344,7 +344,7 @@ public final class OutputFormatter {
               "orphan",
               "—",
               truncate(s.source(), W_STATE_SRC),
-              truncate(s.reason(), W_REASON),
+              truncate(s.reason().wire(), W_REASON),
               truncate(s.exchange(), W_EXCHANGE),
               truncate(s.symbol(), W_SYMBOL),
               truncate(s.stream(), W_STREAM),
