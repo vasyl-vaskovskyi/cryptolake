@@ -362,7 +362,7 @@ public final class KafkaConsumerLoop implements Runnable {
               -1L,
               now,
               now,
-              "kafka_offset_reset",
+              com.cryptolake.common.envelope.GapReason.KAFKA_OFFSET_RESET,
               partitionDetail,
               () -> now);
       gaps.emitUnfiltered(gap, "primary", tp.topic(), tp.partition());

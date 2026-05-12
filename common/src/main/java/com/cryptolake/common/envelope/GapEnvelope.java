@@ -13,8 +13,8 @@ import java.util.Map;
  * 3 §21). Optional fields are omitted from JSON when {@code null} via
  * {@code @JsonInclude(NON_NULL)} (replaces Python's {@code _SENTINEL} pattern).
  *
- * <p>Compact constructor validates {@code reason} against {@link GapReasons#VALID} (Tier 2 §16;
- * Tier 5 M6).
+ * <p>Compact constructor null-checks {@code reason}. Vocabulary is enforced by the {@link
+ * GapReason} type.
  *
  * <p>Immutable record — no setters (Tier 2 §12).
  */
@@ -50,7 +50,7 @@ public record GapEnvelope(
     @JsonProperty("session_seq") long sessionSeq,
     @JsonProperty("gap_start_ts") long gapStartTs,
     @JsonProperty("gap_end_ts") long gapEndTs,
-    @JsonProperty("reason") String reason,
+    @JsonProperty("reason") GapReason reason,
     @JsonProperty("detail") String detail,
     // Optional restart metadata fields — omitted from JSON when null
     @JsonProperty("component") String component,
@@ -60,9 +60,9 @@ public record GapEnvelope(
     @JsonProperty("evidence") Map<String, Object> evidence,
     @JsonProperty("maintenance_id") String maintenanceId) {
 
-  /** Compact constructor: validates reason (Tier 5 M6; Tier 2 §16). */
+  /** Compact constructor: null-checks reason (vocabulary enforced by {@link GapReason}). */
   public GapEnvelope {
-    GapReasons.requireValid(reason);
+    java.util.Objects.requireNonNull(reason, "reason");
   }
 
   /**
@@ -79,7 +79,7 @@ public record GapEnvelope(
       long sessionSeq,
       long gapStartTs,
       long gapEndTs,
-      String reason,
+      GapReason reason,
       String detail,
       ClockSupplier clock) {
     return new GapEnvelope(
@@ -115,7 +115,7 @@ public record GapEnvelope(
       long sessionSeq,
       long gapStartTs,
       long gapEndTs,
-      String reason,
+      GapReason reason,
       String detail,
       ClockSupplier clock,
       String component,

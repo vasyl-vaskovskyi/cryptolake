@@ -4,6 +4,7 @@ import com.cryptolake.collector.CollectorSession;
 import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.common.envelope.DataEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.util.List;
@@ -133,7 +134,7 @@ public final class SnapshotScheduler {
           symbol,
           "depth_snapshot",
           -1L,
-          "snapshot_poll_miss",
+          GapReason.SNAPSHOT_POLL_MISS,
           "REST snapshot fetch failed after 3 retries");
       return;
     }

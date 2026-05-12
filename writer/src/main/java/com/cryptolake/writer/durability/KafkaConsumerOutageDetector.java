@@ -57,7 +57,7 @@ public final class KafkaConsumerOutageDetector {
         String symbol,
         String stream,
         long sessionSeq,
-        String reason,
+        com.cryptolake.common.envelope.GapReason reason,
         String detail,
         long gapStartTs,
         long gapEndTs);
@@ -196,7 +196,13 @@ public final class KafkaConsumerOutageDetector {
         log.info("kafka_consumer_outage_detected", "silence_ms", silenceDuration / 1_000_000L);
         for (SymbolStream ss : symbolStreams) {
           gapEmitAction.emitWithTimestamps(
-              ss.symbol(), ss.stream(), -1L, "kafka_consumer_outage", detail, lastAt, now);
+              ss.symbol(),
+              ss.stream(),
+              -1L,
+              com.cryptolake.common.envelope.GapReason.KAFKA_CONSUMER_OUTAGE,
+              detail,
+              lastAt,
+              now);
         }
       }
     }

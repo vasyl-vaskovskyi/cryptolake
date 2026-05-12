@@ -93,7 +93,8 @@ class DepthStreamHandlerTest {
     handler.handle("btcusdt", depthRaw(106L, 110L, 103L), 1234L, 1L);
     assertThat(puBreakTriggers).containsExactly("btcusdt");
     assertThat(producer.gapEnvelopes).hasSize(1);
-    assertThat(producer.gapEnvelopes.get(0).reason()).isEqualTo("pu_chain_break");
+    assertThat(producer.gapEnvelopes.get(0).reason())
+        .isEqualTo(com.cryptolake.common.envelope.GapReason.PU_CHAIN_BREAK);
   }
 
   @Test

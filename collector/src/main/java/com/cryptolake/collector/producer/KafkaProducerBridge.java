@@ -5,6 +5,7 @@ import com.cryptolake.common.config.ProducerConfig;
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.kafka.TopicNames;
 import com.cryptolake.common.logging.StructuredLogger;
 import java.io.UncheckedIOException;
@@ -366,7 +367,7 @@ public class KafkaProducerBridge {
             env.symbol(),
             env.stream(),
             env.sessionSeq(),
-            "kafka_delivery_failed",
+            GapReason.KAFKA_DELIVERY_FAILED,
             "Kafka delivery error: " + ex.getMessage(),
             env.receivedAt(),
             System.nanoTime());

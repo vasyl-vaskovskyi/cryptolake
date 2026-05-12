@@ -163,7 +163,7 @@ class AuditBackfillCommandTest {
         1L,
         startNs,
         endNs,
-        "collector_restart",
+        com.cryptolake.common.envelope.GapReason.COLLECTOR_RESTART,
         "test",
         () -> startNs);
   }

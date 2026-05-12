@@ -48,7 +48,7 @@ public final class DiskFullHoldController {
         String symbol,
         String stream,
         long sessionSeq,
-        String reason,
+        com.cryptolake.common.envelope.GapReason reason,
         String detail,
         long gapStartTs,
         long gapEndTs);
@@ -208,7 +208,13 @@ public final class DiskFullHoldController {
   private void emitHoldGaps(String detail, long gapStart, long gapEnd) {
     for (SymbolStream ss : symbolStreams) {
       gapEmitAction.emitWithTimestamps(
-          ss.symbol(), ss.stream(), -1L, "disk_full_hold", detail, gapStart, gapEnd);
+          ss.symbol(),
+          ss.stream(),
+          -1L,
+          com.cryptolake.common.envelope.GapReason.DISK_FULL_HOLD,
+          detail,
+          gapStart,
+          gapEnd);
     }
   }
 

@@ -2,6 +2,7 @@ package com.cryptolake.writer.consumer;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.StreamKey;
 import com.cryptolake.writer.durability.LifecycleJournalReader;
@@ -299,7 +300,7 @@ public final class RecoveryCoordinator {
             -1L, // writer-injected (Tier 5 M10)
             gapStartTs,
             env.receivedAt(),
-            "restart_gap",
+            GapReason.RESTART_GAP,
             "writer restart detected",
             clock,
             classification.component(),

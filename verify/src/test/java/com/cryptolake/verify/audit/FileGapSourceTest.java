@@ -60,7 +60,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             "test detail",
             () -> gapStartNs);
 
@@ -108,7 +108,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 
@@ -139,7 +139,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 
@@ -178,7 +178,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 

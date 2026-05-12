@@ -66,7 +66,7 @@ class CoverageFilterFailoverFlapTest {
         -1L,
         gapStartTs,
         gapEndTs,
-        "pu_chain_break",
+        com.cryptolake.common.envelope.GapReason.PU_CHAIN_BREAK,
         "regression: backup tailed through flap",
         null,
         null,

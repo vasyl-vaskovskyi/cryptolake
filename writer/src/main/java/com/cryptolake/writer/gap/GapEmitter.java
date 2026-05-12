@@ -57,7 +57,9 @@ public final class GapEmitter {
    */
   public boolean emit(GapEnvelope gap, String source, String topic, int partition, long offset) {
     // (1) Increment metric (Tier 1 §5 action 1)
-    metrics.gapRecordsWritten(gap.exchange(), gap.symbol(), gap.stream(), gap.reason()).increment();
+    metrics
+        .gapRecordsWritten(gap.exchange(), gap.symbol(), gap.stream(), gap.reason().wire())
+        .increment();
 
     // (2) Log structured event (Tier 1 §5 action 2; Tier 5 H2)
     log.info(
@@ -69,7 +71,7 @@ public final class GapEmitter {
         "stream",
         gap.stream(),
         "reason",
-        gap.reason(),
+        gap.reason().wire(),
         "gap_start_ts",
         gap.gapStartTs(),
         "gap_end_ts",
@@ -107,7 +109,9 @@ public final class GapEmitter {
    */
   public void emitUnfiltered(GapEnvelope gap, String source, String topic, int partition) {
     // (1) Increment metric
-    metrics.gapRecordsWritten(gap.exchange(), gap.symbol(), gap.stream(), gap.reason()).increment();
+    metrics
+        .gapRecordsWritten(gap.exchange(), gap.symbol(), gap.stream(), gap.reason().wire())
+        .increment();
 
     // (2) Log
     log.info(
@@ -119,7 +123,7 @@ public final class GapEmitter {
         "stream",
         gap.stream(),
         "reason",
-        gap.reason(),
+        gap.reason().wire(),
         "source",
         source);
 

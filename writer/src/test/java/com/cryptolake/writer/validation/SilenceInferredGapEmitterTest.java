@@ -27,7 +27,7 @@ class SilenceInferredGapEmitterTest {
       String symbol,
       String stream,
       long sessionSeq,
-      String reason,
+      com.cryptolake.common.envelope.GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}

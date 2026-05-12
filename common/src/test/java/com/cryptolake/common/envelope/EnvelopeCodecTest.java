@@ -56,7 +56,7 @@ class EnvelopeCodecTest {
             0L,
             0L,
             1L,
-            "ws_disconnect",
+            GapReason.WS_DISCONNECT,
             "test",
             Clocks.fixed(0L));
 

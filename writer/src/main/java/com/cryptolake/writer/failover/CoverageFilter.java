@@ -2,6 +2,7 @@ package com.cryptolake.writer.failover;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import java.util.ArrayList;
@@ -116,7 +117,7 @@ public final class CoverageFilter {
     // checkpoint's last_received_at, far in the past). sweepExpired then suppresses it.
     // The restart_gap is preserved as a per-stream operational marker only when the other
     // source genuinely failed to cover (e.g. both collectors down through the window).
-    boolean isRestartGap = "restart_gap".equals(gap.reason());
+    boolean isRestartGap = GapReason.RESTART_GAP == gap.reason();
 
     if (!filterEnabled && !isRestartGap) {
       return true; // No coverage filter when only one source seen
@@ -170,7 +171,7 @@ public final class CoverageFilter {
           gap.symbol(),
           gap.stream(),
           source,
-          gap.reason(),
+          gap.reason().wire(),
           otherSource,
           gracePeriodSeconds,
           gracePeriodSeconds,
@@ -187,7 +188,7 @@ public final class CoverageFilter {
         gap.symbol(),
         gap.stream(),
         source,
-        gap.reason(),
+        gap.reason().wire(),
         otherSource,
         gap.gapStartTs(),
         otherLastTs,
@@ -237,7 +238,7 @@ public final class CoverageFilter {
               g.stream(),
               gracePeriodSeconds,
               pg.source(),
-              g.reason());
+              g.reason().wire());
         } else {
           // Archive: grace expired, the other source did not cover THIS stream
           toArchive.add(pg.gap());
@@ -250,7 +251,7 @@ public final class CoverageFilter {
               g.symbol(),
               g.stream(),
               pg.source(),
-              g.reason());
+              g.reason().wire());
         }
         it.remove();
       }

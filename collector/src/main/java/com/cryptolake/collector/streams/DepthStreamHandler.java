@@ -10,6 +10,7 @@ import com.cryptolake.collector.gap.SeqGap;
 import com.cryptolake.collector.gap.SessionSeqTracker;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.common.envelope.DataEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.util.ArrayList;
@@ -94,7 +95,7 @@ public final class DepthStreamHandler implements StreamHandler {
           symbol,
           "depth",
           sessionSeq,
-          "session_seq_skip",
+          GapReason.SESSION_SEQ_SKIP,
           "Expected seq " + g.expected() + " got " + g.actual());
     }
 
@@ -128,7 +129,7 @@ public final class DepthStreamHandler implements StreamHandler {
       if (result.isGap()) {
         // pu-chain break: emit gap and trigger resync
         log.info("pu_chain_break", "symbol", symbol, "reason", result.reason());
-        gapEmitter.emit(symbol, "depth", sessionSeq, "pu_chain_break", result.reason());
+        gapEmitter.emit(symbol, "depth", sessionSeq, GapReason.PU_CHAIN_BREAK, result.reason());
         detector.reset();
         onPuChainBreak.accept(symbol);
       } else {
@@ -175,7 +176,7 @@ public final class DepthStreamHandler implements StreamHandler {
           symbol,
           "depth",
           -1L,
-          "pu_chain_break",
+          GapReason.PU_CHAIN_BREAK,
           "Dropped " + drops + " diffs while buffering (buffer full)",
           firstDrop,
           clock.nowNs());
@@ -203,7 +204,7 @@ public final class DepthStreamHandler implements StreamHandler {
               symbol,
               "depth",
               diff.sessionSeq(),
-              "pu_chain_break",
+              GapReason.PU_CHAIN_BREAK,
               "pu chain break during snapshot replay: " + result.reason());
           detector.reset();
           onPuChainBreak.accept(symbol);

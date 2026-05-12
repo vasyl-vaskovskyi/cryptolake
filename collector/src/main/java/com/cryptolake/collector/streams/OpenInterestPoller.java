@@ -6,6 +6,7 @@ import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.metrics.CollectorMetrics;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.common.envelope.DataEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.io.IOException;
@@ -179,7 +180,7 @@ public final class OpenInterestPoller {
         symbol,
         "open_interest",
         -1L,
-        "snapshot_poll_miss",
+        GapReason.SNAPSHOT_POLL_MISS,
         "Open interest fetch failed after " + MAX_RETRIES + " retries");
   }
 }

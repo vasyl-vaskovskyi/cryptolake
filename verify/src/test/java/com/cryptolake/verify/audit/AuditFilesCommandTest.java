@@ -114,7 +114,7 @@ class AuditFilesCommandTest {
             1L,
             gapStartNs,
             gapEndNs,
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             "test detail",
             () -> gapStartNs);
 
@@ -186,7 +186,7 @@ class AuditFilesCommandTest {
             1L,
             gapStartNs,
             gapEndNs,
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 

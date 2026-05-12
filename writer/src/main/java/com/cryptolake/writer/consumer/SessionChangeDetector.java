@@ -2,6 +2,7 @@ package com.cryptolake.writer.consumer;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.StreamKey;
 import com.cryptolake.writer.failover.CoverageFilter;
@@ -122,7 +123,7 @@ public final class SessionChangeDetector {
             -1L, // writer-injected sentinel (Tier 5 M10)
             prev.receivedAtNs(),
             env.receivedAt(),
-            "collector_restart",
+            GapReason.COLLECTOR_RESTART,
             "collector_session_id changed from "
                 + prev.sessionId()
                 + " to "

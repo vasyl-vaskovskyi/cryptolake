@@ -32,7 +32,7 @@ class GapEnvelopeTest {
             100L,
             1_000_000_000_000_000_000L,
             1_000_000_005_000_000_000L,
-            "ws_disconnect",
+            GapReason.WS_DISCONNECT,
             "WebSocket closed after 2h, reconnected in 1.2s",
             Clocks.systemNanoClock());
 
@@ -43,7 +43,7 @@ class GapEnvelopeTest {
     assertThat(env.stream()).isEqualTo("depth");
     assertThat(env.gapStartTs()).isEqualTo(1_000_000_000_000_000_000L);
     assertThat(env.gapEndTs()).isEqualTo(1_000_000_005_000_000_000L);
-    assertThat(env.reason()).isEqualTo("ws_disconnect");
+    assertThat(env.reason()).isEqualTo(GapReason.WS_DISCONNECT);
     assertThat(env.detail()).isEqualTo("WebSocket closed after 2h, reconnected in 1.2s");
     // Optional restart metadata must be null (omitted from JSON via @JsonInclude(NON_NULL))
     assertThat(env.component()).isNull();
@@ -66,7 +66,7 @@ class GapEnvelopeTest {
             100L,
             1_000_000_000_000_000_000L,
             1_000_000_005_000_000_000L,
-            "restart_gap",
+            GapReason.RESTART_GAP,
             "collector restarted for upgrade",
             Clocks.systemNanoClock(),
             "ws_collector",
@@ -76,7 +76,7 @@ class GapEnvelopeTest {
             Map.of("exit_code", 0, "uptime_seconds", 86400),
             "maint-2026-01-15-001");
 
-    assertThat(env.reason()).isEqualTo("restart_gap");
+    assertThat(env.reason()).isEqualTo(GapReason.RESTART_GAP);
     assertThat(env.component()).isEqualTo("ws_collector");
     assertThat(env.cause()).isEqualTo("upgrade");
     assertThat(env.planned()).isTrue();
@@ -98,7 +98,7 @@ class GapEnvelopeTest {
             0L,
             0L,
             1L,
-            "restart_gap",
+            GapReason.RESTART_GAP,
             "bare restart gap",
             Clocks.fixed(0L));
 
@@ -123,7 +123,7 @@ class GapEnvelopeTest {
             0L,
             0L,
             1L,
-            "restart_gap",
+            GapReason.RESTART_GAP,
             "partial metadata",
             Clocks.fixed(0L),
             "snapshot_poller",
@@ -154,11 +154,11 @@ class GapEnvelopeTest {
             0L,
             0L,
             1L,
-            "ws_disconnect",
+            GapReason.WS_DISCONNECT,
             "normal disconnect",
             Clocks.fixed(0L));
 
-    assertThat(env.reason()).isEqualTo("ws_disconnect");
+    assertThat(env.reason()).isEqualTo(GapReason.WS_DISCONNECT);
     assertThat(env.component()).isNull();
     assertThat(env.cause()).isNull();
     assertThat(env.planned()).isNull();
@@ -180,31 +180,47 @@ class GapEnvelopeTest {
             -1L,
             1000L,
             2000L,
-            "checkpoint_lost",
+            GapReason.CHECKPOINT_LOST,
             "No durable checkpoint; recovered gap bounds from archive",
             Clocks.fixed(0L));
 
-    assertThat(env.reason()).isEqualTo("checkpoint_lost");
+    assertThat(env.reason()).isEqualTo(GapReason.CHECKPOINT_LOST);
     assertThat(env.type()).isEqualTo("gap");
   }
 
   @Test
   void invalidReasonThrows() {
     // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_gap_invalid_reason_raises
-    assertThatThrownBy(
-            () ->
-                GapEnvelope.create(
-                    "binance",
-                    "btcusdt",
-                    "trades",
-                    "s",
-                    0L,
-                    0L,
-                    1L,
-                    "invalid_reason",
-                    "test",
-                    Clocks.fixed(0L)))
-        .isInstanceOf(IllegalArgumentException.class)
+    // GapReason.fromWire rejects unknown wire strings; the JSON deserialization path proves
+    // the vocabulary is enforced by the enum itself.
+    com.fasterxml.jackson.databind.ObjectMapper m = EnvelopeCodec.newMapper();
+    String json =
+        "{\"v\":1,\"type\":\"gap\",\"exchange\":\"binance\",\"symbol\":\"btcusdt\","
+            + "\"stream\":\"trades\",\"received_at\":0,\"collector_session_id\":\"s\","
+            + "\"session_seq\":0,\"gap_start_ts\":0,\"gap_end_ts\":1,"
+            + "\"reason\":\"invalid_reason\",\"detail\":\"test\"}";
+    assertThatThrownBy(() -> m.readValue(json, GapEnvelope.class))
         .hasMessageContaining("invalid_reason");
+  }
+
+  @Test
+  void wireFormatStableAcrossEnumMigration() throws Exception {
+    com.fasterxml.jackson.databind.ObjectMapper m = EnvelopeCodec.newMapper();
+    GapEnvelope env =
+        GapEnvelope.create(
+            "binance",
+            "btcusdt",
+            "depth",
+            "session-1",
+            42L,
+            1_000L,
+            2_000L,
+            GapReason.WS_DISCONNECT,
+            "detail",
+            () -> 1_500_000_000L);
+    String json = m.writeValueAsString(env);
+    org.assertj.core.api.Assertions.assertThat(json).contains("\"reason\":\"ws_disconnect\"");
+    GapEnvelope round = m.readValue(json, GapEnvelope.class);
+    org.assertj.core.api.Assertions.assertThat(round.reason()).isEqualTo(GapReason.WS_DISCONNECT);
   }
 }

@@ -6,6 +6,7 @@ import com.cryptolake.collector.gap.SeqGap;
 import com.cryptolake.collector.gap.SessionSeqTracker;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.common.envelope.DataEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.util.HashMap;
@@ -73,7 +74,7 @@ public final class SimpleStreamHandler implements StreamHandler {
           symbol,
           streamName,
           sessionSeq,
-          "session_seq_skip",
+          GapReason.SESSION_SEQ_SKIP,
           "Expected seq " + g.expected() + " got " + g.actual());
     }
 

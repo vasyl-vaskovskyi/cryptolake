@@ -1,6 +1,7 @@
 package com.cryptolake.writer.validation;
 
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.failover.CoverageFilter;
@@ -57,7 +58,7 @@ public final class SilenceInferredGapEmitter {
         String symbol,
         String stream,
         long sessionSeq,
-        String reason,
+        GapReason reason,
         String detail,
         long gapStartTs,
         long gapEndTs);
@@ -190,7 +191,13 @@ public final class SilenceInferredGapEmitter {
                 ss.symbol(),
                 ss.stream());
             gapEmitAction.emitWithTimestamps(
-                ss.symbol(), ss.stream(), -1L, "both_collectors_silent", detail, gapStart, now);
+                ss.symbol(),
+                ss.stream(),
+                -1L,
+                GapReason.BOTH_COLLECTORS_SILENT,
+                detail,
+                gapStart,
+                now);
           }
         }
       } else {

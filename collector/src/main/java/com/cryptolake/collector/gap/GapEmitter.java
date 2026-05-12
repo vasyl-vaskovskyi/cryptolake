@@ -5,6 +5,7 @@ import com.cryptolake.collector.metrics.CollectorMetrics;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.collector.producer.OverflowWindow;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 
@@ -48,7 +49,7 @@ public final class GapEmitter {
   }
 
   /** Emits a gap with {@code now} as both gap_start_ts and gap_end_ts. */
-  public void emit(String symbol, String stream, long sessionSeq, String reason, String detail) {
+  public void emit(String symbol, String stream, long sessionSeq, GapReason reason, String detail) {
     long now = clock.nowNs();
     emitWithTimestamps(symbol, stream, sessionSeq, reason, detail, now, now);
   }
@@ -58,13 +59,13 @@ public final class GapEmitter {
       String symbol,
       String stream,
       long sessionSeq,
-      String reason,
+      GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {
 
     // (1) Metric increment (Tier 1 §5 action 1)
-    metrics.gapsDetected(exchange, symbol, stream, reason).increment();
+    metrics.gapsDetected(exchange, symbol, stream, reason.wire()).increment();
 
     // (2) Structured log (Tier 1 §5 action 2; Tier 5 H2)
     log.info(
@@ -76,7 +77,7 @@ public final class GapEmitter {
         "stream",
         stream,
         "reason",
-        reason,
+        reason.wire(),
         "gap_start_ts",
         gapStartTs,
         "gap_end_ts",
@@ -112,6 +113,7 @@ public final class GapEmitter {
             + stream
             + "/"
             + symbol;
-    emitWithTimestamps(symbol, stream, -1L, "buffer_overflow", detail, window.startTsNs(), now);
+    emitWithTimestamps(
+        symbol, stream, -1L, GapReason.BUFFER_OVERFLOW, detail, window.startTsNs(), now);
   }
 }

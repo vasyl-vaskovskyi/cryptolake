@@ -60,7 +60,7 @@ class CoverageFilterTest {
         -1L,
         startTs,
         endTs,
-        "ws_disconnect",
+        com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
         "test",
         null,
         null,

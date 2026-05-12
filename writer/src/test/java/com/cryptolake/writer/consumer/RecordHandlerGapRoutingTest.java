@@ -75,7 +75,7 @@ class RecordHandlerGapRoutingTest {
             296L, // session_seq from the collector (NOT -1)
             1_777_326_113_000_000_000L, // gap_start_ts
             1_777_326_115_000_000_000L, // gap_end_ts
-            "ws_disconnect",
+            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
             "WebSocket closed unexpectedly",
             Clocks.fixed(1_777_326_115_437_720_798L));
 
@@ -127,7 +127,7 @@ class RecordHandlerGapRoutingTest {
             296L,
             1_777_326_113_000_000_000L,
             1_777_326_115_000_000_000L,
-            "pu_chain_break",
+            com.cryptolake.common.envelope.GapReason.PU_CHAIN_BREAK,
             "pu chain broken: expected pu=100 got pu=99",
             Clocks.fixed(1_777_326_115_437_720_798L));
 

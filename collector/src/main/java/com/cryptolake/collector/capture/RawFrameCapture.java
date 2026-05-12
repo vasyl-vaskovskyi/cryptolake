@@ -6,6 +6,7 @@ import com.cryptolake.collector.connection.BackpressureGate;
 import com.cryptolake.collector.gap.DisconnectGapCoalescer;
 import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.streams.StreamHandler;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.util.List;
@@ -133,7 +134,11 @@ public final class RawFrameCapture {
           "handler_error", e, "symbol", symbol, "stream", streamType, "error", e.getMessage());
       // Emit a handler_error gap so the consumer sees the hole (design §6.2 new reasons)
       gapEmitter.emit(
-          symbol, streamType, sessionSeq, "handler_error", "handler threw: " + e.getMessage());
+          symbol,
+          streamType,
+          sessionSeq,
+          GapReason.HANDLER_ERROR,
+          "handler threw: " + e.getMessage());
     }
   }
 
@@ -185,7 +190,7 @@ public final class RawFrameCapture {
               symbol,
               stream,
               sessionSeq,
-              "ws_disconnect",
+              GapReason.WS_DISCONNECT,
               "WebSocket disconnected on socket " + socketName,
               gapStart,
               now);

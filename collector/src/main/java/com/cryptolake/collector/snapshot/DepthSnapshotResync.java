@@ -6,6 +6,7 @@ import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
 import com.cryptolake.collector.streams.DepthStreamHandler;
 import com.cryptolake.common.envelope.DataEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.time.Duration;
@@ -130,7 +131,11 @@ public final class DepthSnapshotResync {
     if (rawText.isEmpty()) {
       log.warn("depth_resync_snapshot_failed", "symbol", symbol);
       gapEmitter.emit(
-          symbol, "depth", -1L, "pu_chain_break", "Snapshot exhausted (3 retries) during resync");
+          symbol,
+          "depth",
+          -1L,
+          GapReason.PU_CHAIN_BREAK,
+          "Snapshot exhausted (3 retries) during resync");
       return;
     }
 
@@ -145,7 +150,11 @@ public final class DepthSnapshotResync {
       if (System.nanoTime() - started > timeoutNs) {
         log.warn("resync_producer_unhealthy_timeout", "symbol", symbol);
         gapEmitter.emit(
-            symbol, "depth", -1L, "pu_chain_break", "Resync aborted: producer unhealthy after 60s");
+            symbol,
+            "depth",
+            -1L,
+            GapReason.PU_CHAIN_BREAK,
+            "Resync aborted: producer unhealthy after 60s");
         return false;
       }
       try {
@@ -192,7 +201,11 @@ public final class DepthSnapshotResync {
     } catch (Exception e) {
       log.error("depth_resync_apply_failed", e, "symbol", symbol, "error", e.getMessage());
       gapEmitter.emit(
-          symbol, "depth", -1L, "pu_chain_break", "Failed to apply snapshot: " + e.getMessage());
+          symbol,
+          "depth",
+          -1L,
+          GapReason.PU_CHAIN_BREAK,
+          "Failed to apply snapshot: " + e.getMessage());
     }
   }
 

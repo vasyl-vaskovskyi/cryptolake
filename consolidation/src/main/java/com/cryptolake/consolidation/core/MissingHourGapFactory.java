@@ -1,6 +1,7 @@
 package com.cryptolake.consolidation.core;
 
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.Clocks;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -20,7 +21,7 @@ import java.time.ZoneOffset;
  *
  * <p>Tier 5 F3, M11 — always UTC. Tier 5 E5 — ns computation via {@code getEpochSecond() *
  * 1_000_000_000L + getNano()}. Tier 5 M10 — {@code session_seq = -1L}. Tier 5 M6 — {@code reason =
- * "missing_hour"} (in {@link com.cryptolake.common.envelope.GapReasons}).
+ * "missing_hour"} (via {@link GapReason#MISSING_HOUR}).
  *
  * <p>Thread safety: stateless utility.
  */
@@ -69,7 +70,7 @@ public final class MissingHourGapFactory {
             -1L, // session_seq sentinel (Tier 5 M10)
             gapStartNs,
             gapEndNs,
-            "missing_hour",
+            GapReason.MISSING_HOUR,
             "No data files found for hour " + hour + "; not recoverable via backfill",
             Clocks.systemNanoClock());
 

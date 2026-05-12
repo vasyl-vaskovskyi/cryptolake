@@ -29,7 +29,7 @@ class KafkaProducerHealthMonitorTest {
       String symbol,
       String stream,
       long sessionSeq,
-      String reason,
+      com.cryptolake.common.envelope.GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}
@@ -78,7 +78,8 @@ class KafkaProducerHealthMonitorTest {
 
     // Should have emitted one gap per (symbol, stream)
     assertThat(emissions).hasSize(2);
-    assertThat(emissions.get(0).reason()).isEqualTo("kafka_producer_outage");
+    assertThat(emissions.get(0).reason())
+        .isEqualTo(com.cryptolake.common.envelope.GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(emissions.get(0).symbol()).isEqualTo("btcusdt");
     assertThat(emissions.get(0).stream()).isEqualTo("depth");
     assertThat(emissions.get(0).gapStartTs()).isEqualTo(outageStartNs);
@@ -110,7 +111,8 @@ class KafkaProducerHealthMonitorTest {
 
     assertThat(emissions).hasSize(1);
     GapEmission em = emissions.get(0);
-    assertThat(em.reason()).isEqualTo("kafka_producer_outage");
+    assertThat(em.reason())
+        .isEqualTo(com.cryptolake.common.envelope.GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(em.symbol()).isEqualTo("solusdt");
     assertThat(em.stream()).isEqualTo("bookticker");
     assertThat(em.gapStartTs()).isEqualTo(outageStartNs);

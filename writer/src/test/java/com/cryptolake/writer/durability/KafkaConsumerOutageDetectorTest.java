@@ -15,7 +15,7 @@ class KafkaConsumerOutageDetectorTest {
       String symbol,
       String stream,
       long sessionSeq,
-      String reason,
+      com.cryptolake.common.envelope.GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}
@@ -153,11 +153,18 @@ class KafkaConsumerOutageDetectorTest {
         "No Kafka records for " + (now - lastAt) / 1_000_000L + "ms (last_poll_ns=" + lastAt + ")";
     for (KafkaConsumerOutageDetector.SymbolStream s : ss) {
       action.emitWithTimestamps(
-          s.symbol(), s.stream(), -1L, "kafka_consumer_outage", detail, lastAt, now);
+          s.symbol(),
+          s.stream(),
+          -1L,
+          com.cryptolake.common.envelope.GapReason.KAFKA_CONSUMER_OUTAGE,
+          detail,
+          lastAt,
+          now);
     }
 
     assertThat(emissions).hasSize(2);
-    assertThat(emissions.get(0).reason()).isEqualTo("kafka_consumer_outage");
+    assertThat(emissions.get(0).reason())
+        .isEqualTo(com.cryptolake.common.envelope.GapReason.KAFKA_CONSUMER_OUTAGE);
     assertThat(emissions.get(0).symbol()).isEqualTo("btcusdt");
     assertThat(emissions.get(0).gapStartTs()).isEqualTo(lastAt);
     assertThat(emissions.get(0).gapEndTs()).isEqualTo(now);

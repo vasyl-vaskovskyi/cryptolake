@@ -2,6 +2,7 @@ package com.cryptolake.collector.durability;
 
 import com.cryptolake.collector.gap.GapEmitter;
 import com.cryptolake.collector.producer.KafkaProducerBridge;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import java.util.List;
@@ -51,7 +52,7 @@ public final class KafkaProducerHealthMonitor {
         String symbol,
         String stream,
         long sessionSeq,
-        String reason,
+        GapReason reason,
         String detail,
         long gapStartTs,
         long gapEndTs);
@@ -230,7 +231,13 @@ public final class KafkaProducerHealthMonitor {
             + ")";
     for (SymbolStream ss : symbolStreams) {
       gapEmitAction.emitWithTimestamps(
-          ss.symbol(), ss.stream(), -1L, "kafka_producer_outage", detail, outageStartNs, gapEndNs);
+          ss.symbol(),
+          ss.stream(),
+          -1L,
+          GapReason.KAFKA_PRODUCER_OUTAGE,
+          detail,
+          outageStartNs,
+          gapEndNs);
     }
   }
 

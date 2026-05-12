@@ -2,6 +2,7 @@ package com.cryptolake.writer.consumer;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.gap.GapEmitter;
 import java.util.HashMap;
@@ -87,7 +88,7 @@ public final class DepthRecoveryGapFilter {
             -1L, // writer-injected (Tier 5 M10)
             state.firstDiffTs(),
             env.receivedAt(),
-            "recovery_depth_anchor",
+            GapReason.RECOVERY_DEPTH_ANCHOR,
             "depth recovery window closed at u=" + state.candidateLid(),
             clock);
 
