@@ -2,7 +2,7 @@ package com.cryptolake.writer.consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptolake.common.envelope.GapReasons;
+import com.cryptolake.common.envelope.GapReason;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,20 +15,11 @@ import org.junit.jupiter.api.Test;
  */
 class KafkaOffsetResetTest {
 
-  /** Validates that kafka_offset_reset is a known valid gap reason. */
-  @Test
-  void kafkaOffsetResetIsValidGapReason() {
-    assertThat(GapReasons.VALID).contains("kafka_offset_reset");
-  }
-
-  /** Validates the gap reason string matches what the consumer loop emits. */
+  /** Validates the gap reason wire string matches what the consumer loop emits. */
   @Test
   void kafkaOffsetResetReasonStringIsCorrect() {
-    // The reason must be exactly "kafka_offset_reset" — not an alias
-    String reason = "kafka_offset_reset";
-    // requireValid must not throw
-    GapReasons.requireValid(reason);
-    assertThat(reason).isEqualTo("kafka_offset_reset");
+    // The wire string must be exactly "kafka_offset_reset" — not an alias.
+    assertThat(GapReason.KAFKA_OFFSET_RESET.wire()).isEqualTo("kafka_offset_reset");
   }
 
   /**
