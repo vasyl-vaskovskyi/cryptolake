@@ -14,7 +14,7 @@ The current design splits gap-reason knowledge across four files:
 | File | Module | Carries |
 |---|---|---|
 | `GapReasons.java` | common | The valid wire-string vocabulary (`Set<String>`) |
-| `GapReasonsLocal.java` | writer | A near-duplicate of the above |
+| `GapReasonsLocal.java` | writer | Writer-local constants for coverage-filter labels (`COVERED`, `PARKED`, …) — **not** gap-envelope reasons; stays out of scope |
 | `RuntimeOnlyReasons.java` | verify | Classification: `PERSISTENT_CLASS` vs `RUNTIME_ONLY` |
 | `ReasonCausedBy.java` | verify | State-reason → file-reason causal map |
 
@@ -24,7 +24,8 @@ A unit test (`RuntimeOnlyReasonsTest.unionPartitionsAllValidReasons`) enforces a
 
 In:
 - New: `common/src/main/java/com/cryptolake/common/envelope/GapReason.java`
-- Delete: `GapReasons.java`, `GapReasonsLocal.java`, `RuntimeOnlyReasons.java`, `ReasonCausedBy.java`, and the two partition-invariant unit tests.
+- Delete: `GapReasons.java`, `RuntimeOnlyReasons.java`, `ReasonCausedBy.java`, and the two partition-invariant unit tests.
+- **Keep:** `writer/.../gap/GapReasonsLocal.java` is unrelated (coverage-filter labels, not gap-envelope reasons) and stays as-is.
 - Update: `GapEnvelope.reason: String` → `GapReason`. `GapRecord.reason: String` → `GapReason`. Same for `GapRecord.DiffKey`.
 - Update all ~155 raw reason-string literals across `collector`, `writer`, `verify`, `consolidation`, and their tests to enum constants.
 - Update output paths (`OutputFormatter`, audit JSON, log fields) to render `reason.wire()` so on-the-wire output is bit-identical.
