@@ -2,6 +2,7 @@ package com.cryptolake.collector.durability;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +30,7 @@ class KafkaProducerHealthMonitorTest {
       String symbol,
       String stream,
       long sessionSeq,
-      com.cryptolake.common.envelope.GapReason reason,
+      GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}
@@ -78,8 +79,7 @@ class KafkaProducerHealthMonitorTest {
 
     // Should have emitted one gap per (symbol, stream)
     assertThat(emissions).hasSize(2);
-    assertThat(emissions.get(0).reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.KAFKA_PRODUCER_OUTAGE);
+    assertThat(emissions.get(0).reason()).isEqualTo(GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(emissions.get(0).symbol()).isEqualTo("btcusdt");
     assertThat(emissions.get(0).stream()).isEqualTo("depth");
     assertThat(emissions.get(0).gapStartTs()).isEqualTo(outageStartNs);
@@ -111,8 +111,7 @@ class KafkaProducerHealthMonitorTest {
 
     assertThat(emissions).hasSize(1);
     GapEmission em = emissions.get(0);
-    assertThat(em.reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.KAFKA_PRODUCER_OUTAGE);
+    assertThat(em.reason()).isEqualTo(GapReason.KAFKA_PRODUCER_OUTAGE);
     assertThat(em.symbol()).isEqualTo("solusdt");
     assertThat(em.stream()).isEqualTo("bookticker");
     assertThat(em.gapStartTs()).isEqualTo(outageStartNs);

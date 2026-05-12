@@ -3,6 +3,7 @@ package com.cryptolake.verify.audit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.ZstdOutputStream;
@@ -114,7 +115,7 @@ class AuditFilesCommandTest {
             1L,
             gapStartNs,
             gapEndNs,
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             "test detail",
             () -> gapStartNs);
 
@@ -186,7 +187,7 @@ class AuditFilesCommandTest {
             1L,
             gapStartNs,
             gapEndNs,
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 

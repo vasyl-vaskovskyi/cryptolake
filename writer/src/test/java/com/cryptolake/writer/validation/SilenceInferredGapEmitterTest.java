@@ -2,6 +2,7 @@ package com.cryptolake.writer.validation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
@@ -27,7 +28,7 @@ class SilenceInferredGapEmitterTest {
       String symbol,
       String stream,
       long sessionSeq,
-      com.cryptolake.common.envelope.GapReason reason,
+      GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}

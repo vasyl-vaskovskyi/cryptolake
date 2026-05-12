@@ -2,6 +2,7 @@ package com.cryptolake.writer.durability;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,7 +17,7 @@ class DiskFullHoldControllerTest {
       String symbol,
       String stream,
       long sessionSeq,
-      com.cryptolake.common.envelope.GapReason reason,
+      GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}
@@ -52,8 +53,7 @@ class DiskFullHoldControllerTest {
 
     assertThat(controller.isHoldActive()).isTrue();
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.DISK_FULL_HOLD);
+    assertThat(emissions.get(0).reason()).isEqualTo(GapReason.DISK_FULL_HOLD);
     assertThat(emissions.get(0).symbol()).isEqualTo("btcusdt");
   }
 
@@ -104,8 +104,7 @@ class DiskFullHoldControllerTest {
 
     assertThat(controller.isHoldActive()).isFalse();
     assertThat(emissions).hasSize(2); // opening + closing
-    assertThat(emissions.get(1).reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.DISK_FULL_HOLD);
+    assertThat(emissions.get(1).reason()).isEqualTo(GapReason.DISK_FULL_HOLD);
     assertThat(emissions.get(1).gapEndTs()).isEqualTo(2_000_000_000L);
   }
 

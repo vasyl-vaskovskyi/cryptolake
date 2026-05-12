@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -42,7 +43,7 @@ class GapEmitterTest {
     emitter = new GapEmitter(buffers, metrics, null, coverage);
   }
 
-  private GapEnvelope makeGap(com.cryptolake.common.envelope.GapReason reason) {
+  private GapEnvelope makeGap(GapReason reason) {
     return new GapEnvelope(
         1,
         "gap",
@@ -67,7 +68,7 @@ class GapEmitterTest {
   // Tier 1 §5 — metric incremented on emit
   @Test
   void emit_incrementsGapRecordsWrittenCounter() {
-    GapEnvelope gap = makeGap(com.cryptolake.common.envelope.GapReason.WS_DISCONNECT);
+    GapEnvelope gap = makeGap(GapReason.WS_DISCONNECT);
     emitter.emit(gap, "primary", "binance.trades", 0, 42L);
 
     String scrape = registry.scrape();
@@ -94,7 +95,7 @@ class GapEmitterTest {
             "abc");
     coverage.handleData("primary", env);
 
-    GapEnvelope gap = makeGap(com.cryptolake.common.envelope.GapReason.WS_DISCONNECT);
+    GapEnvelope gap = makeGap(GapReason.WS_DISCONNECT);
     boolean written = emitter.emit(gap, "primary", "binance.trades", 0, 42L);
 
     assertThat(written).isTrue();
@@ -135,7 +136,7 @@ class GapEmitterTest {
     coverage.handleData("primary", primary);
     coverage.handleData("backup", backup);
 
-    GapEnvelope gap = makeGap(com.cryptolake.common.envelope.GapReason.WS_DISCONNECT);
+    GapEnvelope gap = makeGap(GapReason.WS_DISCONNECT);
     emitter.emitUnfiltered(gap, "primary", "binance.trades", 0);
 
     // Unfiltered path goes straight to buffer
@@ -145,12 +146,7 @@ class GapEmitterTest {
   // Design §2.8 — reason tag flows through to the counter label
   @Test
   void emit_perReasonLabel_separatelyCounted() {
-    emitter.emit(
-        makeGap(com.cryptolake.common.envelope.GapReason.WS_DISCONNECT),
-        "primary",
-        "binance.trades",
-        0,
-        1L);
+    emitter.emit(makeGap(GapReason.WS_DISCONNECT), "primary", "binance.trades", 0, 1L);
     emitter.emit(
         new GapEnvelope(
             1,
@@ -163,7 +159,7 @@ class GapEmitterTest {
             -1L,
             100L,
             200L,
-            com.cryptolake.common.envelope.GapReason.SESSION_SEQ_SKIP,
+            GapReason.SESSION_SEQ_SKIP,
             "test",
             null,
             null,

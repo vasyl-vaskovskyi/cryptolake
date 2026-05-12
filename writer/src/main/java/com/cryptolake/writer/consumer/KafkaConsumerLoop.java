@@ -1,5 +1,6 @@
 package com.cryptolake.writer.consumer;
 
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.writer.buffer.BufferManager;
 import com.cryptolake.writer.durability.KafkaConsumerOutageDetector;
 import com.cryptolake.writer.failover.CoverageFilter;
@@ -362,7 +363,7 @@ public final class KafkaConsumerLoop implements Runnable {
               -1L,
               now,
               now,
-              com.cryptolake.common.envelope.GapReason.KAFKA_OFFSET_RESET,
+              GapReason.KAFKA_OFFSET_RESET,
               partitionDetail,
               () -> now);
       gaps.emitUnfiltered(gap, "primary", tp.topic(), tp.partition());

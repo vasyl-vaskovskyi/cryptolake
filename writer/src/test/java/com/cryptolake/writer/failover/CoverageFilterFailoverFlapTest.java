@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
@@ -66,7 +67,7 @@ class CoverageFilterFailoverFlapTest {
         -1L,
         gapStartTs,
         gapEndTs,
-        com.cryptolake.common.envelope.GapReason.PU_CHAIN_BREAK,
+        GapReason.PU_CHAIN_BREAK,
         "regression: backup tailed through flap",
         null,
         null,

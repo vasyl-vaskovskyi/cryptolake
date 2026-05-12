@@ -15,6 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptolake.common.util.Clocks;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -193,19 +194,20 @@ class GapEnvelopeTest {
     // ports: tests/unit/test_envelope.py::TestEnvelopeCreation::test_gap_invalid_reason_raises
     // GapReason.fromWire rejects unknown wire strings; the JSON deserialization path proves
     // the vocabulary is enforced by the enum itself.
-    com.fasterxml.jackson.databind.ObjectMapper m = EnvelopeCodec.newMapper();
+    ObjectMapper mapper = EnvelopeCodec.newMapper();
     String json =
         "{\"v\":1,\"type\":\"gap\",\"exchange\":\"binance\",\"symbol\":\"btcusdt\","
             + "\"stream\":\"trades\",\"received_at\":0,\"collector_session_id\":\"s\","
             + "\"session_seq\":0,\"gap_start_ts\":0,\"gap_end_ts\":1,"
             + "\"reason\":\"invalid_reason\",\"detail\":\"test\"}";
-    assertThatThrownBy(() -> m.readValue(json, GapEnvelope.class))
+    assertThatThrownBy(() -> mapper.readValue(json, GapEnvelope.class))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("invalid_reason");
   }
 
   @Test
   void wireFormatStableAcrossEnumMigration() throws Exception {
-    com.fasterxml.jackson.databind.ObjectMapper m = EnvelopeCodec.newMapper();
+    ObjectMapper m = EnvelopeCodec.newMapper();
     GapEnvelope env =
         GapEnvelope.create(
             "binance",
@@ -219,8 +221,8 @@ class GapEnvelopeTest {
             "detail",
             () -> 1_500_000_000L);
     String json = m.writeValueAsString(env);
-    org.assertj.core.api.Assertions.assertThat(json).contains("\"reason\":\"ws_disconnect\"");
+    assertThat(json).contains("\"reason\":\"ws_disconnect\"");
     GapEnvelope round = m.readValue(json, GapEnvelope.class);
-    org.assertj.core.api.Assertions.assertThat(round.reason()).isEqualTo(GapReason.WS_DISCONNECT);
+    assertThat(round.reason()).isEqualTo(GapReason.WS_DISCONNECT);
   }
 }

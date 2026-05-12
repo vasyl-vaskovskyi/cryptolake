@@ -6,6 +6,7 @@ import com.cryptolake.collector.CollectorSession;
 import com.cryptolake.collector.metrics.CollectorMetrics;
 import com.cryptolake.collector.producer.OverflowWindow;
 import com.cryptolake.collector.producer.TestProducerBridge;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.ClockSupplier;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
@@ -42,18 +43,13 @@ class GapEmitterTest {
   // ports:
   // tests/unit/collector/test_emit_gap.py::test_emit_gap_produces_gap_envelope_and_increments_metric
   void emitGapProducesEnvelopeAndIncrementsMetric() {
-    gapEmitter.emit(
-        "btcusdt",
-        "depth",
-        5L,
-        com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
-        "test detail");
+    gapEmitter.emit("btcusdt", "depth", 5L, GapReason.WS_DISCONNECT, "test detail");
 
     assertThat(testProducer.gapEnvelopes).hasSize(1);
     var gap = testProducer.gapEnvelopes.get(0);
     assertThat(gap.symbol()).isEqualTo("btcusdt");
     assertThat(gap.stream()).isEqualTo("depth");
-    assertThat(gap.reason()).isEqualTo(com.cryptolake.common.envelope.GapReason.WS_DISCONNECT);
+    assertThat(gap.reason()).isEqualTo(GapReason.WS_DISCONNECT);
     assertThat(gap.detail()).isEqualTo("test detail");
 
     Counter counter = metrics.gapsDetected("binance", "btcusdt", "depth", "ws_disconnect");
@@ -66,13 +62,7 @@ class GapEmitterTest {
     long gapStart = 500_000_000_000L;
     long gapEnd = 600_000_000_000L;
     gapEmitter.emitWithTimestamps(
-        "btcusdt",
-        "depth",
-        5L,
-        com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
-        "detail",
-        gapStart,
-        gapEnd);
+        "btcusdt", "depth", 5L, GapReason.WS_DISCONNECT, "detail", gapStart, gapEnd);
     assertThat(testProducer.gapEnvelopes).hasSize(1);
     var gap = testProducer.gapEnvelopes.get(0);
     assertThat(gap.gapStartTs()).isEqualTo(gapStart);

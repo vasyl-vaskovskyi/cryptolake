@@ -1,6 +1,7 @@
 package com.cryptolake.writer.durability;
 
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.logging.StructuredLogger;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.writer.gap.GapEmitter;
@@ -48,7 +49,7 @@ public final class DiskFullHoldController {
         String symbol,
         String stream,
         long sessionSeq,
-        com.cryptolake.common.envelope.GapReason reason,
+        GapReason reason,
         String detail,
         long gapStartTs,
         long gapEndTs);
@@ -208,13 +209,7 @@ public final class DiskFullHoldController {
   private void emitHoldGaps(String detail, long gapStart, long gapEnd) {
     for (SymbolStream ss : symbolStreams) {
       gapEmitAction.emitWithTimestamps(
-          ss.symbol(),
-          ss.stream(),
-          -1L,
-          com.cryptolake.common.envelope.GapReason.DISK_FULL_HOLD,
-          detail,
-          gapStart,
-          gapEnd);
+          ss.symbol(), ss.stream(), -1L, GapReason.DISK_FULL_HOLD, detail, gapStart, gapEnd);
     }
   }
 

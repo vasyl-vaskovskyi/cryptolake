@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.writer.metrics.WriterMetrics;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
@@ -60,7 +61,7 @@ class CoverageFilterTest {
         -1L,
         startTs,
         endTs,
-        com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+        GapReason.WS_DISCONNECT,
         "test",
         null,
         null,

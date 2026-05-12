@@ -3,6 +3,7 @@ package com.cryptolake.verify.audit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.ZstdOutputStream;
 import java.io.IOException;
@@ -60,7 +61,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             "test detail",
             () -> gapStartNs);
 
@@ -108,7 +109,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 
@@ -139,7 +140,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 
@@ -178,7 +179,7 @@ class FileGapSourceTest {
             1L,
             gapStartNs,
             gapEndNs,
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             null,
             () -> gapStartNs);
 

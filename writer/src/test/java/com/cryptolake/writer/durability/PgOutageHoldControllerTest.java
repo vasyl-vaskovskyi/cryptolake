@@ -2,6 +2,7 @@ package com.cryptolake.writer.durability;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptolake.common.envelope.GapReason;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -15,7 +16,7 @@ class PgOutageHoldControllerTest {
       String symbol,
       String stream,
       long sessionSeq,
-      com.cryptolake.common.envelope.GapReason reason,
+      GapReason reason,
       String detail,
       long gapStartTs,
       long gapEndTs) {}
@@ -56,8 +57,7 @@ class PgOutageHoldControllerTest {
     controller.recordPgFailure();
     assertThat(controller.isHoldActive()).isTrue();
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.PG_OUTAGE_HOLD);
+    assertThat(emissions.get(0).reason()).isEqualTo(GapReason.PG_OUTAGE_HOLD);
     assertThat(emissions.get(0).symbol()).isEqualTo("btcusdt");
   }
 
@@ -89,7 +89,7 @@ class PgOutageHoldControllerTest {
     // One more gap for the closing event
     assertThat(emissions).hasSize((int) openingEmissions + 1);
     GapEmission closing = emissions.get(emissions.size() - 1);
-    assertThat(closing.reason()).isEqualTo(com.cryptolake.common.envelope.GapReason.PG_OUTAGE_HOLD);
+    assertThat(closing.reason()).isEqualTo(GapReason.PG_OUTAGE_HOLD);
     assertThat(closing.gapEndTs()).isEqualTo(2_000_000_000L);
   }
 

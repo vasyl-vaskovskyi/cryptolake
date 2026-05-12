@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.EnvelopeCodec;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.ClockSupplier;
 import com.cryptolake.common.util.Clocks;
 import com.cryptolake.writer.buffer.BufferManager;
@@ -75,7 +76,7 @@ class RecordHandlerGapRoutingTest {
             296L, // session_seq from the collector (NOT -1)
             1_777_326_113_000_000_000L, // gap_start_ts
             1_777_326_115_000_000_000L, // gap_end_ts
-            com.cryptolake.common.envelope.GapReason.WS_DISCONNECT,
+            GapReason.WS_DISCONNECT,
             "WebSocket closed unexpectedly",
             Clocks.fixed(1_777_326_115_437_720_798L));
 
@@ -127,7 +128,7 @@ class RecordHandlerGapRoutingTest {
             296L,
             1_777_326_113_000_000_000L,
             1_777_326_115_000_000_000L,
-            com.cryptolake.common.envelope.GapReason.PU_CHAIN_BREAK,
+            GapReason.PU_CHAIN_BREAK,
             "pu chain broken: expected pu=100 got pu=99",
             Clocks.fixed(1_777_326_115_437_720_798L));
 

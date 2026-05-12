@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptolake.common.envelope.DataEnvelope;
 import com.cryptolake.common.envelope.GapEnvelope;
+import com.cryptolake.common.envelope.GapReason;
 import com.cryptolake.common.util.Clocks;
 import com.cryptolake.writer.failover.CoverageFilter;
 import com.cryptolake.writer.metrics.WriterMetrics;
@@ -81,8 +82,7 @@ class SessionChangeDetectorTest {
     Optional<GapEnvelope> gap = detector.observe(env2, "primary");
 
     assertThat(gap).isPresent();
-    assertThat(gap.get().reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.COLLECTOR_RESTART);
+    assertThat(gap.get().reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
     assertThat(gap.get().exchange()).isEqualTo("binance");
     assertThat(gap.get().symbol()).isEqualTo("btcusdt");
     assertThat(gap.get().stream()).isEqualTo("trades");
@@ -187,8 +187,7 @@ class SessionChangeDetectorTest {
                 + "(A → A'), so it IS a gap candidate that the coverage filter "
                 + "decides on. Detector returns it; archival is filtered downstream.")
         .isPresent();
-    assertThat(gap2.get().reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.COLLECTOR_RESTART);
+    assertThat(gap2.get().reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
   }
 
   // TWO-COLLECTOR rule — within-source session change (the SAME source's session_id
@@ -205,8 +204,7 @@ class SessionChangeDetectorTest {
     Optional<GapEnvelope> gap = detector.observe(after, "primary"); // primary restarted
 
     assertThat(gap).isPresent();
-    assertThat(gap.get().reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.COLLECTOR_RESTART);
+    assertThat(gap.get().reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
   }
 
   // Symmetric: backup-only restart also fires a within-backup gap candidate.
@@ -223,7 +221,6 @@ class SessionChangeDetectorTest {
     Optional<GapEnvelope> gap = detector.observe(after, "backup"); // backup restarted
 
     assertThat(gap).isPresent();
-    assertThat(gap.get().reason())
-        .isEqualTo(com.cryptolake.common.envelope.GapReason.COLLECTOR_RESTART);
+    assertThat(gap.get().reason()).isEqualTo(GapReason.COLLECTOR_RESTART);
   }
 }
