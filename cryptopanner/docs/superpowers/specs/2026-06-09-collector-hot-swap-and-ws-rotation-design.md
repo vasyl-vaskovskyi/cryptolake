@@ -153,7 +153,12 @@ The overall verify result is PASS iff every checked minute is PASS. The structur
 
 ### 4.4 Promote: atomic switchover
 
-`promote` runs under `flock /data/cryptopanner/deploy/.lock`. Let `OLD` = the slot in `active-slot` at start of promote (the production process). Let `NEW` = the other slot (the candidate JVM that has been verified).
+`promote` first checks the **deploy forbidden window** (`HH:50 → HH:15` per master spec §5.f) — if the current minute falls inside it, the command returns an error to the operator and exits without changing state. Once past the window check, `promote` acquires **two locks**:
+
+- `flock /data/cryptopanner/deploy/.lock` — guards the deploy state machine; held for the duration of the `promote` invocation.
+- `flock /data/cryptopanner/.fs-heavy.lock` — node-level mutex shared with the Sealer and the WS rotation cutover (master spec §6.a.7). Blocks until the lock is free; the Sealer can be holding it for an in-progress hourly merge. If acquisition would block for longer than 30s, `promote` releases the deploy lock and exits with an error so the operator can retry.
+
+With both locks held, let `OLD` = the slot in `active-slot` at start of promote (the production process). Let `NEW` = the other slot (the candidate JVM that has been verified).
 
 1. `systemctl stop cryptopanner-collector@<OLD>.service` — sends SIGTERM. The old JVM finishes its current minute, fsyncs, writes the sidecar, and exits.
 2. `systemctl kill -s SIGUSR1 cryptopanner-collector@<NEW>.service` — the candidate JVM switches its role from `candidate` to `primary` and switches its write-root from `staging/<deploy-id>/` to `segments/`. No process restart; the WS connection is preserved.
@@ -161,7 +166,7 @@ The overall verify result is PASS iff every checked minute is PASS. The structur
 4. Move staging-only minutes (post-overlap minutes that exist only in `staging/`) into `segments/`. These need no merge.
 5. Atomically rewrite `/data/cryptopanner/deploy/active-slot` to `<NEW>` (write to `.tmp`, rename). This is the durable cutover marker: a crash after this point leaves the system in a consistent post-promote state.
 
-No systemd unit is renamed or modified during promote. The JVM that handled the candidate role keeps running unchanged; only its `--role` argument (passed via a config file it re-reads on SIGUSR1) flipped from `candidate` to `primary`. On the next deploy, the deploy tool reads `active-slot` and stages into the *other* slot — the two slots alternate freely with each deploy.
+Both locks are released after step 5. No systemd unit is renamed or modified during promote. The JVM that handled the candidate role keeps running unchanged; only its `--role` argument (passed via a config file it re-reads on SIGUSR1) flipped from `candidate` to `primary`. On the next deploy, the deploy tool reads `active-slot` and stages into the *other* slot — the two slots alternate freely with each deploy.
 
 ### 4.5 Failure handling
 
@@ -180,19 +185,24 @@ No systemd unit is renamed or modified during promote. The JVM that handled the 
 
 ### 5.1 Internal scheduler
 
-The Collector runs a `RotationScheduler` background task that wakes once per minute:
+The Collector runs a `RotationScheduler` background task that wakes once per minute and evaluates three conditions:
 
 ```
-if WsConnectionManager.currentConnectionAge() > connection_max_age:
+age_ready    = WsConnectionManager.currentConnectionAge() > connection_max_age
+window_ok    = current_minute ∈ [HH:10, HH:50)    # rotation_window (master spec §8.b.2)
+slot_unique  = current_minute_of_hour == (hash(node_id) % 40) + 10
+
+if age_ready and window_ok and slot_unique:
     WsConnectionManager.rotate(reason=SCHEDULED)
 ```
 
 Configuration:
 
 - `connection_max_age` — default `23h`. Hard upper bound below Binance's 24h limit.
-- Future extension: `preferred_rotation_window` could bias rotations to off-peak hours. Not in v1.
+- `rotation_window` — default `HH:10-HH:50`. Per-hour window in which rotation start is allowed. Avoids the hourly Sealer merge (master spec §9.d) and prevents the overlap minute from spanning the hour boundary.
+- Per-node rotation minute is deterministic: `(hash(node_id) % 40) + 10` past the hour. Different nodes in the same region land at different minutes within the window, eliminating correlated Binance-side reconnect load without explicit coordination.
 
-A freshly-started Collector has a young connection, so the rotation timer naturally resets after startup or after the previous rotation.
+A freshly-started Collector has a young connection, so the rotation timer naturally resets after startup or after the previous rotation. If `connection_max_age` is reached but the current minute is outside `rotation_window` or not the node's deterministic minute, the scheduler defers; once `currentConnectionAge()` exceeds `connection_max_age + 90 min` (allowing for the worst case of being just past the node's minute when the threshold trips), the scheduler escalates to **Critical** alert — the connection is approaching Binance's 24h hard limit without a rotation opportunity.
 
 ### 5.2 Rotation lifecycle
 
@@ -201,7 +211,7 @@ A freshly-started Collector has a young connection, so the rotation timer natura
 1. Open a `shadow` WS connection with a distinct `User-Agent: cryptopanner/<ver>+shadow`. Subscribe to the same combined streams as `primary`.
 2. Wait for the shadow's first **full** minute of frames to complete on disk. (The shadow uses `MinuteSegmentWriter` with file suffix `.shadow` — see §5.3.)
 3. Run `EquivalenceChecker` on the overlap minute(s).
-4. If PASS: at the **next minute boundary**, call `OverlapMerger` to merge `minute-MM.jsonl.zst` + `minute-MM.shadow.jsonl.zst` → `minute-MM.jsonl.zst` (atomic). Mark `shadow` as the new `primary`. Close the old `primary` WS connection cleanly. Append a `connection_rotation_events[]` entry to the in-progress hourly manifest.
+4. If PASS: at the **next minute boundary**, acquire `flock /data/cryptopanner/.fs-heavy.lock` (master spec §6.a.7). If acquisition would block for longer than 60s, defer the cutover to the following minute and try again (the Sealer or a deploy promote may be holding the lock; either way the rotation can wait). Once the lock is held, call `OverlapMerger` to merge `minute-MM.jsonl.zst` + `minute-MM.shadow.jsonl.zst` → `minute-MM.jsonl.zst` (atomic). Mark `shadow` as the new `primary`. Close the old `primary` WS connection cleanly. Append a `connection_rotation_events[]` entry to the in-progress hourly manifest. Release the lock.
 5. If FAIL: log the diff, alert Warning, leave both connections running. Re-verify after the next minute. If 3 consecutive minutes fail equivalence, escalate Critical and **force cutover anyway** (better one connection than approaching the 24h cliff). Forced cutover writes `verify_result: "FORCED"` and the diff into the manifest event.
 
 ### 5.3 File naming during overlap
@@ -277,19 +287,28 @@ Both arrays are absent (not empty) on hours with no events of that type.
 
 ## 7. Configuration additions (§15.b)
 
-New keys under the Collector config:
+New keys under the Collector, Sealer, and deploy configs:
 
 ```yaml
 collector:
   connection_max_age: 23h         # Variant B trigger
   frame_buffer_window: 5s         # late-frame buffering before minute flush
   seal_grace_window: 10s          # window past minute boundary before sealing
+  rotation_window: "HH:10-HH:50"  # per-hour allowed window for rotation start (§5.1)
+
+sealer:
+  hour_grace_window: 120s         # delay past hour boundary before merge begins (master spec §9.d)
 
 deploy:
   staging_root: /data/cryptopanner/staging
   history_log: /data/cryptopanner/deploy/history.jsonl
   superseded_retention_days: 7    # rollback window for rotation merges
   versions_kept: 2                # rollback window for JAR deploys
+  forbidden_window: "HH:50-HH:15" # per-hour window where promote is refused (§4.4)
+  recommended_window: "HH:15-HH:45" # operator runbook target window
+
+paths:
+  fs_heavy_lock: /data/cryptopanner/.fs-heavy.lock  # node-level mutex (master spec §6.a.7)
 ```
 
 ## 8. Alerting additions (§13)
@@ -329,5 +348,6 @@ Cross-references in the master spec point back to this doc for the full mechanis
 ## 11. Open questions
 
 1. **Default for `frame_buffer_window` (5s) and `seal_grace_window` (10s).** These are guesses. The right values depend on observed worst-case `E`-to-local-receive delay across Binance regions. Will be tuned during initial deployment based on `late_frame_after_seal` event counts.
-2. **Rotation jitter.** With many nodes (multi-region), should rotations be staggered (random jitter per node) or aligned? Aligned could trigger correlated Binance rate-limit alerts; staggered is safer. Default: per-node random jitter of ±30 min on the 23h trigger. Worth confirming with the Binance limits team / docs.
+2. ~~Rotation jitter.~~ **Resolved 2026-06-09.** Rotation start is constrained to `HH:10 → HH:50` and within that window each node uses a deterministic offset `(hash(node_id) % 40) + 10` minutes past the hour (§5.1). No two nodes in a region rotate at the same minute; no random jitter needed.
 3. **Variant A on the candidate's REST timers.** The candidate JVM also runs REST polls during the overlap window. These duplicate the primary's polls but the candidate's poll responses are discarded at promotion. Mildly wasteful; not enough to optimize in v1.
+4. **Upper-bound timeout on a stuck Sealer merge.** With hourly merges now serialized via `.fs-heavy.lock` (master spec §9.d), a slow hour queues the next behind it indefinitely. Whether to add a hard timeout that abandons a stuck merge (and records the hour as incomplete) versus blocking indefinitely is open. See master spec §16.g.

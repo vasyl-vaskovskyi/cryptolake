@@ -90,6 +90,8 @@ e. **Deployment method.** Each component is packaged as a fat JAR (or installDis
 
 f. **Collector hot-swap.** The Collector is deployed via a make-before-break protocol — a new candidate JVM runs alongside the old one for at least one minute boundary, equivalence is verified on the overlapping minute files, then the active slot is flipped and overlap minutes are merged. This avoids data loss on non-ID streams (which cannot be backfilled via REST). The Sealer, Uploader, and Node Agent restart freely (they work on data already on disk). See [Collector hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) for the full mechanism. (The same overlap library is reused at runtime by the Collector's internal daily WS rotation — see §8.b.)
 
+   **Scheduling.** Hot-swap deploys are forbidden in the `HH:50 → HH:15` window of any hour — that window overlaps the hourly Sealer merge (§9.d) and the tail risk of an overlap-minute spanning the hour boundary. The recommended operator window is `HH:15 → HH:45`. The deploy tooling acquires the node-level `/data/cryptopanner/.fs-heavy.lock` at the promote step (§9.d); if it cannot acquire it (a rotation or merge is in progress), the promote defers and returns to the operator.
+
 ## 6. Node anatomy
 
 - a. **Directory layout** on each node:
@@ -101,9 +103,10 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
     3. `/data/cryptopanner/segments/` — minute-segment files, organized as `<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. May transiently contain sibling `*.shadow.jsonl.zst` files during a WS rotation (see [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §5.3).
     4. `/data/cryptopanner/sealed/` — sealed hourly files awaiting upload, organized as `<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst` + `.sha256` + `.manifest.json`
     5. `/data/cryptopanner/staging/<deploy-id>/` — candidate Collector's write tree during a hot-swap deploy (mirrors `segments/` layout). Removed at deploy cleanup.
-    6. `/data/cryptopanner/deploy/` — deploy state: `.lock`, `history.jsonl`, `active-slot`, `superseded/<deploy-id>/`, `verify-<deploy-id>.report.json`. See [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §4.1.
-    7. `/data/cryptopanner/logs/` — structured JSON log files per component and per slot: `cryptopanner-collector@<slot>.jsonl`, `cryptopanner-sealer.jsonl`, `cryptopanner-uploader.jsonl`, `cryptopanner-agent.jsonl`.
-    8. `/tmp/cryptopanner-*.heartbeat` — heartbeat files touched by each running component. The collector writes per-slot heartbeats: `cryptopanner-collector@a.heartbeat`, `cryptopanner-collector@b.heartbeat`. During a deploy overlap both files are fresh; otherwise only the active slot's file is fresh.
+    6. `/data/cryptopanner/deploy/` — deploy state: `.lock` (deploy state-machine guard), `history.jsonl`, `active-slot`, `superseded/<deploy-id>/`, `verify-<deploy-id>.report.json`. See [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §4.1.
+    7. `/data/cryptopanner/.fs-heavy.lock` — node-level mutex that serializes the three filesystem-heavy operations (hourly merge by the Sealer, JAR hot-swap promote, WS rotation cutover). Distinct from the deploy lock above: the deploy lock guards the deploy state machine; this lock guards disk-I/O contention across components.
+    8. `/data/cryptopanner/logs/` — structured JSON log files per component and per slot: `cryptopanner-collector@<slot>.jsonl`, `cryptopanner-sealer.jsonl`, `cryptopanner-uploader.jsonl`, `cryptopanner-agent.jsonl`.
+    9. `/tmp/cryptopanner-*.heartbeat` — heartbeat files touched by each running component. The collector writes per-slot heartbeats: `cryptopanner-collector@a.heartbeat`, `cryptopanner-collector@b.heartbeat`. During a deploy overlap both files are fresh; otherwise only the active slot's file is fresh.
 
 - b. **systemd units.** Five units per node — four logical services, but the Collector is templated across two slots:
     - `cryptopanner-collector@a.service` and `cryptopanner-collector@b.service` — Collector slots (see [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §3.3). At any moment exactly one is the production slot; the other is empty or running a candidate during a deploy.
@@ -152,7 +155,7 @@ a. **WebSocket connection.** In steady state the Collector maintains a single co
 
 b. **Reconnection.** Two distinct cases:
    1. **Unplanned faults** (disconnect, ping timeout, half-open detection): the Collector reconnects immediately with exponential backoff (1s, 2s, 4s, ..., capped at 60s). After reconnection, it re-subscribes to all configured streams. The resulting gap is recorded normally — ID streams may be filled by REST backfill at hourly merge; non-ID streams record the gap in the manifest.
-   2. **Planned rotation** (approaching Binance's 24h connection limit): the Collector opens a shadow connection and runs the make-before-break overlap protocol. No gap. See the [hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §5.
+   2. **Planned rotation** (approaching Binance's 24h connection limit): the Collector opens a shadow connection and runs the make-before-break overlap protocol. No gap. The rotation start is constrained to the per-hour window `HH:10 → HH:50` — avoiding the hourly Sealer merge at the start of the hour (§9.d) and ensuring the overlap minute does not span the hour boundary. Within that window, each node's exact rotation minute is deterministic: `(hash(node_id) % 40) + 10` past the hour, so no two nodes in a region rotate at the same minute and Binance never sees a correlated reconnect storm. At cutover the Collector acquires the node-level `/data/cryptopanner/.fs-heavy.lock`; if it cannot (a deploy or merge is in progress), it defers to the next eligible minute within the window. See the [hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §5.
 
 c. **Raw capture.** Each incoming WebSocket frame is written as-is (raw bytes, not re-serialized) to the appropriate minute-segment file. The combined-streams wrapper `{"stream": "<name>", "data": {...}}` is part of the captured bytes and serves as the routing key — the Collector parses the wrapper's `stream` field to select the `<symbol>/<stream>/...` subdirectory, but leaves the wrapper intact in the written line (raw-fidelity, invariant 3.a). Frames are bucketed into minute segments by their **server-side event timestamp** (`E` for most streams, `T` for `trade`/`aggTrade`), not by local receive time. This keeps the same logical event in the same minute file across two parallel connections during an overlap. REST poll responses are bucketed by poll-issue wall-clock time (single-source, no overlap concern). Rationale in the [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §3.4.
 
@@ -162,23 +165,25 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
 
 ## 9. WAL & local sealing & upload ⚠️ DRAFT — NOT REVIEWED
 
-- a. **Minute segments as WAL.** The per-minute segment files serve as the write-ahead log. Each segment is small (typically seconds of data), fsynced on close, and accompanied by a `.sha256` sidecar. This is the durability boundary — data is safe once the segment is sealed.
+- a. **Minute segments as WAL.** The per-minute segment files serve as the write-ahead log. Each segment is small (typically seconds of data) and accompanied by a `.sha256` sidecar. This is the durability boundary — data is safe once the segment is sealed. Sealing order is **write data → fsync(data) → compute SHA-256 → write sidecar → fsync(sidecar) → fsync(containing directory)**, so a power loss at any point either leaves both files durable on disk or rolls back to a pre-write state. The sidecar is the durability acknowledgement that satisfies invariant 3.b.
 
 - b. **Hourly merge (Sealer).** At the turn of each hour (e.g., at 15:00:00 UTC the Sealer processes hour 14):
     1. Collects all minute segments for the previous hour, per (symbol, stream). The Sealer always sees a single `minute-<HH-MM>.jsonl.zst` file per minute — `.shadow.jsonl.zst` overlap files produced by the Collector during a hot-swap or WS rotation have already been merged away before the Sealer runs.
-    2. Concatenates them in chronological order into a single JSONL file.
-    3. For ID-bearing streams: validates sequence-ID continuity across the concatenated data. If gaps are detected, attempts backfill via REST (see 7.d). Backfilled records are inserted in sequence order.
-    4. Compresses the result with zstd.
-    5. Writes the `.sha256` integrity sidecar.
-    6. Writes the `.manifest.json` recording: list of minute segments present, list of minute segments missing, sequence-ID range (first, last), any remaining gaps after backfill, backfill attempts and outcomes, and any deploy or WS-rotation events that occurred during the hour (see 10.d).
+    2. Concatenates them in **minute-filename order** (lexicographic on `minute-HH-MM`). Within each minute, frames retain their capture-arrival order — the Sealer does not re-sort within a minute. (Frames are server-event-timestamp-bucketed at capture time per §8.c, so the per-minute partition is by `E`/`T`; intra-minute ordering reflects how Binance delivered events on the WS connection, which is what raw-fidelity demands.)
+    3. For gap-fillable streams (`trade`, `aggTrade` — see §7.d): validates sequence-ID continuity across the concatenated data. If gaps are detected, attempts backfill via REST. Backfilled records are inserted in sequence order, which means the entire hourly file is rebuilt: decompress → merge new records at the right positions → recompress. This is not a streaming append.
+    4. Compresses the result with zstd (or finalizes the recompressed form from step 3 if backfill ran).
+    5. Writes the `.sha256` integrity sidecar (same durability order as §9.a).
+    6. Writes the `.manifest.json` recording: list of minute segments present, list of minute segments missing, sequence-ID range (first, last), any remaining gaps after backfill, backfill attempts and outcomes, and any `deploy_events[]` or `connection_rotation_events[]` that fall within the hour (see 10.f). Deploy events are read from `/data/cryptopanner/deploy/history.jsonl`; rotation events are read from per-Collector rotation records written at promotion time. Both sources are filtered to events whose `promoted_at` falls inside the hour being sealed.
 
-- c. **Upload (Uploader).** The Uploader watches the sealed directory for completed hourly files:
-    1. Uploads the `.jsonl.zst`, `.sha256`, and `.manifest.json` to IONOS S3.
+- c. **Upload (Uploader).** The Uploader watches `/data/cryptopanner/sealed/` for completed hourly files and uploads them to IONOS S3. It never reads from or writes to `segments/`, `staging/`, or `deploy/` — those are owned by the Collector and the deploy tooling respectively.
+    1. Uploads the three objects per (symbol, stream, hour) in this order: `.jsonl.zst` first, `.sha256` second, `.manifest.json` last. The manifest is uploaded last so its presence in S3 is the consumer-side completeness signal that all three objects are durably stored. An interrupted upload leaves no `.manifest.json`; consumers treat the (symbol, stream, hour) as not yet available and re-check later.
     2. Verifies the upload by comparing the remote ETag or checksum with the local `.sha256`.
-    3. On success, deletes the local minute segments for that (symbol, stream, hour) and moves the sealed files to a `done/` staging area (or deletes them, depending on disk pressure).
-    4. On failure, retries with exponential backoff. Does not delete local files until upload is confirmed.
+    3. On success, deletes the local minute segments for that (symbol, stream, hour) and deletes the corresponding local sealed files (`.jsonl.zst`, `.sha256`, `.manifest.json`).
+    4. On failure, retries with exponential backoff capped at one attempt per 5 minutes. There is no try-count limit — S3 outages can last hours and we'd rather accumulate disk than abandon data. Disk-pressure alerts (§13) cover the case where retries cannot drain fast enough.
 
-- d. **Ordering guarantee.** The Sealer does not begin processing hour N until all minute segments for hour N are closed (i.e., the clock has passed the hour boundary). The Uploader does not upload until the Sealer marks the hour as sealed.
+- d. **Ordering guarantee.** The Sealer does not begin processing hour N until **both** (a) the clock has passed `HH:00:00 + sealer.hour_grace_window` (default `120s`) — giving late-arriving WS frames, in-flight REST polls issued in the closing seconds of hour N, and any wall-clock skew time to settle — **and** (b) the last minute file of hour N has been sealed past its per-minute late-frame grace (§8.e). The Uploader does not upload until the Sealer marks the hour as sealed.
+
+   While processing hour N, the Sealer holds the node-level `/data/cryptopanner/.fs-heavy.lock` (§6.a.7) so that JAR hot-swap promotes (§5.f) and WS rotation cutovers (§8.b.2) do not contend for disk I/O. If a future hour's Sealer is ready to start while a previous hour is still merging, it waits on the lock — hours queue rather than run concurrently.
 
 ## 10. Per-node file format & manifest ⚠️ DRAFT — NOT REVIEWED
 
@@ -295,9 +300,14 @@ f. **VPN-independent testing.** All tests run locally without requiring a VPN me
     13. `collector.connection_max_age` — proactive WS rotation trigger (default `23h`; see [hot-swap design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §7)
     14. `collector.frame_buffer_window` — late-frame buffering before minute flush (default `5s`)
     15. `collector.seal_grace_window` — grace period past the minute boundary before sealing (default `10s`)
-    16. `deploy.staging_root` — staging tree for hot-swap candidate JVM (default `/data/cryptopanner/staging`)
-    17. `deploy.superseded_retention_days` — rollback window for rotation merges (default `7`)
-    18. `deploy.versions_kept` — JAR version rollback reserve (default `2`)
+    16. `collector.rotation_window` — allowed per-hour window for daily WS rotation start (default `HH:10-HH:50`; see §8.b.2)
+    17. `sealer.hour_grace_window` — delay past the hour boundary before the Sealer begins processing the just-closed hour (default `120s`; see §9.d)
+    18. `deploy.staging_root` — staging tree for hot-swap candidate JVM (default `/data/cryptopanner/staging`)
+    19. `deploy.forbidden_window` — per-hour window in which JAR hot-swap promotes are refused (default `HH:50-HH:15`; see §5.f)
+    20. `deploy.recommended_window` — operator-runbook target window for deploys (default `HH:15-HH:45`)
+    21. `deploy.superseded_retention_days` — rollback window for rotation merges (default `7`)
+    22. `deploy.versions_kept` — JAR version rollback reserve (default `2`)
+    23. `paths.fs_heavy_lock` — path of the node-level filesystem-heavy mutex (default `/data/cryptopanner/.fs-heavy.lock`; see §6.a.7)
 
 - c. **Monitor config contents:**
     1. `nodes` — list of node endpoints (VPN IPs and ports)
@@ -324,7 +334,7 @@ e. **Clock synchronization.** Minute-segment boundaries depend on wall-clock tim
 
 f. **Multi-symbol WebSocket strategy.** Binance limits combined stream connections. If the symbol set exceeds the limit, should the Collector open multiple WebSocket connections? How are streams distributed across connections?
 
-g. **Sealer scheduling.** The Sealer runs at the hour boundary, but what if the merge + backfill takes longer than expected? Should it queue hours, or is there a timeout after which it gives up and moves on?
+g. **Sealer scheduling under prolonged merge.** The Sealer is now scheduled at `HH:00 + 120s` and serializes hours via the `.fs-heavy.lock` (§9.d), so if one hour's merge runs long, the next hour queues behind it rather than running concurrently. **Open question:** is there an upper-bound timeout after which the Sealer should give up on a stuck merge and move on (recording the hour as incomplete in the manifest), or should it block indefinitely? The current default is "block indefinitely" — needs validation under load.
 
 h. **Node identity in S3.** The `node-id` is used as the S3 key prefix. What happens if a node is replaced (new VPS, same region)? Should it reuse the old node ID or get a new one?
 
@@ -332,4 +342,4 @@ i. **VPN provider decision.** Tailscale (managed, free tier) vs raw WireGuard (s
 
 j. **Late-frame grace defaults.** The defaults for `collector.frame_buffer_window` (5s) and `collector.seal_grace_window` (10s) — see 15.b — are guesses pending observed worst-case `E`-to-local-receive delay across Binance regions. To be tuned based on `late_frame_after_seal` event counts in early deployment.
 
-k. **WS rotation jitter across nodes.** With multiple nodes per region, should daily rotations be staggered (per-node random jitter) or aligned? Aligned could trigger correlated Binance rate-limit alerts; staggered is safer. Default proposal: per-node ±30 min jitter on the 23h trigger. See [hot-swap design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §11.
+k. ~~WS rotation jitter across nodes.~~ **Resolved 2026-06-09:** rotation start is constrained to `HH:10 → HH:50` and within that window each node uses a deterministic offset `(hash(node_id) % 40) + 10` minutes past the hour, so no two nodes in a region rotate at the same minute. Documented in §8.b.2.
