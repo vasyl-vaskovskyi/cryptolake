@@ -4,8 +4,8 @@
 
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
-- Sections 5–8: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 9–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 9.
+- Sections 5–9: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
+- Sections 10–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 10.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -163,7 +163,7 @@ d. **REST polling.** REST endpoints are polled on independent timers (cadences p
 
 e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A short late-frame grace window (default 10s past the minute boundary) allows frames whose server event time falls in the just-closed minute to still be routed there before the file is sealed. The closed segment is immutable after sealing. Minute boundaries and the grace window are evaluated against the **local wall clock** (the server-event-time bucketing in §8.c handles per-frame placement; the local clock controls when files close and seal). Tolerable clock skew between the node and Binance servers is an open question (§16.e).
 
-## 9. WAL & local sealing & upload ⚠️ DRAFT — NOT REVIEWED
+## 9. WAL & local sealing & upload
 
 - a. **Minute segments as WAL.** The per-minute segment files serve as the write-ahead log. Each segment is small (typically seconds of data) and accompanied by a `.sha256` sidecar. This is the durability boundary — data is safe once the segment is sealed. Sealing order is **write data → fsync(data) → compute SHA-256 → write sidecar → fsync(sidecar) → fsync(containing directory)**, so a power loss at any point either leaves both files durable on disk or rolls back to a pre-write state. The sidecar is the durability acknowledgement that satisfies invariant 3.b.
 
