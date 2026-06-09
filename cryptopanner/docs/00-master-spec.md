@@ -4,8 +4,8 @@
 
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
-- Section 5: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 6–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 6.
+- Sections 5–6: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
+- Sections 7–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 7.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -90,21 +90,36 @@ e. **Deployment method.** Each component is packaged as a fat JAR (or installDis
 
 f. **Collector hot-swap.** The Collector is deployed via a make-before-break protocol — a new candidate JVM runs alongside the old one for at least one minute boundary, equivalence is verified on the overlapping minute files, then the active slot is flipped and overlap minutes are merged. This avoids data loss on non-ID streams (which cannot be backfilled via REST). The Sealer, Uploader, and Node Agent restart freely (they work on data already on disk). See [Collector hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) for the full mechanism. (The same overlap library is reused at runtime by the Collector's internal daily WS rotation — see §8.b.)
 
-## 6. Node anatomy ⚠️ DRAFT — NOT REVIEWED
+## 6. Node anatomy
 
 - a. **Directory layout** on each node:
-    1. `/opt/cryptopanner/` — application binaries (collector, sealer, uploader, node-agent JARs)
+    1. `/opt/cryptopanner/`
+        - `current/` — symlink to the active version directory
+        - `candidate/` — symlink to a staged version (only present during a hot-swap deploy)
+        - `versions/<ver>/` — per-version JARs (collector, sealer, uploader, node-agent)
     2. `/etc/cryptopanner/` — configuration files (`config.yaml`, `agent.token`)
-    3. `/data/cryptopanner/segments/` — minute-segment files, organized as `<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`
+    3. `/data/cryptopanner/segments/` — minute-segment files, organized as `<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. May transiently contain sibling `*.shadow.jsonl.zst` files during a WS rotation (see [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §5.3).
     4. `/data/cryptopanner/sealed/` — sealed hourly files awaiting upload, organized as `<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst` + `.sha256` + `.manifest.json`
-    5. `/data/cryptopanner/logs/` — structured JSON log files per component
-    6. `/tmp/cryptopanner-*.heartbeat` — heartbeat files touched by each component
+    5. `/data/cryptopanner/staging/<deploy-id>/` — candidate Collector's write tree during a hot-swap deploy (mirrors `segments/` layout). Removed at deploy cleanup.
+    6. `/data/cryptopanner/deploy/` — deploy state: `.lock`, `history.jsonl`, `active-slot`, `superseded/<deploy-id>/`, `verify-<deploy-id>.report.json`. See [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §4.1.
+    7. `/data/cryptopanner/logs/` — structured JSON log files per component and per slot: `cryptopanner-collector@<slot>.jsonl`, `cryptopanner-sealer.jsonl`, `cryptopanner-uploader.jsonl`, `cryptopanner-agent.jsonl`.
+    8. `/tmp/cryptopanner-*.heartbeat` — heartbeat files touched by each running component. The collector writes per-slot heartbeats: `cryptopanner-collector@a.heartbeat`, `cryptopanner-collector@b.heartbeat`. During a deploy overlap both files are fresh; otherwise only the active slot's file is fresh.
 
-- b. **systemd units.** Four units per node: `cryptopanner-collector.service`, `cryptopanner-sealer.service`, `cryptopanner-uploader.service`, `cryptopanner-agent.service`. All set to `Restart=always`. The agent unit has `WatchdogSec=30`.
+- b. **systemd units.** Five units per node — four logical services, but the Collector is templated across two slots:
+    - `cryptopanner-collector@a.service` and `cryptopanner-collector@b.service` — Collector slots (see [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §3.3). At any moment exactly one is the production slot; the other is empty or running a candidate during a deploy.
+    - `cryptopanner-sealer.service`, `cryptopanner-uploader.service`, `cryptopanner-agent.service`.
 
-- c. **Boot order.** The agent starts after the three pipeline components: `After=cryptopanner-collector.service cryptopanner-sealer.service cryptopanner-uploader.service`.
+    All set to `Restart=always` while active. The agent unit has `WatchdogSec=30`. The Node Agent's `POST /restart/collector` targets the currently active slot (read from `/data/cryptopanner/deploy/active-slot`); for granular control, `POST /restart/collector/{slot}` operates on a named slot.
+
+- c. **Boot order.** The pipeline components do not require explicit `After=` ordering between each other — components discover state via the filesystem (existing minute segments, sealed files, S3 manifests) and the Node Agent derives liveness from heartbeats rather than systemd start-completion. Each unit comes up independently when systemd reaches it.
 
 - d. **Resource expectations.** The pipeline is I/O-bound, not CPU-bound. A 2-vCPU, 4GB RAM VPS with 80GB SSD should be sufficient for the initial symbol set. Disk usage is transient — minute segments are cleaned up after hourly upload.
+
+    Two operational events temporarily double Collector memory or connection count:
+    - **JAR hot-swap deploy** (rare): two Collector JVMs run concurrently for 1–2 minutes (overlap window).
+    - **Daily WS rotation** (automatic, ~daily per node): one Collector JVM with two WS connections for 1–2 minutes.
+
+    `/data` is recommended as a separate volume from `/` so that capture backlog (sealed files on S3 outage), staging trees, and rotation superseded files cannot fill the OS partition.
 
 ## 7. Data inventory ⚠️ DRAFT — NOT REVIEWED
 
