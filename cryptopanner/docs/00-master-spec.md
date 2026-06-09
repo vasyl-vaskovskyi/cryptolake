@@ -27,8 +27,8 @@ b. The end product is an append-only, byte-faithful collection of per-node hourl
 c. The project is a clean-room successor to CryptoLake (v1) with no shared code, configuration, or data.
 
 ## 2. Goals & non-goals
-    
-a. **Goals**
+
+- **a. Goals**
     1. Capture all configured WebSocket streams and reference-data REST endpoints.
     2. Preserve raw-payload fidelity — no re-serialization.
     3. Write minute-segment files to local disk.
@@ -36,7 +36,7 @@ a. **Goals**
     5. Upload sealed hourly files to IONOS S3-compatible object storage.
     6. Run unattended on single-node VPS deployments.
 
-b. **Non-goals**
+- **b. Non-goals**
     1. Cross-region comparison, backfill, or deduplication (separate local tool).
     2. Real-time serving or query access.
     3. Support for exchanges other than Binance USD-M Futures.
@@ -45,35 +45,35 @@ b. **Non-goals**
 
 ## 3. Invariants
 
-a. **Raw-payload fidelity.** Bytes received from the WebSocket or REST response are stored verbatim. No parsing, re-serialization, or field extraction occurs before writing to the minute-segment file.
-b. **Durability before acknowledgement.** A minute segment is considered sealed only after the file is fsynced to disk and the `.sha256` sidecar is written. The upload step begins only after the hourly merge completes and its integrity sidecar is verified.
-c. **Manifest is the source of truth.** Every hourly file has a `.manifest.json` that records which minute segments are present, which are missing, and — for ID-bearing streams — any sequence gaps that could not be backfilled. If the manifest says a gap exists, it exists. If the manifest says the file is complete, it is complete.
-d. **Per-node independence.** A node is a single VPS instance running its own capture pipeline. Each node operates in isolation — no node reads from, writes to, or coordinates with another node. Cross-region logic is external to this system.
-e. **Idempotent upload.** Uploading the same hourly file twice produces the same object in storage. The object key encodes (node, symbol, stream, day, hour) — a given key is written once and never mutated.
-f. **No silent data loss.** The system does not track or classify runtime failures (crashes, disconnects, restarts). Gap detection happens only by sequence-ID validation and only during the hourly merge step. If a gap is found and cannot be backfilled via REST, it is recorded in the manifest. Missing minute segments are likewise recorded. No other mechanism claims or infers completeness.
+- a. **Raw-payload fidelity.** Bytes received from the WebSocket or REST response are stored verbatim. No parsing, re-serialization, or field extraction occurs before writing to the minute-segment file.
+- b. **Durability before acknowledgement.** A minute segment is considered sealed only after the file is fsynced to disk and the `.sha256` sidecar is written. The upload step begins only after the hourly merge completes and its integrity sidecar is verified.
+- c. **Manifest is the source of truth.** Every hourly file has a `.manifest.json` that records which minute segments are present, which are missing, and — for ID-bearing streams — any sequence gaps that could not be backfilled. If the manifest says a gap exists, it exists. If the manifest says the file is complete, it is complete.
+- d. **Per-node independence.** A node is a single VPS instance running its own capture pipeline. Each node operates in isolation — no node reads from, writes to, or coordinates with another node. Cross-region logic is external to this system.
+- e. **Idempotent upload.** Uploading the same hourly file twice produces the same object in storage. The object key encodes (node, symbol, stream, day, hour) — a given key is written once and never mutated.
+- f. **No silent data loss.** The system does not track or classify runtime failures (crashes, disconnects, restarts). Gap detection happens only by sequence-ID validation and only during the hourly merge step. If a gap is found and cannot be backfilled via REST, it is recorded in the manifest. Missing minute segments are likewise recorded. No other mechanism claims or infers completeness.
 
 ## 4. Architecture overview
 
-a. Each node is a VPS instance running four systemd services:
+- a. Each node is a VPS instance running four systemd services:
     1. **Collector** — maintains WebSocket connections to Binance USD-M Futures and polls REST endpoints. Writes raw bytes to per-stream minute-segment files on local disk. Touches a heartbeat file every 5s.
     2. **Sealer** — at the turn of each hour, merges the previous hour's minute segments into a single hourly JSONL file per (symbol, stream). For ID-bearing streams, validates sequence continuity and backfills gaps via REST. Produces the `.sha256` sidecar and `.manifest.json`. Touches a heartbeat file every 5s.
     3. **Uploader** — takes sealed hourly files and uploads them to IONOS S3-compatible object storage. Confirms upload integrity, then cleans up local minute segments. Touches a heartbeat file every 5s.
     4. **Node Agent** — lightweight HTTP server bound to the encrypted mesh VPN interface only. Reads component heartbeat file mtimes and `/proc` for VPS metrics. Exposes `GET /status` (aggregated JSON) and `POST /restart/{component}` (calls `systemctl restart`). Protected by systemd WatchdogSec.
 
-b. All four services share a local filesystem. No message broker, no database, no coordination service between components on the same node.
+- b. All four services share a local filesystem. No message broker, no database, no coordination service between components on the same node.
 
-c. Multiple nodes are deployed in different regions for redundancy. Each node is a complete, independent instance of this pipeline.
+- c. Multiple nodes are deployed in different regions for redundancy. Each node is a complete, independent instance of this pipeline.
 
-d. A dedicated **Monitor** runs on a separate VPS (different provider than the nodes) with a built-in HTTP server:
+- d. A dedicated **Monitor** runs on a separate VPS (different provider than the nodes) with a built-in HTTP server:
     1. Pulls `/status` from each node every 5s. Three consecutive failures (15s) marks a node as down.
     2. Sends `POST /restart/{component}` to recover failed components, with exponential backoff and a circuit breaker (3 failures in 5 min → stop restarting, alert operator).
     3. Alerts via Telegram/WhatsApp when a component fails or a circuit breaker trips.
     4. Pushes its own heartbeat to an external dead-man's switch (e.g., Healthchecks.io) — if the Monitor itself goes down, the external service alerts.
     5. Exposes `GET /dashboard` (HTML), `GET /api/nodes` (JSON), and `POST /api/restart/{node}/{component}`.
 
-e. Inter-node communication runs over an encrypted mesh VPN (Tailscale or raw WireGuard). All endpoints are bound to VPN interfaces only — invisible to the public internet.
+- e. Inter-node communication runs over an encrypted mesh VPN (Tailscale or raw WireGuard). All endpoints are bound to VPN interfaces only — invisible to the public internet.
 
-f. Security for the restart endpoint: bearer token in header, timestamp validation (reject requests older than 30s), and VPN-level ACLs restricting access to the Monitor's IP only. Read-only endpoints (`/status`, `/dashboard`) require no additional auth.
+- f. Security for the restart endpoint: bearer token in header, timestamp validation (reject requests older than 30s), and VPN-level ACLs restricting access to the Monitor's IP only. Read-only endpoints (`/status`, `/dashboard`) require no additional auth.
 
 ## 5. Topology & deployment ⚠️ DRAFT — NOT REVIEWED
 
@@ -89,7 +89,7 @@ e. **Deployment method.** Each component is packaged as a fat JAR (or installDis
 
 ## 6. Node anatomy ⚠️ DRAFT — NOT REVIEWED
 
-a. **Directory layout** on each node:
+- a. **Directory layout** on each node:
     1. `/opt/cryptopanner/` — application binaries (collector, sealer, uploader, node-agent JARs)
     2. `/etc/cryptopanner/` — configuration files (`config.yaml`, `agent.token`)
     3. `/data/cryptopanner/segments/` — minute-segment files, organized as `<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`
@@ -97,15 +97,15 @@ a. **Directory layout** on each node:
     5. `/data/cryptopanner/logs/` — structured JSON log files per component
     6. `/tmp/cryptopanner-*.heartbeat` — heartbeat files touched by each component
 
-b. **systemd units.** Four units per node: `cryptopanner-collector.service`, `cryptopanner-sealer.service`, `cryptopanner-uploader.service`, `cryptopanner-agent.service`. All set to `Restart=always`. The agent unit has `WatchdogSec=30`.
+- b. **systemd units.** Four units per node: `cryptopanner-collector.service`, `cryptopanner-sealer.service`, `cryptopanner-uploader.service`, `cryptopanner-agent.service`. All set to `Restart=always`. The agent unit has `WatchdogSec=30`.
 
-c. **Boot order.** The agent starts after the three pipeline components: `After=cryptopanner-collector.service cryptopanner-sealer.service cryptopanner-uploader.service`.
+- c. **Boot order.** The agent starts after the three pipeline components: `After=cryptopanner-collector.service cryptopanner-sealer.service cryptopanner-uploader.service`.
 
-d. **Resource expectations.** The pipeline is I/O-bound, not CPU-bound. A 2-vCPU, 4GB RAM VPS with 80GB SSD should be sufficient for the initial symbol set. Disk usage is transient — minute segments are cleaned up after hourly upload.
+- d. **Resource expectations.** The pipeline is I/O-bound, not CPU-bound. A 2-vCPU, 4GB RAM VPS with 80GB SSD should be sufficient for the initial symbol set. Disk usage is transient — minute segments are cleaned up after hourly upload.
 
 ## 7. Data inventory ⚠️ DRAFT — NOT REVIEWED
 
-a. **WebSocket streams per symbol:**
+- a. **WebSocket streams per symbol:**
     1. `trade` — individual trade events (carries trade ID → ID-sequenced)
     2. `depth@100ms` — order book diff updates (carries `lastUpdateId` → ID-sequenced)
     3. `aggTrade` — aggregated trade events (carries agg trade ID → ID-sequenced)
@@ -115,14 +115,14 @@ a. **WebSocket streams per symbol:**
     7. `markPrice` — mark price and funding rate (no sequence ID)
     8. `forceOrder` — liquidation events (no sequence ID)
 
-b. **REST endpoints polled periodically:**
+- b. **REST endpoints polled periodically:**
     1. `GET /fapi/v1/depth?symbol=X&limit=1000` — full order book snapshot for depth anchor validation
     2. `GET /fapi/v1/openInterest?symbol=X` — open interest (polled every 1–5 min)
     3. `GET /fapi/v1/exchangeInfo` — symbol metadata and trading rules (polled infrequently, e.g., daily)
 
-c. **Symbol set.** Configured via `config.yaml`. Initial deployment targets the top symbols by volume (e.g., BTCUSDT, ETHUSDT, etc.). The full list is a configuration decision, not an architectural one.
+- c. **Symbol set.** Configured via `config.yaml`. Initial deployment targets the top symbols by volume (e.g., BTCUSDT, ETHUSDT, etc.). The full list is a configuration decision, not an architectural one.
 
-d. **Backfill sources (REST, used during hourly merge):**
+- d. **Backfill sources (REST, used during hourly merge):**
     1. `GET /fapi/v1/aggTrades?symbol=X&fromId=N` — paginated aggTrades by ID for gap backfill
     2. `GET /fapi/v1/historicalTrades?symbol=X&fromId=N` — paginated trades by ID for gap backfill
 
@@ -140,9 +140,9 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
 
 ## 9. WAL & local sealing & upload ⚠️ DRAFT — NOT REVIEWED
 
-a. **Minute segments as WAL.** The per-minute segment files serve as the write-ahead log. Each segment is small (typically seconds of data), fsynced on close, and accompanied by a `.sha256` sidecar. This is the durability boundary — data is safe once the segment is sealed.
+- a. **Minute segments as WAL.** The per-minute segment files serve as the write-ahead log. Each segment is small (typically seconds of data), fsynced on close, and accompanied by a `.sha256` sidecar. This is the durability boundary — data is safe once the segment is sealed.
 
-b. **Hourly merge (Sealer).** At the turn of each hour (e.g., at 15:00:00 UTC the Sealer processes hour 14):
+- b. **Hourly merge (Sealer).** At the turn of each hour (e.g., at 15:00:00 UTC the Sealer processes hour 14):
     1. Collects all minute segments for the previous hour, per (symbol, stream).
     2. Concatenates them in chronological order into a single JSONL file.
     3. For ID-bearing streams: validates sequence-ID continuity across the concatenated data. If gaps are detected, attempts backfill via REST (see 7.d). Backfilled records are inserted in sequence order.
@@ -150,23 +150,24 @@ b. **Hourly merge (Sealer).** At the turn of each hour (e.g., at 15:00:00 UTC th
     5. Writes the `.sha256` integrity sidecar.
     6. Writes the `.manifest.json` recording: list of minute segments present, list of minute segments missing, sequence-ID range (first, last), any remaining gaps after backfill, backfill attempts and outcomes.
 
-c. **Upload (Uploader).** The Uploader watches the sealed directory for completed hourly files:
+- c. **Upload (Uploader).** The Uploader watches the sealed directory for completed hourly files:
     1. Uploads the `.jsonl.zst`, `.sha256`, and `.manifest.json` to IONOS S3.
     2. Verifies the upload by comparing the remote ETag or checksum with the local `.sha256`.
     3. On success, deletes the local minute segments for that (symbol, stream, hour) and moves the sealed files to a `done/` staging area (or deletes them, depending on disk pressure).
     4. On failure, retries with exponential backoff. Does not delete local files until upload is confirmed.
 
-d. **Ordering guarantee.** The Sealer does not begin processing hour N until all minute segments for hour N are closed (i.e., the clock has passed the hour boundary). The Uploader does not upload until the Sealer marks the hour as sealed.
+- d. **Ordering guarantee.** The Sealer does not begin processing hour N until all minute segments for hour N are closed (i.e., the clock has passed the hour boundary). The Uploader does not upload until the Sealer marks the hour as sealed.
 
 ## 10. Per-node file format & manifest ⚠️ DRAFT — NOT REVIEWED
 
-a. **Minute-segment file.** Path: `segments/<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. Each line is one raw WebSocket frame or REST response, stored as received. Compressed with zstd. Accompanied by `minute-<HH-MM>.jsonl.zst.sha256`.
+- a. **Minute-segment file.** Path: `segments/<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. Each line is one raw WebSocket frame or REST response, stored as received. Compressed with zstd. Accompanied by `minute-<HH-MM>.jsonl.zst.sha256`.
 
-b. **Sealed hourly file.** Path: `sealed/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst`. Concatenation of all minute segments for that hour, with backfilled records inserted in sequence order for ID-bearing streams. Accompanied by `hour-<HH>.jsonl.zst.sha256`.
+- b. **Sealed hourly file.** Path: `sealed/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst`. Concatenation of all minute segments for that hour, with backfilled records inserted in sequence order for ID-bearing streams. Accompanied by `hour-<HH>.jsonl.zst.sha256`.
 
-c. **S3 object key.** `<node-id>/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst` (and `.sha256`, `.manifest.json`).
+- c. **S3 object key.** `<node-id>/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst` (and `.sha256`, `.manifest.json`).
 
-d. **Manifest format** (`hour-<HH>.manifest.json`):
+- d. **Manifest format** (`hour-<HH>.manifest.json`):
+
     ```json
     {
       "node": "vps-fra-1",
@@ -186,7 +187,7 @@ d. **Manifest format** (`hour-<HH>.manifest.json`):
     }
     ```
 
-e. **Non-ID streams.** For streams without sequence IDs, the manifest omits `sequence_id_range`, `sequence_gaps`, and `backfill_attempts`. Only `minutes_present` and `minutes_missing` are populated.
+- e. **Non-ID streams.** For streams without sequence IDs, the manifest omits `sequence_id_range`, `sequence_gaps`, and `backfill_attempts`. Only `minutes_present` and `minutes_missing` are populated.
 
 ## 11. Health & observability ⚠️ DRAFT — NOT REVIEWED
 
@@ -220,17 +221,17 @@ h. **VPN mesh failure.** Nodes continue capturing and uploading — VPN is only 
 
 ## 13. Reliability & alerting ⚠️ DRAFT — NOT REVIEWED
 
-a. **Alert channels.** The Monitor sends alerts via Telegram (or WhatsApp) webhook. Two severity levels:
+- a. **Alert channels.** The Monitor sends alerts via Telegram (or WhatsApp) webhook. Two severity levels:
     1. **Warning** — component stuck (heartbeat age > 60s), upload retry count > 3, disk usage > 80%.
     2. **Critical** — component down (3 consecutive scrape failures), circuit breaker tripped (3 restart failures in 5 min), node unreachable, Monitor's own health degraded.
 
-b. **Restart policy.** The Monitor attempts `POST /restart/{component}` with exponential backoff: 5s → 15s → 60s → 300s. After 3 failures within 5 minutes, the circuit breaker trips: no more restarts, critical alert to operator.
+- b. **Restart policy.** The Monitor attempts `POST /restart/{component}` with exponential backoff: 5s → 15s → 60s → 300s. After 3 failures within 5 minutes, the circuit breaker trips: no more restarts, critical alert to operator.
 
-c. **Dead-man's switch.** The Monitor pushes a heartbeat to Healthchecks.io every 60s. If pushes stop for 5 minutes, Healthchecks.io alerts the operator via email/SMS. This covers the "Monitor itself is down" and "entire VPS is dead" scenarios.
+- c. **Dead-man's switch.** The Monitor pushes a heartbeat to Healthchecks.io every 60s. If pushes stop for 5 minutes, Healthchecks.io alerts the operator via email/SMS. This covers the "Monitor itself is down" and "entire VPS is dead" scenarios.
 
-d. **No false-positive restarts.** The Monitor uses a two-tier check before restarting: (1) systemd reports the unit as failed or inactive, AND (2) heartbeat age exceeds the threshold. A slow but alive component is not restarted — only stuck or dead ones.
+- d. **No false-positive restarts.** The Monitor uses a two-tier check before restarting: (1) systemd reports the unit as failed or inactive, AND (2) heartbeat age exceeds the threshold. A slow but alive component is not restarted — only stuck or dead ones.
 
-e. **Alert deduplication.** The Monitor suppresses repeated alerts for the same condition. A new alert is sent only when the condition changes (e.g., component recovers, then fails again).
+- e. **Alert deduplication.** The Monitor suppresses repeated alerts for the same condition. A new alert is sent only when the condition changes (e.g., component recovers, then fails again).
 
 ## 14. Testing strategy ⚠️ DRAFT — NOT REVIEWED
 
@@ -248,9 +249,9 @@ f. **VPN-independent testing.** All tests run locally without requiring a VPN me
 
 ## 15. Configuration ⚠️ DRAFT — NOT REVIEWED
 
-a. **Config file.** Each node reads `/etc/cryptopanner/config.yaml`. The Monitor has its own config file.
+- a. **Config file.** Each node reads `/etc/cryptopanner/config.yaml`. The Monitor has its own config file.
 
-b. **Node config contents:**
+- b. **Node config contents:**
     1. `node_id` — unique identifier for this node (e.g., `vps-fra-1`)
     2. `symbols` — list of symbols to capture (e.g., `[btcusdt, ethusdt]`)
     3. `streams` — list of streams per symbol (e.g., `[trade, depth@100ms, aggTrade, kline_1m]`)
@@ -264,7 +265,7 @@ b. **Node config contents:**
     11. `paths.sealed` — local path for sealed hourly files
     12. `paths.logs` — local path for log files
 
-c. **Monitor config contents:**
+- c. **Monitor config contents:**
     1. `nodes` — list of node endpoints (VPN IPs and ports)
     2. `scrape_interval_s` — how often to pull `/status` (default: 5)
     3. `restart.backoff` — backoff schedule for restart attempts
@@ -273,7 +274,7 @@ c. **Monitor config contents:**
     6. `alerting.healthchecks_url` — Healthchecks.io ping URL
     7. `dashboard.listen_address` — VPN IP and port for the dashboard
 
-d. **Environment variables.** Secrets (S3 credentials, bearer token, Telegram webhook) may be provided via environment variables as an alternative to file paths in the config.
+- d. **Environment variables.** Secrets (S3 credentials, bearer token, Telegram webhook) may be provided via environment variables as an alternative to file paths in the config.
 
 ## 16. Open questions ⚠️ DRAFT — NOT REVIEWED
 
