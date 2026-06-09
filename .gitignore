@@ -28,3 +28,4 @@ build/
 .claude/*
 !.claude/skills/
 !.claude/commands/
+/.idea/gradle.xml
