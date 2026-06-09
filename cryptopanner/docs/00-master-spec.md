@@ -4,8 +4,8 @@
 
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
-- Sections 5–6: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 7–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 7.
+- Sections 5–7: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
+- Sections 8–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 8.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -121,28 +121,30 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
 
     `/data` is recommended as a separate volume from `/` so that capture backlog (sealed files on S3 outage), staging trees, and rotation superseded files cannot fill the OS partition.
 
-## 7. Data inventory ⚠️ DRAFT — NOT REVIEWED
+## 7. Data inventory
 
-- a. **WebSocket streams per symbol:**
-    1. `trade` — individual trade events (carries trade ID → ID-sequenced)
-    2. `depth@100ms` — order book diff updates (carries `lastUpdateId` → ID-sequenced)
-    3. `aggTrade` — aggregated trade events (carries agg trade ID → ID-sequenced)
-    4. `kline_1m` — 1-minute candlestick updates (no sequence ID)
-    5. `ticker` — 24h rolling ticker statistics (no sequence ID)
-    6. `bookTicker` — best bid/ask updates (no sequence ID)
-    7. `markPrice` — mark price and funding rate (no sequence ID)
-    8. `forceOrder` — liquidation events (no sequence ID)
+- a. **WebSocket streams per symbol.** Per-symbol stream forms are used by default (e.g., `btcusdt@trade`); exceptions are called out inline. Each entry lists the sequence-ID property (gap-detectable / gap-fillable / neither) and the server-side timestamp field used for minute bucketing (see [hot-swap design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §3.4).
+    1. `trade` — individual trade events. Sequence ID: `t` (trade ID, strictly increasing). **Gap-detectable and gap-fillable** via REST. Bucketing: `T` (trade time).
+    2. `depth@100ms` — order book diff updates. Sequence IDs: `U` (first updateId), `u` (final updateId), `pu` (previous final updateId for the continuity check). **Gap-detectable** via the `pu`-chain; recovery is by fresh snapshot from `/fapi/v1/depth` (snapshot resync, **not** historical replay — mechanism described in §8). Bucketing: `E` (event time).
+    3. `aggTrade` — aggregated trade events. Sequence ID: `a` (agg trade ID). **Gap-detectable and gap-fillable** via REST. Bucketing: `T` (trade time).
+    4. `kline_1m` — 1-minute candlestick updates. **No sequence ID; not gap-detectable; not gap-fillable.** Fires continuously during a minute (multiple snapshots of the in-progress kline) plus a final closed event with `x: true`. A captured minute holds roughly 60 events per symbol, not 1. Bucketing: `E`.
+    5. `ticker` — 24h rolling ticker statistics, 1-second cadence. No sequence ID. Bucketing: `E`.
+    6. `bookTicker` — best bid/ask updates. Each event carries a `u` field (order book updateId from the depth update-ID space), but `u` values are sparse and non-contiguous on this stream — the event fires only when the best level changes, skipping any update that doesn't move the top of book. `u` is therefore **not usable for gap detection** despite being present. Treated as no-sequence-ID. Bucketing: `E`.
+    7. `markPrice` — mark price and funding rate, 1-second cadence (per-symbol form `<symbol>@markPrice@1s`). No sequence ID. Bucketing: `E`.
+    8. `forceOrder` — liquidation events. **All-symbol form** `!forceOrder@arr` rather than per-symbol — liquidations are sporadic, and per-symbol subscriptions waste connection slots on streams that rarely fire. The wrapper identifies the symbol; the Collector partitions to the appropriate per-symbol file. No sequence ID. Bucketing: `E`.
 
-- b. **REST endpoints polled periodically:**
-    1. `GET /fapi/v1/depth?symbol=X&limit=1000` — full order book snapshot for depth anchor validation
-    2. `GET /fapi/v1/openInterest?symbol=X` — open interest (polled every 1–5 min)
-    3. `GET /fapi/v1/exchangeInfo` — symbol metadata and trading rules (polled infrequently, e.g., daily)
+- b. **REST endpoints polled periodically.** Cadences are canonical defaults; overridable via `config.yaml` (§15).
+    1. `GET /fapi/v1/depth?symbol=X&limit=1000` — full order book snapshot. Polled every 5 minutes per symbol as a baseline archive anchor; additionally fetched on demand by the depth-handler resync logic on a `pu`-chain break (mechanism in §8).
+    2. `GET /fapi/v1/openInterest?symbol=X` — open interest. Polled every 60 seconds per symbol.
+    3. `GET /fapi/v1/exchangeInfo` — symbol metadata and trading rules for all symbols. Polled once per day at 00:05 UTC (the same wall-clock time on every node so cross-region comparisons see the same snapshot).
 
-- c. **Symbol set.** Configured via `config.yaml`. Initial deployment targets the top symbols by volume (e.g., BTCUSDT, ETHUSDT, etc.). The full list is a configuration decision, not an architectural one.
+- c. **Symbol set.** Initial deployment captures the **top 20 USD-M Futures perpetuals by 30-day notional volume**, configured in `config.yaml.symbols`. The list is refreshed quarterly by operator decision. The 20-symbol target keeps the combined-streams subscription well below Binance's per-connection stream limit and fits the resource envelope in §6.d. The handling of larger symbol sets that exceed the per-connection limit remains an open question (§16.f).
 
-- d. **Backfill sources (REST, used during hourly merge):**
-    1. `GET /fapi/v1/aggTrades?symbol=X&fromId=N` — paginated aggTrades by ID for gap backfill
-    2. `GET /fapi/v1/historicalTrades?symbol=X&fromId=N` — paginated trades by ID for gap backfill
+- d. **Backfill sources (REST, used at hourly merge for gap-fillable streams):**
+    1. `GET /fapi/v1/aggTrades?symbol=X&fromId=N` — paginated aggTrades by ID. Source for `aggTrade` gap fill.
+    2. `GET /fapi/v1/historicalTrades?symbol=X&fromId=N` — paginated trades by ID. Source for `trade` gap fill.
+
+    Depth gaps are handled at **capture** time by snapshot resync (§7.b.1), not at merge time. Streams that are neither gap-detectable nor gap-fillable (`kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`) have no backfill source — any gap is recorded in the manifest and remains permanent on that node. This is the central motivation for the Collector hot-swap and daily WS rotation (§5.f, §8.b).
 
 ## 8. Ingest ⚠️ DRAFT — NOT REVIEWED
 
