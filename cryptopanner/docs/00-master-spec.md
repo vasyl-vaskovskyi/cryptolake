@@ -4,8 +4,8 @@
 
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
-- Sections 5–9: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 10–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 10.
+- Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
+- Sections 11–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 11.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -185,40 +185,89 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
 
    While processing hour N, the Sealer holds the node-level `/data/cryptopanner/.fs-heavy.lock` (§6.a.7) so that JAR hot-swap promotes (§5.f) and WS rotation cutovers (§8.b.2) do not contend for disk I/O. If a future hour's Sealer is ready to start while a previous hour is still merging, it waits on the lock — hours queue rather than run concurrently.
 
-## 10. Per-node file format & manifest ⚠️ DRAFT — NOT REVIEWED
+## 10. Per-node file format & manifest
 
-- a. **Minute-segment file.** Path: `segments/<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. Each line is one raw WebSocket frame or REST response, stored as received. Compressed with zstd. Accompanied by `minute-<HH-MM>.jsonl.zst.sha256`.
+- a. **Minute-segment file.** Path: `segments/<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. Each line is one raw WebSocket frame or REST response envelope, stored as received. Frames are placed into minute files by server-side event timestamp (§8.c), not local receive time. Compressed with zstd. Accompanied by `minute-<HH-MM>.jsonl.zst.sha256`.
 
-- b. **Sealed hourly file.** Path: `sealed/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst`. Concatenation of all minute segments for that hour, with backfilled records inserted in sequence order for ID-bearing streams. Accompanied by `hour-<HH>.jsonl.zst.sha256`.
+- b. **Sealed hourly file.** Path: `sealed/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst`. Concatenation of all minute segments for that hour (lexicographic minute order; arrival order preserved within each minute — §9.b.2), with backfilled records inserted in sequence order for gap-fillable streams (§7.d). Compressed with zstd. Accompanied by `hour-<HH>.jsonl.zst.sha256`.
 
-- c. **S3 object key.** `<node-id>/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst` (and `.sha256`, `.manifest.json`).
+- c. **S3 object keys.** Three objects per (symbol, stream, hour), all sharing the same prefix:
 
-- d. **Manifest format** (`hour-<HH>.manifest.json`):
+    ```
+    <node-id>/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst
+    <node-id>/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst.sha256
+    <node-id>/<symbol>/<stream>/<date>/hour-<HH>.manifest.json
+    ```
+
+    Where `<date>` is `YYYY-MM-DD` (matches the manifest's `date` field) and `<HH>` is `00`–`23` zero-padded. The manifest object is uploaded last per §9.c.1, so its presence in S3 is the consumer-side completeness signal.
+
+- d. **Manifest format** (`hour-<HH>.manifest.json`). Representative example for an ID-bearing gap-fillable stream (`trade`) with a missing minute, a backfilled gap, and a WS rotation event during the hour:
 
     ```json
     {
+      "manifest_schema_version": 1,
       "node": "vps-fra-1",
       "symbol": "btcusdt",
       "stream": "trade",
       "date": "2026-05-25",
       "hour": 14,
-      "sealed_at": "2026-05-25T15:00:12Z",
-      "minutes_present": [0, 1, 2, ..., 58, 59],
-      "minutes_missing": [],
+      "sealed_at": "2026-05-25T15:02:08Z",
+      "minutes_present": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59],
+      "minutes_missing": [15],
+      "partial_minutes": [],
       "sequence_id_range": { "first": 123456, "last": 234567 },
-      "sequence_gaps": [],
-      "backfill_attempts": [],
-      "file_sha256": "abcdef...",
+      "sequence_gaps": [
+        { "from_id": 145000, "to_id": 145042, "count": 43, "minute": 15, "backfill_outcome": "FILLED" }
+      ],
+      "backfill_attempts": [
+        {
+          "stream": "trade",
+          "from_id": 145000,
+          "to_id": 145042,
+          "source_endpoint": "/fapi/v1/historicalTrades",
+          "requests_made": 1,
+          "outcome": "FILLED",
+          "completed_at": "2026-05-25T15:01:47Z"
+        }
+      ],
+      "late_frames_dropped": 0,
+      "file_sha256": "abcdef0123456789...",
       "file_size_bytes": 1048576,
-      "record_count": 42000
+      "uncompressed_size_bytes": 9437184,
+      "record_count": 42000,
+      "deploy_events": [],
+      "connection_rotation_events": [
+        {
+          "rotation_id": "rot-2026-05-25T14:23:00Z",
+          "reason": "SCHEDULED",
+          "old_connection_age_hours": 22.91,
+          "promoted_at": "2026-05-25T14:24:00Z",
+          "minutes_merged": [23],
+          "verify_result": "PASS",
+          "diff_summary": { "id_streams": "0 symmetric diff", "non_id_streams": "0 diff" }
+        }
+      ]
     }
     ```
 
-- e. **Non-ID streams.** For streams without sequence IDs, the manifest omits `sequence_id_range`, `sequence_gaps`, and `backfill_attempts`. Only `minutes_present` and `minutes_missing` are populated.
+    Field semantics:
+    - `manifest_schema_version` — integer; downstream consumers parse based on this. Bumped when fields are added/removed in a non-additive way.
+    - `file_sha256`, `file_size_bytes` — describe the **compressed** `.jsonl.zst` file as written to disk and uploaded to S3 (`file_sha256` matches the `.sha256` sidecar contents).
+    - `uncompressed_size_bytes` — the JSONL payload size before zstd, for sizing intuition.
+    - `record_count` — number of JSONL lines in the **final** file (post-backfill).
+    - `late_frames_dropped` — count of frames received after the §8.e seal grace and discarded. Aggregated across all minutes of the hour. Non-zero values inform tuning of §16.j.
+    - `partial_minutes` — minutes whose file exists but is known to be truncated (Collector crashed mid-minute, file fsynced up to the crash point). The minute still counts as `minutes_present`; the internal gap is also recorded in `sequence_gaps`.
+    - `sequence_gaps[].from_id`/`.to_id` — inclusive bounds of the missing range. `count` = `to_id - from_id + 1` for trade/aggTrade; for depth, `from_id`/`to_id` are the surrounding `u` values bracketing a `pu`-chain break.
+    - `backfill_outcome` — `FILLED`, `PARTIAL`, `FAILED`, or `SKIPPED_NO_SOURCE` (the last for non-fillable streams).
+
+- e. **Per-stream-type schema variations.**
+    - **ID-bearing gap-fillable** (`trade`, `aggTrade`): all fields populated as in the example.
+    - **ID-bearing gap-detectable-only** (`depth@100ms`): `sequence_id_range` reports the first `U` and the last `u` over the hour; `sequence_gaps[]` entries describe `pu`-chain breaks; `backfill_attempts[]` entries record snapshot-resync attempts rather than historical-replay calls; an additional `depth_anchor_snapshots` field lists the minutes during the hour at which a baseline `/fapi/v1/depth` snapshot was captured (§7.b.1).
+    - **Non-ID** (`kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`): the manifest omits `sequence_id_range`, `sequence_gaps`, and `backfill_attempts` entirely. Only `minutes_present`, `minutes_missing`, `partial_minutes`, and the file/size/count fields are populated. Any `minutes_missing` are permanent (no backfill source — see §7.d).
 
 - f. **Optional event arrays.** Two optional arrays are populated only when the corresponding event crossed the hour:
     - `deploy_events[]` — one entry per Collector hot-swap deploy that promoted during this hour. Fields: `deploy_id`, `old_version`, `new_version`, `promoted_at`, `minutes_merged`, `verify_result`, `verify_report_sha256`.
-    - `connection_rotation_events[]` — one entry per scheduled WS rotation that promoted during this hour. Fields: `rotation_id`, `reason`, `old_connection_age_hours`, `promoted_at`, `minutes_merged`, `verify_result`, `diff_summary`.
+    - `connection_rotation_events[]` — one entry per scheduled WS rotation that promoted during this hour. Fields: `rotation_id`, `reason`, `old_connection_age_hours`, `promoted_at`, `minutes_merged`, `verify_result`, `diff_summary` (see example in §10.d).
 
     Schemas and merge semantics in the [hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §6.
 
