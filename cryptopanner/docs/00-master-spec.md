@@ -5,8 +5,8 @@
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
 - Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Section 11: **APPROVED** (reviewed 2026-06-12)
-- Sections 12–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 12.
+- Sections 11–12: **APPROVED** (reviewed 2026-06-12)
+- Sections 13–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 13.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -349,23 +349,45 @@ e. **Log events of interest** — machine-readable event identifiers (snake_case
 
     Each event includes its domain-specific fields — e.g., `rotation_started` carries `rotation_id`, `old_connection_age_s`, `streams_subscribed`; `late_frame_after_seal` carries `symbol`, `stream`, `late_by_ms`, `server_event_time`.
 
-## 12. Failure model ⚠️ DRAFT — NOT REVIEWED
+## 12. Failure model
 
-a. **Collector crash.** The current minute segment may be incomplete or corrupt. The Sealer treats it as the last segment for that minute — whatever was fsynced is kept. The gap is detected during hourly merge via sequence-ID validation and backfilled if possible. Non-ID streams record missing minutes in the manifest.
+a. **Collector crash.** With slot templating (§6.b), the response depends on which slot crashed:
+   - **Active slot crashes** → systemd restarts the unit (`Restart=always`). Frames are not captured during the downtime; the gap is recorded normally. The last minute file may be truncated mid-zstd-frame: the Sealer truncates to the last successfully-decompressed frame, emits a `partial_minute` event (§11.e), and records the affected minute in the manifest's `partial_minutes[]` (§10.e). For ID-bearing gap-fillable streams, REST backfill at hourly merge fills what it can; non-ID streams lose the window permanently (§7.d).
+   - **Candidate slot crashes during a deploy** → no production impact (the active slot keeps running). The deploy state machine moves to a failed STAGED state; the operator runs `cryptopanner-deploy abort` (design doc §4.5).
+   - **One of two slots crashes during a WS rotation overlap** → the surviving connection continues. The rotation falls into early cutover (design doc §5.4): the surviving connection becomes primary, the failed slot is restarted clean.
 
-b. **Collector WebSocket disconnect.** The Collector reconnects with exponential backoff. Data during the disconnection window is missing from the minute segments. Detected and handled during merge (same as crash).
+b. **Collector WebSocket disconnect.** Handling follows the §8.b split:
+   - **Unplanned** (network blip, ping timeout): immediate reconnect with exponential backoff (1s, 2s, 4s, ..., 60s). Frames during the disconnect window are missing. For ID-bearing gap-fillable streams (trade, aggTrade), REST backfill at hourly merge fills the gap. For non-ID streams (kline_1m, ticker, bookTicker, markPrice, forceOrder), the data is **permanently lost** on this node and recorded as gaps in the manifest (no REST source — §7.d).
+   - **Planned** (24h-approaching rotation): no disconnect window — the rotation overlap covers it (§8.b.2).
 
-c. **Sealer crash during merge.** The merge must be idempotent. On restart, the Sealer checks if a sealed file already exists for the hour; if not, it re-runs the merge from the minute segments (which are still on disk). If a partial sealed file exists, it is deleted and the merge re-runs.
+c. **Sealer crash during merge.** The Sealer holds `/data/cryptopanner/.fs-heavy.lock` while merging (§9.d). On process death, flock releases automatically (process-scoped). On restart, the Sealer scans `sealed/` for any partially-written hourly files (data without sidecar, or sidecar with mismatched SHA); these are deleted and the merge re-runs from the still-present minute segments. If a fully sealed file exists for the hour, the Sealer skips it (idempotent).
 
-d. **Uploader crash.** On restart, the Uploader scans the sealed directory for files not yet uploaded. It re-attempts upload. Idempotent upload (invariant 3.e) ensures no corruption from duplicate uploads.
+d. **Uploader crash.** On restart, the Uploader scans `sealed/` for files whose corresponding minute segments still exist locally (the deletion in §9.c.3 is the durable "uploaded" marker). It re-attempts upload. If the prior attempt had completed data + sidecar but not the manifest, all three are re-uploaded; S3 keys are deterministic (§10.c) so the result is byte-identical. Per the manifest-last upload order (§9.c.1), consumers see a partial set as "not yet uploaded" and only treat the hour as durable when the manifest object appears.
 
-e. **VPS reboot.** systemd restarts all four services. The Collector begins capturing from the current moment. The Sealer checks for any un-merged past hours and processes them. The Uploader checks for any un-uploaded sealed files. Data during the downtime is missing — detected during merge.
+e. **VPS reboot.** systemd restarts services per §6.c (no explicit `After=` between pipeline components; each starts independently). On collector startup:
+   1. Read `/data/cryptopanner/deploy/active-slot` to determine which slot to start in `primary` role. The other slot stays empty.
+   2. Run startup recovery (design doc §5.5): scan `segments/` for any `*.shadow.jsonl.zst` files left over from an in-flight rotation; for each pair (`*.jsonl.zst` + `*.shadow.jsonl.zst`), run `OverlapMerger` to produce a single merged file. Idempotent.
+   3. Open WS connection and resume capture.
 
-f. **IONOS S3 outage.** The Uploader retries with backoff. Sealed files accumulate on local disk. When S3 recovers, the backlog is drained. Disk pressure is monitored by the Node Agent and surfaced via `/status`.
+   The Sealer then catches up on any un-merged past hours (subject to §9.d). The Uploader scans for un-uploaded sealed files. Data during the downtime is recorded normally (same handling as 12.a / 12.b).
+
+f. **IONOS S3 outage.** Uploader retries with exponential backoff capped at 5 min between attempts; no try-count limit (§9.c.4). Sealed files accumulate on local disk. The §13 disk-pressure alert (against `/data` per §11.c) fires once the warn threshold is exceeded; if `/data` usage approaches full, the operator must intervene (manual cleanup or expanded volume). When S3 recovers the Uploader drains the backlog automatically.
 
 g. **Monitor VPS down.** Nodes continue operating independently — the Monitor is not in the data path. The external dead-man's switch (Healthchecks.io) detects the Monitor's absence and alerts the operator.
 
 h. **VPN mesh failure.** Nodes continue capturing and uploading — VPN is only used for Monitor↔Node communication. Data flow (node → S3) goes over the public internet (HTTPS to IONOS). Monitor loses visibility but no data is lost.
+
+i. **Hot-swap deploy stuck.** Operator left a deploy in STAGED or OVERLAP_READY without promoting or aborting. The candidate JVM keeps running — consuming a second WS connection and writing to the staging tree, which grows linearly with time. Detection: §13 alerts Warning when the deploy state machine has not progressed for >1h. Resolution: operator runs `cryptopanner-deploy abort` (terminates candidate JVM, deletes staging tree) or proceeds with verify + promote.
+
+j. **Rotation equivalence repeatedly fails.** Per design doc §5.4: first FAIL logs Warning and re-verifies after the next minute; 3 consecutive FAILs escalate Critical and force the cutover anyway (better one connection than approaching the 24h cliff). The forced cutover writes `verify_result: "FORCED"` and the equivalence diff into the manifest event so the divergence is auditable. No silent acceptance.
+
+k. **Extended Binance outage (hours).** Collector continues attempting reconnect with backoff capped at 60s. Until Binance recovers, no minute files are written. The Sealer at each hour boundary records every minute as missing. For ID-bearing gap-fillable streams, REST backfill at hourly merge fills what it can once the REST endpoints are reachable again. Non-ID streams lose the entire outage window permanently. Monitor alerts Critical on the prolonged WS disconnect; archive completeness is correctly reflected in manifests.
+
+l. **REST rate-limit (429) storm.** Failed polls are recorded as failure envelopes (§8.d); the Collector backs off and retries the affected endpoint. Sustained 429s degrade backfill success at hourly merge — unfilled gaps are recorded in `sequence_gaps[].backfill_outcome: "PARTIAL"` or `"FAILED"`. Monitor alerts Warning on elevated failed-poll rate; Critical if rate-limit pressure persists across multiple hourly merges.
+
+m. **`active-slot` file corruption or mismatch.** If the file is unreadable, missing, or contradicts running systemd states (e.g., reports `a` but only slot `b` has a live PID), the Node Agent does not auto-resolve. Detection: discrepancy is flagged in `/status` as `active_slot: "MISMATCH"` and surfaces as Critical alert. Resolution: operator inspects systemd states and the per-slot heartbeat mtimes, then rewrites the file manually (the live slot is whichever has the recently-touched heartbeat).
+
+n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by server-event-time vs local time comparisons (§8.c, §8.e). Detection: heuristic comparing recent frames' server-event-time against local time; emit `clock_skew_detected` log event (threshold deferred to §16.e). Mitigation: Warning alert; operator restarts the node's NTP service. Mis-bucketed frames are not auto-corrected — the manifests will show anomalies that the operator must investigate.
 
 ## 13. Reliability & alerting ⚠️ DRAFT — NOT REVIEWED
 
