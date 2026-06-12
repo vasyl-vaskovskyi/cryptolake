@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-09
 **Status:** Draft (approved by user; pending self-review)
-**Affects:** `docs/00-master-spec.md` §§5, 8, 9, 10, 13, 16
+**Affects:** `docs/00-master-spec.md` §§5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16 (see §10 below for the complete change-list)
 
 ## 1. Problem
 
@@ -306,16 +306,6 @@ segments/btcusdt/trade/2026-06-09/
 
 Both `.jsonl.zst` and `.shadow.jsonl.zst` are real on-disk segments with their own sidecars. Both are fsynced at minute close. This is what makes Variant B crash-safe (§5.6).
 
-### 5.5 Failure handling
-
-| Failure | Response |
-|---|---|
-| Shadow fails to connect | Log + alert Warning. Keep old connection. Retry rotation in 10 min. After 3 failures, escalate Critical (approaching 24h limit). |
-| Equivalence FAIL | See §5.2 step 5. |
-| Old connection drops during overlap | `WsConnectionManager` detects the drop, immediately promotes shadow without waiting for next minute boundary. Merge whatever minute data exists. This is early cutover, treated as `reason: SCHEDULED, early=true`. |
-| Both connections drop during overlap | Both reconnect independently (treated as unplanned faults). Gap recorded normally. The rotation attempt is recorded as `verify_result: "ABORTED"`. |
-| Collector crashes during overlap | On restart, the Collector finds `.shadow.jsonl.zst` files on disk. The startup recovery path runs `OverlapMerger` for any such pairs (idempotent — repeated runs produce the same merged file), then continues with a fresh single connection. The next age-based rotation kicks in normally. |
-
 ### 5.4 Operator-triggered rotation (`POST /rotation/trigger`)
 
 Master spec §15.f promises an operator-facing endpoint to force an immediate rotation (typically used after a symbol-set config edit so the new set takes effect within minutes rather than waiting up to 24h for the next scheduled rotation). The endpoint lives on the Node Agent (master spec §11.c).
@@ -325,6 +315,16 @@ Master spec §15.f promises an operator-facing endpoint to force an immediate ro
 - **Body:** `{ "reason": "OPERATOR_TRIGGERED" }` (the `reason` field is recorded in the rotation event for audit).
 - **Response (sync):** `202 Accepted` immediately if the rotation can begin; `409 Conflict` if a rotation or deploy is already in progress, or if `currentConnectionAge() < 5 min` (refuse trivially-young rotations). Response body includes the assigned `rotation_id`.
 - **Behavior:** the scheduler runs `rotate(reason=OPERATOR_TRIGGERED)`. The `rotation_window` and `slot_unique` gates are **bypassed** (this is an operator override). The `.fs-heavy.lock` is still acquired normally; if blocked, the trigger returns `503 Service Unavailable` rather than queueing — the operator can retry. The rotation event in the manifest carries `reason: OPERATOR_TRIGGERED`.
+
+### 5.5 Failure handling
+
+| Failure | Response |
+|---|---|
+| Shadow fails to connect | Log + alert Warning. Keep old connection. Retry rotation in 10 min. After 3 failures, escalate Critical (approaching 24h limit). |
+| Equivalence FAIL | See §5.2 step 5. |
+| Old connection drops during overlap | `WsConnectionManager` detects the drop, immediately promotes shadow without waiting for next minute boundary. Merge whatever minute data exists. This is early cutover, treated as `reason: SCHEDULED, early=true`. |
+| Both connections drop during overlap | Both reconnect independently (treated as unplanned faults). Gap recorded normally. The rotation attempt is recorded as `verify_result: "ABORTED"`. |
+| Collector crashes during overlap | On restart, the Collector finds `.shadow.jsonl.zst` files on disk. The startup recovery path runs `OverlapMerger` for any such pairs (idempotent — repeated runs produce the same merged file), then continues with a fresh single connection. The next age-based rotation kicks in normally. |
 
 ### 5.6 Crash recovery (startup procedure)
 

@@ -89,7 +89,7 @@ d. **VPN mesh.** All nodes and the Monitor join a single encrypted **Tailscale**
 
 e. **Deployment method.** Each component is packaged as a fat JAR (or installDist output) and deployed via systemd unit files. No container runtime required on nodes.
 
-f. **Collector hot-swap.** The Collector is deployed via a make-before-break protocol — a new candidate JVM runs alongside the old one for at least one minute boundary, equivalence is verified on the overlapping minute files, then the active slot is flipped and overlap minutes are merged. This avoids data loss on non-ID streams (which cannot be backfilled via REST). The Sealer, Uploader, and Node Agent restart freely (they work on data already on disk). See [Collector hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) for the full mechanism. (The same overlap library is reused at runtime by the Collector's internal daily WS rotation — see §8.b.)
+f. **Collector hot-swap.** The Collector is deployed via a make-before-break protocol — a new candidate JVM runs alongside the old one for at least one minute boundary, equivalence is verified on the overlapping minute files, then the active slot is flipped and overlap minutes are merged. This avoids data loss on non-ID streams (which cannot be backfilled via REST). The Sealer, Uploader, and Node Agent restart freely (they work on data already on disk). See [Collector hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) for the full mechanism. (The same overlap library is reused at runtime by the Collector's internal daily WS rotation — see §8.b.2.)
 
    **Scheduling.** Hot-swap deploys are forbidden in the `HH:50 → HH:15` window of any hour — that window overlaps the hourly Sealer merge (§9.d) and the tail risk of an overlap-minute spanning the hour boundary. The recommended operator window is `HH:15 → HH:45`. The deploy tooling acquires the node-level `/data/cryptopanner/.fs-heavy.lock` at the promote step (§9.d); if it cannot acquire it (a rotation or merge is in progress), the promote defers and returns to the operator.
 
@@ -148,7 +148,7 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
     1. `GET /fapi/v1/aggTrades?symbol=X&fromId=N` — paginated aggTrades by ID. Source for `aggTrade` gap fill.
     2. `GET /fapi/v1/historicalTrades?symbol=X&fromId=N` — paginated trades by ID. Source for `trade` gap fill.
 
-    Depth gaps are handled at **capture** time by snapshot resync (§7.b.1), not at merge time. Streams that are neither gap-detectable nor gap-fillable (`kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`) have no backfill source — any gap is recorded in the manifest and remains permanent on that node. This is the central motivation for the Collector hot-swap and daily WS rotation (§5.f, §8.b).
+    Depth gaps are handled at **capture** time by snapshot resync (§7.b.1), not at merge time. Streams that are neither gap-detectable nor gap-fillable (`kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`) have no backfill source — any gap is recorded in the manifest and remains permanent on that node. This is the central motivation for the Collector hot-swap and daily WS rotation (§5.f, §8.b.2).
 
 ## 8. Ingest
 
@@ -344,7 +344,7 @@ c. **Node Agent endpoints.**
 
     `GET /metrics` — **OpenMetrics text format** (Prometheus-compatible) for historical metrics. Counters: `cryptopanner_late_frames_dropped_total`, `cryptopanner_backfill_attempts_total`, `cryptopanner_uploads_total`, `cryptopanner_rotation_events_total`. Gauges: `cryptopanner_heartbeat_age_seconds`, `cryptopanner_current_connection_age_seconds`, `cryptopanner_sealed_files_pending_upload`, plus VPS metrics. Scraped by an external Prometheus or aggregator if the operator chooses to deploy one; the Monitor does not consume it. Same VPN-bound port as `/status`, no additional auth required (read-only).
 
-d. **Monitor dashboard.** The Monitor serves a simple HTML page at `GET /dashboard` showing all nodes and their component states, with auto-refresh every 5s (matching the scrape interval in §13). Backed by `GET /api/nodes` (JSON). A deploy or rotation in progress on any node surfaces as a banner on that node's card; circuit-breaker trips and unreachable nodes are highlighted at the top of the dashboard.
+d. **Monitor dashboard.** The Monitor serves a simple HTML page at `GET /dashboard` showing all nodes and their component states, with auto-refresh every 5s (matching the scrape interval in §11.c). Backed by `GET /api/nodes` (JSON). A deploy or rotation in progress on any node surfaces as a banner on that node's card; circuit-breaker trips and unreachable nodes are highlighted at the top of the dashboard.
 
 e. **Log events of interest** — machine-readable event identifiers (snake_case) that the Monitor, the audit tooling, and the Sealer (when populating manifest event arrays per §10.f) depend on. Stable identifiers; do not rename without a migration:
     - WS connection lifecycle: `ws_connect`, `ws_disconnect`, `ws_ping_missed`, `late_frame_after_seal`
@@ -416,7 +416,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
         - Monitor's own health degraded
         - Disk usage on `/data` > 95%
         - Extended Binance outage: WS disconnect persisting > 5 min on a Collector slot (§12.k)
-        - 3 consecutive failed WS rotation attempts, or a forced cutover after 3 consecutive equivalence FAILs (§12.j; design doc §5.5)
+        - 3 consecutive failed WS rotation attempts, or a forced cutover after 3 consecutive equivalence FAILs (§12.j; design doc §5.2 step 6)
         - REST rate-limit pressure persisting across > 2 consecutive hourly merges (§12.l)
         - `active-slot` MISMATCH between the file and running systemd states (§12.m)
         - Clock skew on a node > 5s (§12.n)
