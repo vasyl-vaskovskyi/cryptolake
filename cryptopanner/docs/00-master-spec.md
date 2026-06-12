@@ -5,8 +5,8 @@
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
 - Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 11–13: **APPROVED** (reviewed 2026-06-12)
-- Sections 14–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 14.
+- Sections 11–14: **APPROVED** (reviewed 2026-06-12)
+- Sections 15–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 15.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -426,19 +426,66 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
     - **Correlation/grouping**: if 3 or more nodes fire the same alert-type within 1 minute, the Monitor sends one combined message listing the affected nodes instead of N separate pages. Avoids alert storms during region-wide events (S3 outage, Binance outage).
     - **End-to-end latency**: condition occurrence to operator notification is typically 10–30 seconds (5s scrape interval + ~5s alert pipeline + ~1–2s webhook delivery). Operators should calibrate response expectations accordingly.
 
-## 14. Testing strategy ⚠️ DRAFT — NOT REVIEWED
+## 14. Testing strategy
 
-a. **Unit tests.** Each component is tested in isolation. Key areas: minute-segment writing, hourly merge logic, sequence-ID validation, backfill insertion, manifest generation, SHA-256 computation, S3 upload/verify.
+- a. **Test layers**, fastest to most expensive:
+    1. **Unit** — module-level isolation; no I/O, no docker. Key areas: `MinuteSegmentWriter` server-event-time bucketing (§8.c), `EquivalenceChecker` over synthetic primary/shadow pairs, `OverlapMerger` for ID and non-ID streams (§7.d), sequence-ID continuity validation (including `pu`-chain for `depth@100ms`), manifest generation against schema_version=1 (§10.d), SHA-256 computation, S3 key derivation, slot state-machine transitions (§6.b), late-frame-after-seal accounting (§8.e, §10.d).
+    2. **Integration** — in-process pair-wise tests without the full docker stack. WsConnectionManager + MinuteSegmentWriter; Sealer + Uploader against a local filesystem and a single MinIO container; deploy state machine against a fake systemd interface.
+    3. **Chaos / end-to-end** — full docker-compose stack with injected faults. See §14.e for the catalogue.
 
-b. **Integration tests.** End-to-end tests that run the full pipeline locally: Collector captures from a mock WebSocket server, Sealer merges, Uploader uploads to a local MinIO instance. Verify the sealed files and manifests are correct.
+- b. **Local end-to-end stack.** A `docker-compose.yml` at the repo root brings up the complete pipeline locally with one command (e.g. `make dev-up`):
+    1. `mock-binance-ws` — replays a captured frame fixture; supports fault injection (§14.c).
+    2. `mock-binance-rest` — serves REST fixtures for `/historicalTrades`, `/aggTrades`, `/depth`, `/openInterest`, `/exchangeInfo`; supports 429 / 5xx / timeout injection.
+    3. `minio` — S3-compatible storage standing in for IONOS S3.
+    4. `mock-healthchecks` — accepts heartbeat pings; exposes a query endpoint so tests can assert push timing.
+    5. `cryptopanner-collector-a`, `cryptopanner-collector-b` — both slot units run as containers.
+    6. `cryptopanner-sealer`, `cryptopanner-uploader`, `cryptopanner-agent` — the other three node services.
+    7. `cryptopanner-monitor` — the Monitor with dashboard.
 
-c. **Fault injection tests.** Simulate failure scenarios: kill Collector mid-minute, kill Sealer mid-merge, make S3 unreachable, corrupt a minute segment. Verify that recovery produces correct results and manifests accurately reflect what happened.
+    All services share a single bridge network (no VPN locally). The Node Agent binds to `0.0.0.0` in test mode rather than the VPN interface (§4.f). Successful bring-up = `GET /dashboard` shows all nodes `running`, MinIO contains the expected sealed objects within a few minutes.
 
-d. **Sequence-ID gap tests.** Feed the Sealer minute segments with known sequence gaps. Verify backfill is attempted, and the manifest correctly records gaps that could not be filled.
+- c. **Mock Binance servers** — capabilities required:
+    1. **WS mock**: replay a captured frame fixture; inject clean disconnect; inject ping timeout (no pong response); inject 24h forced close; inject half-open WS (TCP alive, no frames); inject frame reordering and late frames; serve identical fan-out to two parallel connections for rotation overlap tests.
+    2. **REST mock**: serve fixture responses; inject 429 (rate limit), 5xx, and timeouts; vary response latency; serve out-of-order `fromId` paginations for adversarial backfill tests.
 
-e. **Monitor tests.** Test the Monitor's restart logic, backoff, circuit breaker, and alerting against a mock Node Agent that simulates various failure modes.
+- d. **Test fixtures and replay determinism.** Captured raw-frame fixtures live under `tests/fixtures/binance/` — one minute of frames per stream type (`trade`, `depth@100ms`, `aggTrade`, `kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`), plus a matching `/depth` snapshot. Feeding the same fixture into the same Collector configuration twice **MUST produce byte-identical sealed `.jsonl.zst` files** (modulo the `sealed_at` timestamp in the manifest). This is the critical invariant that makes the make-before-break overlap protocol reviewable — without it, equivalence checks become non-deterministic.
 
-f. **VPN-independent testing.** All tests run locally without requiring a VPN mesh. The Node Agent binds to `127.0.0.1` in test mode.
+- e. **Chaos test catalogue.** Each scenario is one script at `tests/chaos/NN_<name>.sh` that spins up an isolated docker-compose project (`cryptopanner-chaos-NN`), injects a specific fault, then asserts (via `cryptopanner-verify`) that the archive ends up in the expected state. One-to-one mapping with §12 plus hot-swap-specific scenarios:
+
+    | # | Scenario | Maps to | Expected outcome |
+    |---|---|---|---|
+    | 01 | `collector_active_crash` | §12.a | Active slot SIGKILL mid-minute; systemd restarts; `partial_minute` recorded; ID gaps backfilled; non-ID gap permanent in manifest |
+    | 02 | `collector_candidate_crash_during_deploy` | §12.a | Candidate JVM SIGKILL during overlap; deploy aborts cleanly; no production impact |
+    | 03 | `ws_disconnect_unplanned` | §12.b | Network blip mid-stream; immediate reconnect; ID gap backfilled; non-ID gap recorded permanent |
+    | 04 | `sealer_crash_mid_merge` | §12.c | SIGKILL during merge; on restart, partial sealed file deleted; merge re-runs; `.fs-heavy.lock` auto-released |
+    | 05 | `uploader_crash_mid_upload` | §12.d | SIGKILL between data and manifest upload; on restart all three re-uploaded idempotently; consumers see manifest only on completion |
+    | 06 | `vps_reboot_with_rotation_in_flight` | §12.e | Compose host restart while a `.shadow.jsonl.zst` exists; startup recovery merges it; capture resumes |
+    | 07 | `s3_outage_extended` | §12.f | MinIO killed for 30+ min; Uploader retries indefinitely; on recovery the full backlog drains; `/data` disk-pressure Warning fires at 80% |
+    | 08 | `monitor_down` | §12.g | Monitor container stopped; nodes continue capturing; mock-healthchecks records absence of push |
+    | 09 | `vpn_partition` | §12.h | Monitor↔Node network broken; data flow to S3 continues; Monitor reports node unreachable Critical |
+    | 10 | `hot_swap_deploy_stuck` | §12.i | Deploy left in STAGED for >1h (simulated time); Warning fires; abort path verified |
+    | 11 | `rotation_equivalence_fail_forced_cutover` | §12.j | Mock injects divergence; 3 consecutive FAILs; forced cutover; `verify_result: "FORCED"` in manifest |
+    | 12 | `binance_outage_hours` | §12.k | WS mock unreachable for 2 hours of simulated time; minutes recorded as missing; partial backfill on recovery for ID streams |
+    | 13 | `rest_429_storm` | §12.l | REST mock returns sustained 429s; failed-poll envelopes recorded; backfill outcomes show `PARTIAL` / `FAILED`; alert escalation |
+    | 14 | `active_slot_corruption` | §12.m | `active-slot` file rewritten to a value not matching running PIDs; MISMATCH flag surfaces in `/status`; operator-rewrite path verified |
+    | 15 | `clock_skew` | §12.n | Time injection drifts node clock by minutes; `clock_skew_detected` log event emitted; frames continue bucketing by server-event-time |
+    | 16 | `hot_swap_happy_path` | §5.f | Full deploy: stage → verify (PASS) → promote → cleanup; overlap minutes merged; `active-slot` flipped |
+    | 17 | `rotation_happy_path` | §8.b.2 | Connection-age trigger; rotation completes; `connection_rotation_events[]` recorded in manifest |
+    | 18 | `lock_contention_sealer_vs_rotation` | §9.d | Rotation tries to cutover while Sealer holds `.fs-heavy.lock`; rotation defers to next minute; both complete |
+
+    Pass criterion for every scenario: `cryptopanner-verify --base-dir <test-dir> --date <test-date>` exits 0 with `ERRORS=0` and the expected gap/event annotations appear in the manifest. Failures are preserved under the scenario's compose project name for postmortem.
+
+- f. **`cryptopanner-verify` CLI tests.** The audit/integrity CLI is unit + integration tested. Subcommands: `verify` (archive integrity), `manifest` (inspect), `gaps` (gap report), `integrity` (SHA-256 check). Coverage includes schema_version=1 manifests, all per-stream-type variants (§10.e), and degraded-input handling (truncated zstd, missing sidecar, mismatched SHA).
+
+- g. **Performance / load tests.** Run the local stack at the §7.c target load (20 symbols × 8 streams = 141 subscriptions, §8.a) for at least 2 hours of wall-clock or 24 hours of simulated time. Assert: no missed minutes outside injected faults, `late_frames_dropped` < 0.1% of total frames, CPU and memory headroom on the §6.d 2vCPU/4GB envelope, hourly merge completing well before the next hour starts.
+
+- h. **Multi-node independence test.** Two node containers run in parallel against the same mock-binance-ws (each acquires its own WS connection — same as production). Assert: each produces an independent complete archive in its own S3 prefix (invariant 3.d); failure of one does not affect the other.
+
+- i. **Monitor tests.** Test the Monitor's scrape loop, restart logic with active-slot targeting (§13.b), exponential backoff, circuit breaker, alert deduplication, correlation grouping (§13.e), and recovery messages against a mock Node Agent that simulates the §11.b heartbeat-state transitions.
+
+- j. **CI integration.** Unit and integration tests run on every PR via the standard build (`./gradlew build`). The chaos suite runs on every PR via a JUnit wrapper (e.g., `:consolidation:test --tests "*ChaosVerifyIT*"`) that iterates the §14.e catalogue; individual scripts can be invoked standalone (`bash tests/chaos/NN_*.sh`). Chaos scenarios are parallelized where their compose projects don't share ports.
+
+- k. **VPN-independent testing.** All tests run locally on a single host without requiring a VPN mesh. The Node Agent binds to `0.0.0.0` in test mode; production deployment binds to the VPN interface (§4.f).
 
 ## 15. Configuration ⚠️ DRAFT — NOT REVIEWED
 
