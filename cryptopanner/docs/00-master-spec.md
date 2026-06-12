@@ -5,8 +5,8 @@
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
 - Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 11–12: **APPROVED** (reviewed 2026-06-12)
-- Sections 13–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 13.
+- Sections 11–13: **APPROVED** (reviewed 2026-06-12)
+- Sections 14–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 14.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -389,19 +389,42 @@ m. **`active-slot` file corruption or mismatch.** If the file is unreadable, mis
 
 n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by server-event-time vs local time comparisons (§8.c, §8.e). Detection: heuristic comparing recent frames' server-event-time against local time; emit `clock_skew_detected` log event (threshold deferred to §16.e). Mitigation: Warning alert; operator restarts the node's NTP service. Mis-bucketed frames are not auto-corrected — the manifests will show anomalies that the operator must investigate.
 
-## 13. Reliability & alerting ⚠️ DRAFT — NOT REVIEWED
+## 13. Reliability & alerting
 
-- a. **Alert channels.** The Monitor sends alerts via Telegram (or WhatsApp) webhook. Two severity levels:
-    1. **Warning** — component stuck (heartbeat age > 60s), upload retry count > 3, disk usage > 80%, single failed WS rotation attempt, deploy state machine stuck for > 1h.
-    2. **Critical** — component down (3 consecutive scrape failures), circuit breaker tripped (3 restart failures in 5 min), node unreachable, Monitor's own health degraded, 3 consecutive failed WS rotation attempts or forced cutover after 3 consecutive equivalence FAILs (see the [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §8).
+- a. **Alert channels.** **Telegram** is the primary alert channel (operator-group webhook); **WhatsApp** is an optional secondary configured per-operator deployment. Both receive every alert. Two severity levels:
+    1. **Warning** — early-warning conditions the operator should address within hours:
+        - Component `degraded` (heartbeat 15s < age ≤ 60s — §11.b) persisting for >2 min
+        - Component `stuck` (heartbeat age > 60s, systemd still active)
+        - Upload backlog age > 30 min (oldest sealed file unuploaded — §9.c.4)
+        - Disk usage on `/data` > 80%
+        - Deploy state machine stuck (no progression) for > 1h (§12.i)
+        - Single failed WS rotation attempt (§12.j)
+        - Elevated REST failed-poll rate (>10% of polls returning 429/5xx over a 10-min window — §12.l)
+        - Clock skew detected on a node (§12.n)
+    2. **Critical** — immediate-intervention conditions:
+        - Component `down` (3 consecutive scrape failures from `/status`)
+        - Circuit breaker tripped (3 restart failures in 5 min — see §13.b)
+        - Node unreachable from Monitor (VPN, network, or VPS dead)
+        - Monitor's own health degraded
+        - Disk usage on `/data` > 95%
+        - Extended Binance outage: WS disconnect persisting > 5 min on a Collector slot (§12.k)
+        - 3 consecutive failed WS rotation attempts, or a forced cutover after 3 consecutive equivalence FAILs (§12.j; design doc §5.4)
+        - REST rate-limit pressure persisting across > 2 consecutive hourly merges (§12.l)
+        - `active-slot` MISMATCH between the file and running systemd states (§12.m)
 
-- b. **Restart policy.** The Monitor attempts `POST /restart/{component}` with exponential backoff: 5s → 15s → 60s → 300s. After 3 failures within 5 minutes, the circuit breaker trips: no more restarts, critical alert to operator.
+- b. **Restart policy.** The Monitor attempts `POST /restart/<component>` with exponential backoff: 5s → 15s → 60s → 300s. For the Collector, restart targets the currently **active** slot only (read from `/status.active_slot` — §11.c); the empty slot is never auto-restarted. After 3 failures within 5 minutes, the circuit breaker trips for that (node, component) pair: no more restart attempts, Critical alert to operator.
 
 - c. **Dead-man's switch.** The Monitor pushes a heartbeat to Healthchecks.io every 60s. If pushes stop for 5 minutes, Healthchecks.io alerts the operator via email/SMS. This covers the "Monitor itself is down" and "entire VPS is dead" scenarios.
 
-- d. **No false-positive restarts.** The Monitor uses a two-tier check before restarting: (1) systemd reports the unit as failed or inactive, AND (2) heartbeat age exceeds the threshold. A slow but alive component is not restarted — only stuck or dead ones.
+    Additionally, the Monitor fires a **daily self-test alert at 02:00 UTC** ("alert path healthy") on the Telegram/WhatsApp channels. If the operator stops seeing this message, the alert channel has silently failed (revoked bot token, changed webhook URL, etc.) even though the Monitor and Healthchecks.io are alive.
 
-- e. **Alert deduplication.** The Monitor suppresses repeated alerts for the same condition. A new alert is sent only when the condition changes (e.g., component recovers, then fails again).
+- d. **No false-positive restarts.** The Monitor uses a two-tier check before triggering a restart: (1) systemd reports the unit as failed or inactive, AND (2) heartbeat-derived state is `stuck` or `down` (§11.b). A `degraded` component (heartbeat 15s < age ≤ 60s) is not restarted — it's observation-only, surfaced via the persisting-degraded Warning so the operator can decide whether to intervene. A `running` component is never restarted.
+
+- e. **Alert deduplication, correlation, and latency.**
+    - **Dedup key**: `(node, component, alert-type)`. A repeat firing of the same key within 1 hour of the previous alert is suppressed.
+    - **Recovery signal**: when a condition clears, the Monitor emits a one-time `recovered` message on the same channels so the operator isn't left wondering whether the alert is still active.
+    - **Correlation/grouping**: if 3 or more nodes fire the same alert-type within 1 minute, the Monitor sends one combined message listing the affected nodes instead of N separate pages. Avoids alert storms during region-wide events (S3 outage, Binance outage).
+    - **End-to-end latency**: condition occurrence to operator notification is typically 10–30 seconds (5s scrape interval + ~5s alert pipeline + ~1–2s webhook delivery). Operators should calibrate response expectations accordingly.
 
 ## 14. Testing strategy ⚠️ DRAFT — NOT REVIEWED
 
