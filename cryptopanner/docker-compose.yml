@@ -1,0 +1,93 @@
+# CryptoPanner local end-to-end stack (master spec §14.b).
+# Skeleton: services declared but not yet implemented.
+
+services:
+  # Mock Binance servers (master spec §14.c)
+  mock-binance-ws:
+    # build: ./tests/mocks/binance-ws
+    image: cryptopanner/mock-binance-ws:dev
+    ports:
+      - "9001:9001"
+
+  mock-binance-rest:
+    # build: ./tests/mocks/binance-rest
+    image: cryptopanner/mock-binance-rest:dev
+    ports:
+      - "9002:9002"
+
+  # S3-compatible storage standing in for IONOS S3
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    command: server /data --console-address ":9090"
+    ports:
+      - "9000:9000"     # S3 API
+      - "9090:9090"     # MinIO web console
+    environment:
+      MINIO_ROOT_USER: cryptopanner
+      MINIO_ROOT_PASSWORD: changeme-dev
+    volumes:
+      - minio-data:/data
+
+  # Accepts heartbeat pings; exposes query endpoint for tests
+  mock-healthchecks:
+    # build: ./tests/mocks/healthchecks
+    image: cryptopanner/mock-healthchecks:dev
+    ports:
+      - "9003:9003"
+
+  # Collector slot A (active by default at first boot per design doc §3.3)
+  cryptopanner-collector-a:
+    build: .
+    command: ["--slot=a", "--role=primary"]
+    depends_on: [mock-binance-ws, mock-binance-rest, minio]
+    volumes:
+      - data:/data/cryptopanner
+      - ./config/dev/config.yaml:/etc/cryptopanner/config.yaml:ro
+
+  # Collector slot B (empty in steady state; starts as candidate during deploys)
+  cryptopanner-collector-b:
+    build: .
+    command: ["--slot=b", "--role=candidate"]
+    depends_on: [mock-binance-ws, mock-binance-rest]
+    profiles: ["deploy"]   # only started during deploy chaos scenarios
+    volumes:
+      - data:/data/cryptopanner
+      - ./config/dev/config.yaml:/etc/cryptopanner/config.yaml:ro
+
+  cryptopanner-sealer:
+    build: .
+    command: ["sealer"]
+    depends_on: [minio]
+    volumes:
+      - data:/data/cryptopanner
+      - ./config/dev/config.yaml:/etc/cryptopanner/config.yaml:ro
+
+  cryptopanner-uploader:
+    build: .
+    command: ["uploader"]
+    depends_on: [minio]
+    volumes:
+      - data:/data/cryptopanner
+      - ./config/dev/config.yaml:/etc/cryptopanner/config.yaml:ro
+
+  cryptopanner-agent:
+    build: .
+    command: ["agent"]
+    ports:
+      - "9100:9100"     # /status, /metrics, /restart, /rotation/trigger
+    volumes:
+      - data:/data/cryptopanner
+      - ./config/dev/config.yaml:/etc/cryptopanner/config.yaml:ro
+
+  cryptopanner-monitor:
+    build: .
+    command: ["monitor"]
+    depends_on: [cryptopanner-agent, mock-healthchecks]
+    ports:
+      - "9200:9200"     # /dashboard, /api/nodes
+    volumes:
+      - ./config/dev/monitor.yaml:/etc/cryptopanner-monitor/monitor.yaml:ro
+
+volumes:
+  data:
+  minio-data:

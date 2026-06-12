@@ -1,0 +1,19 @@
+[versions]
+junit       = "5.10.0"
+slf4j       = "2.0.13"
+jackson     = "2.17.1"
+snakeyaml   = "2.2"
+zstd        = "1.5.6-3"
+aws-sdk     = "2.25.30"
+picocli     = "4.7.5"
+
+[libraries]
+junit-jupiter    = { module = "org.junit.jupiter:junit-jupiter",            version.ref = "junit" }
+slf4j-api        = { module = "org.slf4j:slf4j-api",                        version.ref = "slf4j" }
+slf4j-simple     = { module = "org.slf4j:slf4j-simple",                     version.ref = "slf4j" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-yaml     = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
+snakeyaml        = { module = "org.yaml:snakeyaml",                         version.ref = "snakeyaml" }
+zstd             = { module = "com.github.luben:zstd-jni",                  version.ref = "zstd" }
+aws-s3           = { module = "software.amazon.awssdk:s3",                  version.ref = "aws-sdk" }
+picocli          = { module = "info.picocli:picocli",                       version.ref = "picocli" }
