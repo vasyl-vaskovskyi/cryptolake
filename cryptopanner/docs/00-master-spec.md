@@ -5,8 +5,8 @@
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
 - Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 11–14: **APPROVED** (reviewed 2026-06-12)
-- Sections 15–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 15.
+- Sections 11–15: **APPROVED** (reviewed 2026-06-12)
+- Section 16: **DRAFT — NOT REVIEWED.** Open questions, some now resolved by the §5–§15 reviews.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -487,45 +487,160 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 - k. **VPN-independent testing.** All tests run locally on a single host without requiring a VPN mesh. The Node Agent binds to `0.0.0.0` in test mode; production deployment binds to the VPN interface (§4.f).
 
-## 15. Configuration ⚠️ DRAFT — NOT REVIEWED
+## 15. Configuration
 
-- a. **Config file.** Each node reads `/etc/cryptopanner/config.yaml`. The Monitor has its own config file.
+- a. **Config files.** Each node reads `/etc/cryptopanner/config.yaml`; the Monitor reads `/etc/cryptopanner-monitor/monitor.yaml`. Both are YAML. Nested groups map to the dotted key notation used elsewhere in this spec (e.g., `collector.frame_buffer_window` = `collector:\n  frame_buffer_window: ...`).
 
-- b. **Node config contents:**
-    1. `node_id` — unique identifier for this node (e.g., `vps-fra-1`)
-    2. `symbols` — list of symbols to capture (e.g., `[btcusdt, ethusdt]`)
-    3. `streams` — list of streams per symbol (e.g., `[trade, depth@100ms, aggTrade, kline_1m]`)
-    4. `rest_endpoints` — list of REST endpoints to poll with intervals
-    5. `storage.endpoint` — IONOS S3 endpoint URL
-    6. `storage.bucket` — S3 bucket name
-    7. `storage.credentials_file` — path to S3 credentials
-    8. `agent.listen_address` — VPN IP and port for the Node Agent (e.g., `100.x.y.z:9100`)
-    9. `agent.token_file` — path to bearer token file
-    10. `paths.segments` — local path for minute segments
-    11. `paths.sealed` — local path for sealed hourly files
-    12. `paths.logs` — local path for log files
-    13. `collector.connection_max_age` — proactive WS rotation trigger (default `23h`; see [hot-swap design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §7)
-    14. `collector.frame_buffer_window` — late-frame buffering before minute flush (default `5s`)
-    15. `collector.seal_grace_window` — grace period past the minute boundary before sealing (default `10s`)
-    16. `collector.rotation_window` — allowed per-hour window for daily WS rotation start (default `HH:10-HH:50`; see §8.b.2)
-    17. `sealer.hour_grace_window` — delay past the hour boundary before the Sealer begins processing the just-closed hour (default `120s`; see §9.d)
-    18. `deploy.staging_root` — staging tree for hot-swap candidate JVM (default `/data/cryptopanner/staging`)
-    19. `deploy.forbidden_window` — per-hour window in which JAR hot-swap promotes are refused (default `HH:50-HH:15`; see §5.f)
-    20. `deploy.recommended_window` — operator-runbook target window for deploys (default `HH:15-HH:45`)
-    21. `deploy.superseded_retention_days` — rollback window for rotation merges (default `7`)
-    22. `deploy.versions_kept` — JAR version rollback reserve (default `2`)
-    23. `paths.fs_heavy_lock` — path of the node-level filesystem-heavy mutex (default `/data/cryptopanner/.fs-heavy.lock`; see §6.a.7)
+    **Validation.** Components fail-fast at startup if the config is malformed, missing required keys, or contains contradictions (e.g., overlapping `forbidden_window` and `rotation_window`). The error message identifies the offending key and the expected shape; there is no silent acceptance of bad config.
 
-- c. **Monitor config contents:**
-    1. `nodes` — list of node endpoints (VPN IPs and ports)
-    2. `scrape_interval_s` — how often to pull `/status` (default: 5)
-    3. `restart.backoff` — backoff schedule for restart attempts
-    4. `restart.circuit_breaker` — failure count and window for circuit breaker
-    5. `alerting.telegram_webhook` — Telegram bot webhook URL
-    6. `alerting.healthchecks_url` — Healthchecks.io ping URL
-    7. `dashboard.listen_address` — VPN IP and port for the dashboard
+    **Hot-reload.** Keys marked `# HOT-RELOADABLE` in the examples below can be changed without restarting the process (signal-based reload via `SIGHUP`). All other keys require a process restart to take effect. The hot-reload set is intentionally narrow (currently: log level) to keep operational behavior predictable.
 
-- d. **Environment variables.** Secrets (S3 credentials, bearer token, Telegram webhook) may be provided via environment variables as an alternative to file paths in the config.
+- b. **Node config** (`/etc/cryptopanner/config.yaml`):
+
+    ```yaml
+    node_id: vps-fra-1
+
+    symbols:                 # see §7.c — initial set is top 20 USD-M perpetuals
+      - btcusdt
+      - ethusdt
+      # ...
+
+    streams:                 # see §7.a — split by subscription form
+      per_symbol:            # subscribed individually per symbol
+        - trade
+        - depth@100ms
+        - aggTrade
+        - kline_1m
+        - ticker
+        - bookTicker
+        - markPrice
+      all_symbol:            # subscribed once across all symbols
+        - "!forceOrder@arr"
+
+    paths:
+      segments:      /data/cryptopanner/segments         # §6.a.3
+      sealed:        /data/cryptopanner/sealed           # §6.a.4
+      staging:       /data/cryptopanner/staging          # §6.a.5
+      deploy:        /data/cryptopanner/deploy           # §6.a.6
+      logs:          /data/cryptopanner/logs             # §6.a.8
+      fs_heavy_lock: /data/cryptopanner/.fs-heavy.lock   # §6.a.7
+
+    logging:
+      level: INFO            # DEBUG | INFO | WARN | ERROR  — HOT-RELOADABLE (§11.a)
+
+    storage:
+      endpoint:         https://s3.eu-central-1.ionoscloud.com
+      bucket:           cryptopanner-prod
+      credentials_file: /etc/cryptopanner/s3.credentials
+
+    collector:
+      ws_endpoint_url:                   wss://fstream.binance.com/ws    # mock points elsewhere in test (§14.b)
+      unplanned_reconnect_backoff_max_s: 60                              # §8.b
+      frame_buffer_window:               5s                              # §8.e
+      seal_grace_window:                 10s                             # §8.e
+      connection_max_age:                23h                             # §8.b.2
+      rotation_window:                   "HH:10-HH:50"                   # §8.b.2
+      rest:                                                              # §7.b
+        depth:
+          url_template:           "/fapi/v1/depth?symbol={symbol}&limit=1000"
+          baseline_poll_interval: 5m
+          on_demand_resync:       true                                   # also fetch on pu-chain break
+        open_interest:
+          url_template:  "/fapi/v1/openInterest?symbol={symbol}"
+          poll_interval: 60s
+        exchange_info:
+          url_template:  "/fapi/v1/exchangeInfo"
+          poll_time_utc: "00:05"
+
+    sealer:
+      hour_grace_window: 120s                                            # §9.d
+
+    uploader:
+      retry_backoff_max_s: 300                                           # §9.c.4
+
+    deploy:
+      forbidden_window:          "HH:50-HH:15"                           # §5.f
+      recommended_window:        "HH:15-HH:45"                           # §5.f
+      superseded_retention_days: 7                                       # §6.a.6
+      versions_kept:             2                                       # §6.a.1
+
+    agent:
+      listen_address:  100.x.y.z:9100                                    # VPN IP:port in production
+      token_file:      /etc/cryptopanner/agent.token
+      test_mode:       false                                             # true → bind to 0.0.0.0 (§14.b, §14.k)
+      metrics_enabled: true                                              # /metrics endpoint (§11.c)
+      disk_mounts:                                                       # mounts reported in /status (§11.c)
+        - /
+        - /data
+      heartbeat:
+        degraded_threshold_s: 15                                         # §11.b
+        stuck_threshold_s:    60                                         # §11.b
+    ```
+
+- c. **Monitor config** (`/etc/cryptopanner-monitor/monitor.yaml`):
+
+    ```yaml
+    nodes:
+      - id:         vps-fra-1
+        endpoint:   100.x.y.z:9100
+        token_file: /etc/cryptopanner-monitor/tokens/vps-fra-1
+      - id:         vps-tyo-1
+        endpoint:   100.a.b.c:9100
+        token_file: /etc/cryptopanner-monitor/tokens/vps-tyo-1
+
+    scrape_interval_s: 5                                                 # §11.c
+
+    dashboard:
+      listen_address:     100.m.n.o:9200
+      refresh_interval_s: 5                                              # §11.d
+
+    restart:                                                             # §13.b
+      backoff: [5s, 15s, 60s, 300s]
+      circuit_breaker:
+        failure_count: 3
+        window:        5m
+
+    alert:                                                               # §13.a, §13.e
+      dedup_ttl: 1h
+      correlation:
+        threshold_nodes: 3
+        window:          1m
+      warning:
+        degraded_persisting:       2m
+        upload_backlog_age:        30m
+        deploy_stuck:              1h
+        rest_failed_poll_rate_pct: 10
+        rest_failed_poll_window:   10m
+        disk_data_pct:             80
+      critical:
+        extended_ws_disconnect:            5m
+        rest_rate_limit_persistence_hours: 2
+        disk_data_pct:                     95
+
+    alerting:
+      telegram:
+        webhook_url: ""                                                  # required; populate via env var
+      whatsapp:
+        webhook_url: ""                                                  # optional secondary (§13.a)
+      healthchecks_url: ""                                               # populate via env var
+
+    dead_man:                                                            # §13.c
+      healthchecks_push_interval: 60s
+      self_test_time_utc:         "02:00"
+    ```
+
+- d. **Environment variables and secrets.** Secrets (S3 credentials, agent bearer tokens, webhook URLs) should not live in the config file. Any config key can be overridden by `CRYPTOPANNER_<KEY_PATH>` (uppercase, dots replaced with underscores). Examples:
+
+    - `CRYPTOPANNER_STORAGE_CREDENTIALS_FILE=/run/secrets/s3.credentials`
+    - `CRYPTOPANNER_AGENT_TOKEN=...`
+    - `CRYPTOPANNER_MONITOR_ALERTING_TELEGRAM_WEBHOOK_URL=https://api.telegram.org/bot.../sendMessage`
+    - `CRYPTOPANNER_MONITOR_ALERTING_HEALTHCHECKS_URL=https://hc-ping.com/...`
+
+    When both the config file and an env var set the same key, the env var wins. This lets operators ship a generic config in the image/package and inject secrets at deploy time without rewriting files.
+
+- e. **Role override during hot-swap.** Both collector slot JVMs read the same `/etc/cryptopanner/config.yaml`. The role is supplied at the systemd unit command line as `--role=primary` or `--role=candidate` and drives the write-root selection (`paths.segments` for primary vs `paths.staging/<deploy-id>/` for candidate — design doc §3.3, §4.1). The config file is **not** edited during a deploy; the active slot identity lives in `paths.deploy/active-slot` (§6.b).
+
+- f. **Symbol-set changes.** Adding or removing a symbol requires a new WS `SUBSCRIBE` message, which the Collector only issues when opening a connection. The natural application moment is the next planned WS rotation (§8.b.2) — the shadow connection picks up the new subscription list as it opens, and after promote the production process is on the new set. Operators update `config.yaml`; the change is applied automatically within ≤24h. To force immediate application, operators trigger an out-of-cycle rotation via the Node Agent (e.g., `POST /rotation/trigger`). Symbol-set changes are **not** hot-reloadable in place.
 
 ## 16. Open questions ⚠️ DRAFT — NOT REVIEWED
 
