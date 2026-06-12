@@ -1,12 +1,11 @@
 # CryptoPanner — Master Specification
 
-**Status:** Draft. Sections are added incrementally, one at a time, with review and approval before proceeding.
+**Status:** Reviewed end-to-end.
 
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
 - Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 11–15: **APPROVED** (reviewed 2026-06-12)
-- Section 16: **DRAFT — NOT REVIEWED.** Open questions, some now resolved by the §5–§15 reviews.
+- Sections 11–16: **APPROVED** (reviewed 2026-06-12)
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -44,6 +43,7 @@ c. The project is a clean-room successor to CryptoLake (v1) with no shared code,
     3. Support for exchanges other than Binance USD-M Futures.
     4. Historical bulk import of data predating the pipeline's first run.
     5. Inline gap detection in the capture hot path.
+    6. Backup, cross-region replication, or other disaster recovery for the S3 archive — managed by the operator at the S3-bucket level (versioning, lifecycle rules, replication to a second bucket). The pipeline guarantees per-node, write-once durability into S3; everything beyond that is operator-managed.
 
 ## 3. Invariants
 
@@ -83,9 +83,9 @@ a. **Node placement.** At least two VPS nodes in geographically separate regions
 
 b. **Monitor placement.** A single Monitor VPS hosted on a different provider than the nodes (e.g., nodes on IONOS, Monitor on Hetzner or OVH). Cheapest tier sufficient — 1 vCPU, 1GB RAM.
 
-c. **Object storage.** IONOS S3-compatible object storage. Each node uploads to a node-specific prefix: `s3://<bucket>/<node-id>/<symbol>/<stream>/<date>/hour-HH.jsonl.zst`. Nodes never read from or write to another node's prefix.
+c. **Object storage.** IONOS S3-compatible object storage. Each node uploads to a node-specific prefix: `s3://<bucket>/<node-id>/<symbol>/<stream>/<date>/hour-HH.jsonl.zst`. Nodes never read from or write to another node's prefix. When a VPS is replaced (hardware refresh, region change, etc.), the new instance gets a **new** node ID (e.g., `vps-fra-2` follows `vps-fra-1`); the old prefix is preserved in S3 as historical archive. This prevents data duplication if the old VPS briefly comes back online and gives the cross-region merge tool (out of scope per §1.b) a clean per-instance partition.
 
-d. **VPN mesh.** All nodes and the Monitor join a single encrypted mesh VPN (Tailscale or WireGuard). All inter-instance communication is routed through VPN interfaces. No public ports are exposed for internal APIs.
+d. **VPN mesh.** All nodes and the Monitor join a single encrypted **Tailscale** mesh VPN (managed, free tier sufficient for the operator scale targeted in v1). All inter-instance communication is routed through Tailscale interfaces; no public ports are exposed for internal APIs. The Tailscale dependency is in the control path (Monitor↔Node) only — the data path (Node → S3) goes over public HTTPS to IONOS, so a Tailscale outage doesn't lose data. v2 can switch to raw WireGuard if the free tier becomes limiting or a self-managed control plane is required.
 
 e. **Deployment method.** Each component is packaged as a fat JAR (or installDist output) and deployed via systemd unit files. No container runtime required on nodes.
 
@@ -142,7 +142,7 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
     2. `GET /fapi/v1/openInterest?symbol=X` — open interest. Polled every 60 seconds per symbol.
     3. `GET /fapi/v1/exchangeInfo` — symbol metadata and trading rules for all symbols. Polled once per day at 00:05 UTC (the same wall-clock time on every node so cross-region comparisons see the same snapshot).
 
-- c. **Symbol set.** Initial deployment captures the **top 20 USD-M Futures perpetuals by 30-day notional volume**, configured in `config.yaml.symbols`. The list is refreshed quarterly by operator decision. The 20-symbol target keeps the combined-streams subscription well below Binance's per-connection stream limit and fits the resource envelope in §6.d. The handling of larger symbol sets that exceed the per-connection limit remains an open question (§16.f).
+- c. **Symbol set.** Initial deployment captures the **top 20 USD-M Futures perpetuals by 30-day notional volume**, configured in `config.yaml.symbols`. The list is refreshed quarterly by operator decision. The 20-symbol target keeps the combined-streams subscription well below Binance's per-connection stream limit and fits the resource envelope in §6.d. The handling of larger symbol sets that exceed the per-connection limit remains an open question (§16.a).
 
 - d. **Backfill sources (REST, used at hourly merge for gap-fillable streams):**
     1. `GET /fapi/v1/aggTrades?symbol=X&fromId=N` — paginated aggTrades by ID. Source for `aggTrade` gap fill.
@@ -152,7 +152,7 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
 
 ## 8. Ingest
 
-a. **WebSocket connection.** In steady state the Collector maintains a single consolidated WebSocket connection to Binance USD-M Futures (`wss://fstream.binance.com/ws`); during a planned WS rotation overlap (§8.b) up to two connections run in parallel briefly. Streams are subscribed via a `{"method":"SUBSCRIBE","params":[...]}` message after connect, not encoded into the URL (the URL form gets unwieldy with this many streams and is harder to mock for tests). For the initial 20-symbol set (§7.c), the subscription totals 141 streams (7 per-symbol × 20 + 1 all-symbol `!forceOrder@arr`), well below Binance's documented 200-streams-per-connection limit; larger symbol sets that exceed the limit remain an open question (§16.f). Public market-data streams require no authentication. Binance pings each connection every 3 minutes and disconnects clients that fail to pong within 10 minutes; the Collector responds to pings automatically as part of its read loop.
+a. **WebSocket connection.** In steady state the Collector maintains a single consolidated WebSocket connection to Binance USD-M Futures (`wss://fstream.binance.com/ws`); during a planned WS rotation overlap (§8.b) up to two connections run in parallel briefly. Streams are subscribed via a `{"method":"SUBSCRIBE","params":[...]}` message after connect, not encoded into the URL (the URL form gets unwieldy with this many streams and is harder to mock for tests). For the initial 20-symbol set (§7.c), the subscription totals 141 streams (7 per-symbol × 20 + 1 all-symbol `!forceOrder@arr`), well below Binance's documented 200-streams-per-connection limit; larger symbol sets that exceed the limit remain an open question (§16.a). Public market-data streams require no authentication. Binance pings each connection every 3 minutes and disconnects clients that fail to pong within 10 minutes; the Collector responds to pings automatically as part of its read loop.
 
 b. **Reconnection.** Two distinct cases:
    1. **Unplanned faults** (disconnect, ping timeout, half-open detection): the Collector reconnects immediately with exponential backoff (1s, 2s, 4s, ..., capped at 60s). After reconnection, it re-subscribes to all configured streams. The resulting gap is recorded normally — ID streams may be filled by REST backfill at hourly merge; non-ID streams record the gap in the manifest.
@@ -162,7 +162,7 @@ c. **Raw capture.** Each incoming WebSocket frame is written as-is (raw bytes, n
 
 d. **REST polling.** REST endpoints are polled on independent timers (cadences pinned in §7.b). Responses are written as raw JSON to the same minute-segment file structure, with a wrapper envelope identifying the source endpoint, request parameters, and poll-issue wall-clock timestamp. Failed polls (HTTP 429 rate-limit, 5xx, timeout, connection error) are themselves recorded as envelopes — same shape but with an `error` field carrying the HTTP status or error class — so that raw-fidelity is preserved for failures and downstream consumers can distinguish "no response captured" from "response captured but Binance returned an error." Retries are scheduled per-endpoint with exponential backoff; both the failed envelope and the eventual successful envelope are kept in the minute file.
 
-e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A short late-frame grace window (default 10s past the minute boundary) allows frames whose server event time falls in the just-closed minute to still be routed there before the file is sealed. The closed segment is immutable after sealing. Minute boundaries and the grace window are evaluated against the **local wall clock** (the server-event-time bucketing in §8.c handles per-frame placement; the local clock controls when files close and seal). Tolerable clock skew between the node and Binance servers is an open question (§16.e).
+e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A short late-frame grace window (default 10s past the minute boundary) allows frames whose server event time falls in the just-closed minute to still be routed there before the file is sealed. The closed segment is immutable after sealing. Minute boundaries and the grace window are evaluated against the **local wall clock** (the server-event-time bucketing in §8.c handles per-frame placement; the local clock controls when files close and seal). Tolerable clock skew between the node and Binance servers is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
 
 ## 9. WAL & local sealing & upload
 
@@ -171,7 +171,7 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
 - b. **Hourly merge (Sealer).** At the turn of each hour (e.g., at 15:00:00 UTC the Sealer processes hour 14):
     1. Collects all minute segments for the previous hour, per (symbol, stream). The Sealer always sees a single `minute-<HH-MM>.jsonl.zst` file per minute — `.shadow.jsonl.zst` overlap files produced by the Collector during a hot-swap or WS rotation have already been merged away before the Sealer runs.
     2. Concatenates them in **minute-filename order** (lexicographic on `minute-HH-MM`). Within each minute, frames retain their capture-arrival order — the Sealer does not re-sort within a minute. (Frames are server-event-timestamp-bucketed at capture time per §8.c, so the per-minute partition is by `E`/`T`; intra-minute ordering reflects how Binance delivered events on the WS connection, which is what raw-fidelity demands.)
-    3. For gap-fillable streams (`trade`, `aggTrade` — see §7.d): validates sequence-ID continuity across the concatenated data. If gaps are detected, attempts backfill via REST. Backfilled records are inserted in sequence order, which means the entire hourly file is rebuilt: decompress → merge new records at the right positions → recompress. This is not a streaming append.
+    3. For gap-fillable streams (`trade`, `aggTrade` — see §7.d): validates sequence-ID continuity across the concatenated data. If gaps are detected, attempts backfill via REST. Each gap is attempted up to **3 times with exponential backoff** (1s, 5s, 30s; configurable per §15.b); on final failure the gap is recorded as `FAILED` in `sequence_gaps[].backfill_outcome` and the merge proceeds. There are no cross-merge retries — Binance's historical REST APIs are deterministic, so a failed gap will not resolve in a later attempt unless the underlying data changes. Backfilled records are inserted in sequence order, which means the entire hourly file is rebuilt: decompress → merge new records at the right positions → recompress. This is not a streaming append.
     4. Compresses the result with zstd (or finalizes the recompressed form from step 3 if backfill ran).
     5. Writes the `.sha256` integrity sidecar (same durability order as §9.a).
     6. Writes the `.manifest.json` recording: list of minute segments present, list of minute segments missing, sequence-ID range (first, last), any remaining gaps after backfill, backfill attempts and outcomes, and any `deploy_events[]` or `connection_rotation_events[]` that fall within the hour (see 10.f). Deploy events are read from `/data/cryptopanner/deploy/history.jsonl`; rotation events are read from per-Collector rotation records written at promotion time. Both sources are filtered to events whose `promoted_at` falls inside the hour being sealed.
@@ -252,11 +252,11 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
     ```
 
     Field semantics:
-    - `manifest_schema_version` — integer; downstream consumers parse based on this. Bumped when fields are added/removed in a non-additive way.
+    - `manifest_schema_version` — integer; downstream consumers parse based on this. **Evolution policy:** additive-only changes (new optional fields, new entry types in existing arrays) do **not** bump the version; downstream consumers ignore unknown fields gracefully. Breaking changes (field renames, type changes, semantic shifts) bump the version; the `cryptopanner-verify` CLI supports reading the current and previous version, and a migration tool reads old manifests and writes new ones.
     - `file_sha256`, `file_size_bytes` — describe the **compressed** `.jsonl.zst` file as written to disk and uploaded to S3 (`file_sha256` matches the `.sha256` sidecar contents).
     - `uncompressed_size_bytes` — the JSONL payload size before zstd, for sizing intuition.
     - `record_count` — number of JSONL lines in the **final** file (post-backfill).
-    - `late_frames_dropped` — count of frames received after the §8.e seal grace and discarded. Aggregated across all minutes of the hour. Non-zero values inform tuning of §16.j.
+    - `late_frames_dropped` — count of frames received after the §8.e seal grace and discarded. Aggregated across all minutes of the hour. Non-zero values inform tuning of §16.c.
     - `partial_minutes` — minutes whose file exists but is known to be truncated (Collector crashed mid-minute, file fsynced up to the crash point). The minute still counts as `minutes_present`; the internal gap is also recorded in `sequence_gaps`.
     - `sequence_gaps[].from_id`/`.to_id` — inclusive bounds of the missing range. `count` = `to_id - from_id + 1` for trade/aggTrade; for depth, `from_id`/`to_id` are the surrounding `u` values bracketing a `pu`-chain break.
     - `backfill_outcome` — `FILLED`, `PARTIAL`, `FAILED`, or `SKIPPED_NO_SOURCE` (the last for non-fillable streams).
@@ -290,7 +290,9 @@ a. **Structured logging.** Every component writes JSON Lines logs to `/data/cryp
 
     Required fields: `ts` (ISO-8601 with millisecond precision), `component`, `event` (machine-readable identifier from §11.e), `level`. `slot` is required for collector logs and omitted for other components. Domain-specific fields (`stream_count`, `endpoint`, `rotation_id`, etc.) are added per event.
 
-    Log levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Production default is `INFO`; `DEBUG` is enabled via config reload (no process restart needed). Log rotation and retention are deferred to §16.d.
+    Log levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Production default is `INFO`; `DEBUG` is enabled via config reload (no process restart needed).
+
+    **Rotation and retention.** Logs are rotated when a file exceeds 100MB OR weekly, whichever comes first (`logrotate` or component-internal equivalent). Four weeks of compressed history are kept; files older than 30 days are deleted. ERROR-level entries are additionally mirrored to a `critical-events.jsonl` sidecar that is **never** rotated — retention managed by the operator separately (typically shipped off-node for incident analysis). Rotation parameters are configurable per §15.b.
 
 b. **Heartbeat files.** Each running component touches its heartbeat file every 5s on its main loop iteration. The collector touches a per-slot heartbeat (`/tmp/cryptopanner-collector@<slot>.heartbeat` per §6.a.9). During a deploy or WS rotation overlap, both slots' files are fresh; in steady state only the active slot's file is fresh.
 
@@ -334,7 +336,7 @@ c. **Node Agent endpoints.**
 
     During an active deploy, `deploy.state` reflects the state-machine value (`STAGED`, `OVERLAP_READY`, `VERIFIED`, `PROMOTING`, `PROMOTED`) with a `deploy_id` field; the Monitor renders a banner on the dashboard. Similarly `rotation.state` becomes `OVERLAP_VERIFYING` or `CUTOVER_PENDING` during a rotation, with `rotation_id` and `old_connection_age_s`.
 
-    `GET /metrics` — Prometheus-style exposition for historical metrics. Counters: `cryptopanner_late_frames_dropped_total`, `cryptopanner_backfill_attempts_total`, `cryptopanner_uploads_total`, `cryptopanner_rotation_events_total`. Gauges: `cryptopanner_heartbeat_age_seconds`, `cryptopanner_current_connection_age_seconds`, `cryptopanner_sealed_files_pending_upload`, plus VPS metrics. Scraped by an external Prometheus or aggregator if the operator chooses to deploy one; the Monitor does not consume it. Same VPN-bound port as `/status`, no additional auth required (read-only).
+    `GET /metrics` — **OpenMetrics text format** (Prometheus-compatible) for historical metrics. Counters: `cryptopanner_late_frames_dropped_total`, `cryptopanner_backfill_attempts_total`, `cryptopanner_uploads_total`, `cryptopanner_rotation_events_total`. Gauges: `cryptopanner_heartbeat_age_seconds`, `cryptopanner_current_connection_age_seconds`, `cryptopanner_sealed_files_pending_upload`, plus VPS metrics. Scraped by an external Prometheus or aggregator if the operator chooses to deploy one; the Monitor does not consume it. Same VPN-bound port as `/status`, no additional auth required (read-only).
 
 d. **Monitor dashboard.** The Monitor serves a simple HTML page at `GET /dashboard` showing all nodes and their component states, with auto-refresh every 5s (matching the scrape interval in §13). Backed by `GET /api/nodes` (JSON). A deploy or rotation in progress on any node surfaces as a banner on that node's card; circuit-breaker trips and unreachable nodes are highlighted at the top of the dashboard.
 
@@ -387,7 +389,7 @@ l. **REST rate-limit (429) storm.** Failed polls are recorded as failure envelop
 
 m. **`active-slot` file corruption or mismatch.** If the file is unreadable, missing, or contradicts running systemd states (e.g., reports `a` but only slot `b` has a live PID), the Node Agent does not auto-resolve. Detection: discrepancy is flagged in `/status` as `active_slot: "MISMATCH"` and surfaces as Critical alert. Resolution: operator inspects systemd states and the per-slot heartbeat mtimes, then rewrites the file manually (the live slot is whichever has the recently-touched heartbeat).
 
-n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by server-event-time vs local time comparisons (§8.c, §8.e). Detection: heuristic comparing recent frames' server-event-time against local time; emit `clock_skew_detected` log event (threshold deferred to §16.e). Mitigation: Warning alert; operator restarts the node's NTP service. Mis-bucketed frames are not auto-corrected — the manifests will show anomalies that the operator must investigate.
+n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by server-event-time vs local time comparisons (§8.c, §8.e). Detection: heuristic comparing recent frames' server-event-time against local time over a 60s window. Skew tolerance: ±100ms accepted silently; ±1s emits `clock_skew_detected` (Warning, §13.a); ±5s escalates to Critical. Mitigation: operator restarts the node's NTP service (`chrony` or `systemd-timesyncd` against any reputable pool — `pool.ntp.org` default acceptable). Mis-bucketed frames are not auto-corrected — manifests will show anomalies that the operator must investigate.
 
 ## 13. Reliability & alerting
 
@@ -400,7 +402,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
         - Deploy state machine stuck (no progression) for > 1h (§12.i)
         - Single failed WS rotation attempt (§12.j)
         - Elevated REST failed-poll rate (>10% of polls returning 429/5xx over a 10-min window — §12.l)
-        - Clock skew detected on a node (§12.n)
+        - Clock skew on a node > 1s (§12.n)
     2. **Critical** — immediate-intervention conditions:
         - Component `down` (3 consecutive scrape failures from `/status`)
         - Circuit breaker tripped (3 restart failures in 5 min — see §13.b)
@@ -411,6 +413,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
         - 3 consecutive failed WS rotation attempts, or a forced cutover after 3 consecutive equivalence FAILs (§12.j; design doc §5.4)
         - REST rate-limit pressure persisting across > 2 consecutive hourly merges (§12.l)
         - `active-slot` MISMATCH between the file and running systemd states (§12.m)
+        - Clock skew on a node > 5s (§12.n)
 
 - b. **Restart policy.** The Monitor attempts `POST /restart/<component>` with exponential backoff: 5s → 15s → 60s → 300s. For the Collector, restart targets the currently **active** slot only (read from `/status.active_slot` — §11.c); the empty slot is never auto-restarted. After 3 failures within 5 minutes, the circuit breaker trips for that (node, component) pair: no more restart attempts, Critical alert to operator.
 
@@ -527,6 +530,12 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
     logging:
       level: INFO            # DEBUG | INFO | WARN | ERROR  — HOT-RELOADABLE (§11.a)
+      rotation:
+        max_file_size: 100MB                # rotate when file exceeds this (§11.a)
+        rotation_period:  weekly            # OR weekly, whichever first
+        compressed_history_weeks: 4         # keep this many rotated files
+        delete_after_days: 30
+        critical_events_sidecar: /data/cryptopanner/logs/critical-events.jsonl  # never rotated (§11.a)
 
     storage:
       endpoint:         https://s3.eu-central-1.ionoscloud.com
@@ -554,6 +563,10 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
     sealer:
       hour_grace_window: 120s                                            # §9.d
+      backfill:
+        attempts_per_gap: 3                                              # §9.b.3
+        backoff:           [1s, 5s, 30s]                                 # §9.b.3
+        cross_merge_retry: false                                         # §9.b.3
 
     uploader:
       retry_backoff_max_s: 300                                           # §9.c.4
@@ -612,10 +625,12 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
         rest_failed_poll_rate_pct: 10
         rest_failed_poll_window:   10m
         disk_data_pct:             80
+        clock_skew_s:              1                                     # §12.n
       critical:
         extended_ws_disconnect:            5m
         rest_rate_limit_persistence_hours: 2
         disk_data_pct:                     95
+        clock_skew_s:                      5                             # §12.n
 
     alerting:
       telegram:
@@ -642,26 +657,10 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 - f. **Symbol-set changes.** Adding or removing a symbol requires a new WS `SUBSCRIBE` message, which the Collector only issues when opening a connection. The natural application moment is the next planned WS rotation (§8.b.2) — the shadow connection picks up the new subscription list as it opens, and after promote the production process is on the new set. Operators update `config.yaml`; the change is applied automatically within ≤24h. To force immediate application, operators trigger an out-of-cycle rotation via the Node Agent (e.g., `POST /rotation/trigger`). Symbol-set changes are **not** hot-reloadable in place.
 
-## 16. Open questions ⚠️ DRAFT — NOT REVIEWED
+## 16. Open questions
 
-a. **Minute-segment compression.** Should minute segments be zstd-compressed on write, or stored as plain JSONL and only compressed during the hourly merge? Compression on write saves disk but adds CPU overhead to every write. Compression at merge time is simpler but uses more transient disk.
+a. **Multi-symbol WebSocket partitioning (v2).** When the configured symbol set would produce ≥ 200 subscriptions (e.g., ≥ 28 symbols × 7 per-symbol streams + 1 all-symbol), the Collector must open multiple parallel WS connections. v1 ships single-connection because §7.c's initial 20-symbol set produces only 141 subscriptions (§8.a). The partitioning algorithm (round-robin, by symbol, by stream type) is deferred to v2; design doc §5 rotation mechanics apply per-connection so the per-connection lifecycle is already specified.
 
-b. **Backfill retry limits.** How many REST backfill attempts should the Sealer make before giving up and recording the gap in the manifest? What backoff strategy? Should it retry in a future merge cycle or only once?
+b. **Sealer prolonged-merge hard timeout (v2).** The Sealer currently blocks indefinitely if an hourly merge runs long (§9.d), with the Monitor's upload-backlog-age Warning (§13.a) as the operator signal. A hard timeout (abandon merge, record hour as incomplete in the manifest) is a potential v2 addition — to be revisited only if operational data shows real-world cases of permanent merge hangs. A blind timeout risks silently abandoning a near-completion merge, which is worse than waiting.
 
-c. **Disk pressure management.** If the Uploader falls behind and sealed files accumulate, at what disk usage threshold should the Node Agent alert? Should the pipeline pause capture to avoid filling the disk, or keep capturing and let the operator decide?
-
-d. **Log retention.** How long should structured log files be kept on each node? Should they be rotated by size, by time, or both?
-
-e. **Clock synchronization.** Minute-segment boundaries depend on wall-clock time. What NTP configuration is assumed? How much clock skew between nodes is tolerable?
-
-f. **Multi-symbol WebSocket strategy.** Binance limits combined stream connections. If the symbol set exceeds the limit, should the Collector open multiple WebSocket connections? How are streams distributed across connections?
-
-g. **Sealer scheduling under prolonged merge.** The Sealer is now scheduled at `HH:00 + 120s` and serializes hours via the `.fs-heavy.lock` (§9.d), so if one hour's merge runs long, the next hour queues behind it rather than running concurrently. **Open question:** is there an upper-bound timeout after which the Sealer should give up on a stuck merge and move on (recording the hour as incomplete in the manifest), or should it block indefinitely? The current default is "block indefinitely" — needs validation under load.
-
-h. **Node identity in S3.** The `node-id` is used as the S3 key prefix. What happens if a node is replaced (new VPS, same region)? Should it reuse the old node ID or get a new one?
-
-i. **VPN provider decision.** Tailscale (managed, free tier) vs raw WireGuard (self-managed, no external dependency). Decision deferred to deployment phase.
-
-j. **Late-frame grace defaults.** The defaults for `collector.frame_buffer_window` (5s) and `collector.seal_grace_window` (10s) — see 15.b — are guesses pending observed worst-case `E`-to-local-receive delay across Binance regions. To be tuned based on `late_frame_after_seal` event counts in early deployment.
-
-k. ~~WS rotation jitter across nodes.~~ **Resolved 2026-06-09:** rotation start is constrained to `HH:10 → HH:50` and within that window each node uses a deterministic offset `(hash(node_id) % 40) + 10` minutes past the hour, so no two nodes in a region rotate at the same minute. Documented in §8.b.2.
+c. **Late-frame grace defaults.** `collector.frame_buffer_window` (5s) and `collector.seal_grace_window` (10s) are guesses pending observed `E`-to-local-receive delay across Binance regions (§8.e). Tune from `late_frame_after_seal` event counts in early production deployment. Target: ≤ 0.1% of frames dropped (per §14.g acceptance criterion). No resolution before operational data.
