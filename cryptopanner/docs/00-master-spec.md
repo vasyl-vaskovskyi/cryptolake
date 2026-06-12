@@ -5,7 +5,8 @@
 **Review progress:**
 - Sections 1–4: **APPROVED** (reviewed 2026-05-25)
 - Sections 5–10: **APPROVED** (reviewed 2026-06-09; adds Collector hot-swap referencing [superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md))
-- Sections 11–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 11.
+- Section 11: **APPROVED** (reviewed 2026-06-12)
+- Sections 12–16: **DRAFT — NOT REVIEWED.** Written as initial proposals based on design discussions. Each section needs user review and approval before it is final. Review them one by one starting from Section 12.
 
 **Key design decisions made during Sections 1–4 review (context for future sessions):**
 - Minute-segment files on local disk → merged into hourly files at hour boundary → uploaded to IONOS S3
@@ -271,17 +272,82 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
 
     Schemas and merge semantics in the [hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §6.
 
-## 11. Health & observability ⚠️ DRAFT — NOT REVIEWED
+## 11. Health & observability
 
-a. **Structured logging.** Every component writes JSON Lines logs to `/data/cryptopanner/logs/<component>.jsonl`. Each log entry contains: `ts` (ISO-8601), `component`, `event` (machine-readable), `level` (INFO/WARN/ERROR), and domain-specific fields.
+a. **Structured logging.** Every component writes JSON Lines logs to `/data/cryptopanner/logs/`. Per-component paths follow §6.a.8: the collector writes per-slot files (`cryptopanner-collector@a.jsonl`, `cryptopanner-collector@b.jsonl`); sealer, uploader, and agent each write one file. Each log entry has the shape:
 
-b. **Heartbeat files.** Each component touches its heartbeat file (`/tmp/cryptopanner-<component>.heartbeat`) every 5s on its main loop iteration. The Node Agent derives component state from mtime: `running` (mtime < 15s), `stuck` (mtime > 60s), `down` (systemd reports inactive).
+    ```json
+    {
+      "ts": "2026-06-12T14:23:47.512Z",
+      "component": "cryptopanner-collector",
+      "slot": "a",
+      "event": "ws_connect",
+      "level": "INFO",
+      "stream_count": 141,
+      "endpoint": "wss://fstream.binance.com/ws"
+    }
+    ```
 
-c. **Node Agent `/status` response.** Returns JSON with per-component state (running/stuck/down, PID, heartbeat age, uptime) and VPS metrics (CPU%, memory%, disk%, load average). Scraped by the Monitor every 5s.
+    Required fields: `ts` (ISO-8601 with millisecond precision), `component`, `event` (machine-readable identifier from §11.e), `level`. `slot` is required for collector logs and omitted for other components. Domain-specific fields (`stream_count`, `endpoint`, `rotation_id`, etc.) are added per event.
 
-d. **Monitor dashboard.** The Monitor serves a simple HTML page at `GET /dashboard` showing all nodes and their component states, with auto-refresh. Backed by `GET /api/nodes` (JSON).
+    Log levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Production default is `INFO`; `DEBUG` is enabled via config reload (no process restart needed). Log rotation and retention are deferred to §16.d.
 
-e. **Log events of interest.** Key events the Monitor should track from component logs (if log tailing is added in the future): WebSocket connect/disconnect, minute-segment sealed, hourly merge started/completed, backfill attempted/succeeded/failed, upload started/completed/failed.
+b. **Heartbeat files.** Each running component touches its heartbeat file every 5s on its main loop iteration. The collector touches a per-slot heartbeat (`/tmp/cryptopanner-collector@<slot>.heartbeat` per §6.a.9). During a deploy or WS rotation overlap, both slots' files are fresh; in steady state only the active slot's file is fresh.
+
+    The Node Agent derives component state from mtime (5s touch cadence → 3 missed heartbeats = stuck warning, 12 missed = effectively down):
+    - `running` (mtime ≤ 15s)
+    - `degraded` (15s < mtime ≤ 60s) — main loop slow, possibly blocking on I/O; early warning
+    - `stuck` (mtime > 60s, systemd reports active) — alive but not progressing
+    - `down` (systemd reports inactive or failed)
+
+c. **Node Agent endpoints.**
+
+    `GET /status` — point-in-time JSON snapshot scraped by the Monitor every 5s:
+
+    ```json
+    {
+      "node": "vps-fra-1",
+      "scraped_at": "2026-06-12T14:23:50Z",
+      "components": {
+        "cryptopanner-collector@a": { "state": "running",  "pid": 1234, "heartbeat_age_s": 2.1, "uptime_s": 83412 },
+        "cryptopanner-collector@b": { "state": "down",     "pid": null, "heartbeat_age_s": null, "uptime_s": 0 },
+        "cryptopanner-sealer":      { "state": "running",  "pid": 1235, "heartbeat_age_s": 3.4, "uptime_s": 83410 },
+        "cryptopanner-uploader":    { "state": "running",  "pid": 1236, "heartbeat_age_s": 1.9, "uptime_s": 83410 },
+        "cryptopanner-agent":       { "state": "running",  "pid": 1237, "heartbeat_age_s": 0.5, "uptime_s": 83410 }
+      },
+      "active_slot": "a",
+      "deploy":   { "state": "IDLE" },
+      "rotation": { "state": "IDLE", "current_connection_age_s": 76800 },
+      "vps": {
+        "cpu_percent": 14.2,
+        "memory_percent": 38.0,
+        "load_average_1m": 0.42,
+        "disk": {
+          "/":     { "percent": 22.3, "free_bytes": 30400000000 },
+          "/data": { "percent": 41.8, "free_bytes": 41200000000 }
+        }
+      }
+    }
+    ```
+
+    Disk usage is reported per mount; at minimum `/` and `/data` (§6.d). The §13 disk-pressure alert thresholds against `/data`.
+
+    During an active deploy, `deploy.state` reflects the state-machine value (`STAGED`, `OVERLAP_READY`, `VERIFIED`, `PROMOTING`, `PROMOTED`) with a `deploy_id` field; the Monitor renders a banner on the dashboard. Similarly `rotation.state` becomes `OVERLAP_VERIFYING` or `CUTOVER_PENDING` during a rotation, with `rotation_id` and `old_connection_age_s`.
+
+    `GET /metrics` — Prometheus-style exposition for historical metrics. Counters: `cryptopanner_late_frames_dropped_total`, `cryptopanner_backfill_attempts_total`, `cryptopanner_uploads_total`, `cryptopanner_rotation_events_total`. Gauges: `cryptopanner_heartbeat_age_seconds`, `cryptopanner_current_connection_age_seconds`, `cryptopanner_sealed_files_pending_upload`, plus VPS metrics. Scraped by an external Prometheus or aggregator if the operator chooses to deploy one; the Monitor does not consume it. Same VPN-bound port as `/status`, no additional auth required (read-only).
+
+d. **Monitor dashboard.** The Monitor serves a simple HTML page at `GET /dashboard` showing all nodes and their component states, with auto-refresh every 5s (matching the scrape interval in §13). Backed by `GET /api/nodes` (JSON). A deploy or rotation in progress on any node surfaces as a banner on that node's card; circuit-breaker trips and unreachable nodes are highlighted at the top of the dashboard.
+
+e. **Log events of interest** — machine-readable event identifiers (snake_case) that the Monitor, the audit tooling, and the Sealer (when populating manifest event arrays per §10.f) depend on. Stable identifiers; do not rename without a migration:
+    - WS connection lifecycle: `ws_connect`, `ws_disconnect`, `ws_ping_missed`, `late_frame_after_seal`
+    - Minute / hour sealing: `minute_sealed`, `hour_merge_started`, `hour_sealed`
+    - Backfill: `backfill_attempted`, `backfill_succeeded`, `backfill_failed`
+    - Upload: `upload_started`, `upload_succeeded`, `upload_failed`
+    - WS rotation: `rotation_started`, `rotation_verify_passed`, `rotation_verify_failed`, `rotation_promoted`, `rotation_forced_cutover`
+    - Deploy: `deploy_staged`, `deploy_verified`, `deploy_promoted`, `deploy_aborted`, `deploy_resumed`
+    - Heartbeat-state transitions (emitted by the Node Agent, not the components themselves): `component_running`, `component_degraded`, `component_stuck`, `component_down`
+
+    Each event includes its domain-specific fields — e.g., `rotation_started` carries `rotation_id`, `old_connection_age_s`, `streams_subscribed`; `late_frame_after_seal` carries `symbol`, `stream`, `late_by_ms`, `server_event_time`.
 
 ## 12. Failure model ⚠️ DRAFT — NOT REVIEWED
 
