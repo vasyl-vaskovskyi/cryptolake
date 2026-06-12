@@ -162,7 +162,7 @@ c. **Raw capture.** Each incoming WebSocket frame is written as-is (raw bytes, n
 
 d. **REST polling.** REST endpoints are polled on independent timers (cadences pinned in §7.b). Responses are written as raw JSON to the same minute-segment file structure, with a wrapper envelope identifying the source endpoint, request parameters, and poll-issue wall-clock timestamp. Failed polls (HTTP 429 rate-limit, 5xx, timeout, connection error) are themselves recorded as envelopes — same shape but with an `error` field carrying the HTTP status or error class — so that raw-fidelity is preserved for failures and downstream consumers can distinguish "no response captured" from "response captured but Binance returned an error." Retries are scheduled per-endpoint with exponential backoff; both the failed envelope and the eventual successful envelope are kept in the minute file.
 
-e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A short late-frame grace window (default 10s past the minute boundary) allows frames whose server event time falls in the just-closed minute to still be routed there before the file is sealed. The closed segment is immutable after sealing. Minute boundaries and the grace window are evaluated against the **local wall clock** (the server-event-time bucketing in §8.c handles per-frame placement; the local clock controls when files close and seal). Tolerable clock skew between the node and Binance servers is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
+e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A **frame-buffer window** (default 5s) buffers frames during the minute so late-arriving frames near the boundary route to the correct minute; after that the file is sealed at minute close + **seal-grace window** (default 10s). Any frame arriving after seal is dropped and recorded in `late_frames_dropped` (§10.d). The closed segment is immutable after sealing. Minute boundaries identify which file a frame goes to (using the frame's server event time per §8.c), but the seal-grace timer itself uses **`CLOCK_MONOTONIC`** (design doc §3.4) — an NTP step does not prematurely seal or double-seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
 
 ## 9. WAL & local sealing & upload
 
@@ -236,7 +236,6 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
       "file_size_bytes": 1048576,
       "uncompressed_size_bytes": 9437184,
       "record_count": 42000,
-      "deploy_events": [],
       "connection_rotation_events": [
         {
           "rotation_id": "rot-2026-05-25T14:23:00Z",
@@ -266,9 +265,13 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
     - **ID-bearing gap-detectable-only** (`depth@100ms`): `sequence_id_range` reports the first `U` and the last `u` over the hour; `sequence_gaps[]` entries describe `pu`-chain breaks; `backfill_attempts[]` entries record snapshot-resync attempts rather than historical-replay calls; an additional `depth_anchor_snapshots` field lists the minutes during the hour at which a baseline `/fapi/v1/depth` snapshot was captured (§7.b.1).
     - **Non-ID** (`kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`): the manifest omits `sequence_id_range`, `sequence_gaps`, and `backfill_attempts` entirely. Only `minutes_present`, `minutes_missing`, `partial_minutes`, and the file/size/count fields are populated. Any `minutes_missing` are permanent (no backfill source — see §7.d).
 
-- f. **Optional event arrays.** Two optional arrays are populated only when the corresponding event crossed the hour:
+- f. **Optional event arrays.** Two optional arrays. **Absent** (not present in the JSON) on hours with no events of that type; populated as a non-empty array when one or more events crossed the hour.
     - `deploy_events[]` — one entry per Collector hot-swap deploy that promoted during this hour. Fields: `deploy_id`, `old_version`, `new_version`, `promoted_at`, `minutes_merged`, `verify_result`, `verify_report_sha256`.
-    - `connection_rotation_events[]` — one entry per scheduled WS rotation that promoted during this hour. Fields: `rotation_id`, `reason`, `old_connection_age_hours`, `promoted_at`, `minutes_merged`, `verify_result`, `diff_summary` (see example in §10.d).
+    - `connection_rotation_events[]` — one entry per WS rotation that promoted during this hour. Fields: `rotation_id`, `reason`, `old_connection_age_hours`, `promoted_at`, `minutes_merged`, `verify_result`, `diff_summary` (see example in §10.d).
+
+    Enums:
+    - `verify_result` ∈ { `PASS`, `FORCED`, `RECOVERED_AT_STARTUP`, `ABORTED` }. `PASS` is the steady-state value; `FORCED` is a cutover after 3 consecutive equivalence FAILs (§12.j); `RECOVERED_AT_STARTUP` is set by the Collector's startup recovery when it merges leftover `.shadow` files (design doc §5.6); `ABORTED` records a rotation that started but couldn't complete (both connections dropped, etc.).
+    - `reason` (rotation events) ∈ { `SCHEDULED`, `OPERATOR_TRIGGERED`, `EMERGENCY` }. `SCHEDULED` is the normal age-based daily rotation; `OPERATOR_TRIGGERED` is via the `/rotation/trigger` endpoint (e.g., for a symbol-set change per §15.f); `EMERGENCY` is the cliff-approach bypass when connection age > `connection_max_age + 45 min` (design doc §5.1).
 
     Schemas and merge semantics in the [hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §6.
 
@@ -318,8 +321,9 @@ c. **Node Agent endpoints.**
         "cryptopanner-agent":       { "state": "running",  "pid": 1237, "heartbeat_age_s": 0.5, "uptime_s": 83410 }
       },
       "active_slot": "a",
-      "deploy":   { "state": "IDLE" },
-      "rotation": { "state": "IDLE", "current_connection_age_s": 76800 },
+      "fs_heavy_lock": { "held_by": null },
+      "deploy":       { "state": "IDLE" },
+      "rotation":     { "state": "IDLE", "current_connection_age_s": 76800 },
       "vps": {
         "cpu_percent": 14.2,
         "memory_percent": 38.0,
@@ -333,6 +337,8 @@ c. **Node Agent endpoints.**
     ```
 
     Disk usage is reported per mount; at minimum `/` and `/data` (§6.d). The §13 disk-pressure alert thresholds against `/data`.
+
+    `fs_heavy_lock.held_by` is the component name currently holding `/data/cryptopanner/.fs-heavy.lock` (§6.a.7) or `null` if free. The Monitor uses this for the cliff-approach restart exception (§13.d).
 
     During an active deploy, `deploy.state` reflects the state-machine value (`STAGED`, `OVERLAP_READY`, `VERIFIED`, `PROMOTING`, `PROMOTED`) with a `deploy_id` field; the Monitor renders a banner on the dashboard. Similarly `rotation.state` becomes `OVERLAP_VERIFYING` or `CUTOVER_PENDING` during a rotation, with `rotation_id` and `old_connection_age_s`.
 
@@ -356,7 +362,7 @@ e. **Log events of interest** — machine-readable event identifiers (snake_case
 a. **Collector crash.** With slot templating (§6.b), the response depends on which slot crashed:
    - **Active slot crashes** → systemd restarts the unit (`Restart=always`). Frames are not captured during the downtime; the gap is recorded normally. The last minute file may be truncated mid-zstd-frame: the Sealer truncates to the last successfully-decompressed frame, emits a `partial_minute` event (§11.e), and records the affected minute in the manifest's `partial_minutes[]` (§10.e). For ID-bearing gap-fillable streams, REST backfill at hourly merge fills what it can; non-ID streams lose the window permanently (§7.d).
    - **Candidate slot crashes during a deploy** → no production impact (the active slot keeps running). The deploy state machine moves to a failed STAGED state; the operator runs `cryptopanner-deploy abort` (design doc §4.5).
-   - **One of two slots crashes during a WS rotation overlap** → the surviving connection continues. The rotation falls into early cutover (design doc §5.4): the surviving connection becomes primary, the failed slot is restarted clean.
+   - **One of two slots crashes during a WS rotation overlap** → the surviving connection continues. The rotation falls into early cutover (design doc §5.5): the surviving connection becomes primary, the failed slot is restarted clean.
 
 b. **Collector WebSocket disconnect.** Handling follows the §8.b split:
    - **Unplanned** (network blip, ping timeout): immediate reconnect with exponential backoff (1s, 2s, 4s, ..., 60s). Frames during the disconnect window are missing. For ID-bearing gap-fillable streams (trade, aggTrade), REST backfill at hourly merge fills the gap. For non-ID streams (kline_1m, ticker, bookTicker, markPrice, forceOrder), the data is **permanently lost** on this node and recorded as gaps in the manifest (no REST source — §7.d).
@@ -368,7 +374,7 @@ d. **Uploader crash.** On restart, the Uploader scans `sealed/` for files whose 
 
 e. **VPS reboot.** systemd restarts services per §6.c (no explicit `After=` between pipeline components; each starts independently). On collector startup:
    1. Read `/data/cryptopanner/deploy/active-slot` to determine which slot to start in `primary` role. The other slot stays empty.
-   2. Run startup recovery (design doc §5.5): scan `segments/` for any `*.shadow.jsonl.zst` files left over from an in-flight rotation; for each pair (`*.jsonl.zst` + `*.shadow.jsonl.zst`), run `OverlapMerger` to produce a single merged file. Idempotent.
+   2. Run startup recovery (design doc §5.6): scan `segments/` for any `*.shadow.jsonl.zst` files left over from an in-flight rotation; for each pair (`*.jsonl.zst` + `*.shadow.jsonl.zst`), run `OverlapMerger` to produce a single merged file. Idempotent.
    3. Open WS connection and resume capture.
 
    The Sealer then catches up on any un-merged past hours (subject to §9.d). The Uploader scans for un-uploaded sealed files. Data during the downtime is recorded normally (same handling as 12.a / 12.b).
@@ -381,7 +387,7 @@ h. **VPN mesh failure.** Nodes continue capturing and uploading — VPN is only 
 
 i. **Hot-swap deploy stuck.** Operator left a deploy in STAGED or OVERLAP_READY without promoting or aborting. The candidate JVM keeps running — consuming a second WS connection and writing to the staging tree, which grows linearly with time. Detection: §13 alerts Warning when the deploy state machine has not progressed for >1h. Resolution: operator runs `cryptopanner-deploy abort` (terminates candidate JVM, deletes staging tree) or proceeds with verify + promote.
 
-j. **Rotation equivalence repeatedly fails.** Per design doc §5.4: first FAIL logs Warning and re-verifies after the next minute; 3 consecutive FAILs escalate Critical and force the cutover anyway (better one connection than approaching the 24h cliff). The forced cutover writes `verify_result: "FORCED"` and the equivalence diff into the manifest event so the divergence is auditable. No silent acceptance.
+j. **Rotation equivalence repeatedly fails.** Per design doc §5.5: first FAIL logs Warning and re-verifies after the next minute; 3 consecutive FAILs escalate Critical and force the cutover anyway (better one connection than approaching the 24h cliff). The forced cutover writes `verify_result: "FORCED"` and the equivalence diff into the manifest event so the divergence is auditable. No silent acceptance.
 
 k. **Extended Binance outage (hours).** Collector continues attempting reconnect with backoff capped at 60s. Until Binance recovers, no minute files are written. The Sealer at each hour boundary records every minute as missing. For ID-bearing gap-fillable streams, REST backfill at hourly merge fills what it can once the REST endpoints are reachable again. Non-ID streams lose the entire outage window permanently. Monitor alerts Critical on the prolonged WS disconnect; archive completeness is correctly reflected in manifests.
 
@@ -410,10 +416,11 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
         - Monitor's own health degraded
         - Disk usage on `/data` > 95%
         - Extended Binance outage: WS disconnect persisting > 5 min on a Collector slot (§12.k)
-        - 3 consecutive failed WS rotation attempts, or a forced cutover after 3 consecutive equivalence FAILs (§12.j; design doc §5.4)
+        - 3 consecutive failed WS rotation attempts, or a forced cutover after 3 consecutive equivalence FAILs (§12.j; design doc §5.5)
         - REST rate-limit pressure persisting across > 2 consecutive hourly merges (§12.l)
         - `active-slot` MISMATCH between the file and running systemd states (§12.m)
         - Clock skew on a node > 5s (§12.n)
+        - WS connection age > `connection_max_age + 30 min` (default 23h30m, approaching Binance's 24h forced-close — see design doc §5.1)
 
 - b. **Restart policy.** The Monitor attempts `POST /restart/<component>` with exponential backoff: 5s → 15s → 60s → 300s. For the Collector, restart targets the currently **active** slot only (read from `/status.active_slot` — §11.c); the empty slot is never auto-restarted. After 3 failures within 5 minutes, the circuit breaker trips for that (node, component) pair: no more restart attempts, Critical alert to operator.
 
@@ -422,6 +429,8 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
     Additionally, the Monitor fires a **daily self-test alert at 02:00 UTC** ("alert path healthy") on the Telegram/WhatsApp channels. If the operator stops seeing this message, the alert channel has silently failed (revoked bot token, changed webhook URL, etc.) even though the Monitor and Healthchecks.io are alive.
 
 - d. **No false-positive restarts.** The Monitor uses a two-tier check before triggering a restart: (1) systemd reports the unit as failed or inactive, AND (2) heartbeat-derived state is `stuck` or `down` (§11.b). A `degraded` component (heartbeat 15s < age ≤ 60s) is not restarted — it's observation-only, surfaced via the persisting-degraded Warning so the operator can decide whether to intervene. A `running` component is never restarted.
+
+    **Exception (cliff-approach lock release).** If `/status` reports a `.fs-heavy.lock` holder that is `degraded`, AND there is a Collector slot whose WS connection age has crossed `connection_max_age + 30 min` (§13.a Critical), the Monitor restarts the lock-holding component (typically the Sealer) to release the lock and unblock the rotation. This overrides the `degraded`-is-observation-only rule because the alternative is reaching Binance's 24h forced-close. Restart attempt counts toward §13.b's circuit breaker normally.
 
 - e. **Alert deduplication, correlation, and latency.**
     - **Dedup key**: `(node, component, alert-type)`. A repeat firing of the same key within 1 hour of the previous alert is suppressed.
