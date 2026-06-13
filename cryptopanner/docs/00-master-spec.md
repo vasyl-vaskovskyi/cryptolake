@@ -95,7 +95,7 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
 
 ## 6. Node anatomy
 
-- a. **Directory layout** on each node:
+- a. **Directory layout** on each node. All `<date>`, `<HH-MM>`, and `<HH>` values in the paths below are **UTC** (`YYYY-MM-DD` for `<date>`, `00`–`23` zero-padded for hours, `00`–`59` zero-padded for minutes). This is independent of the node's geographic timezone — every node, every region uses UTC in filenames so that the eventual cross-region merge tool (out of scope per §1.b) and any operator dashboard can join `(symbol, stream, date, hour)` directly without timezone math:
     1. `/opt/cryptopanner/`
         - `current/` — symlink to the active version directory
         - `candidate/` — symlink to a staged version (only present during a hot-swap deploy)
@@ -114,6 +114,8 @@ f. **Collector hot-swap.** The Collector is deployed via a make-before-break pro
     - `cryptopanner-sealer.service`, `cryptopanner-uploader.service`, `cryptopanner-agent.service`.
 
     All set to `Restart=always` while active. The agent unit has `WatchdogSec=30`. The Node Agent's `POST /restart/collector` targets the currently active slot (read from `/data/cryptopanner/deploy/active-slot`); for granular control, `POST /restart/collector/{slot}` operates on a named slot.
+
+    **All units run with `Environment=TZ=UTC`** so the JVM's wall-clock methods, log timestamps, file-rotation calculations, and any operator-visible output are in UTC regardless of the host's geographic locale. This is a deployment requirement, not a runtime option — the install script verifies the unit files set it.
 
 - c. **Boot order.** The pipeline components do not require explicit `After=` ordering between each other — components discover state via the filesystem (existing minute segments, sealed files, S3 manifests) and the Node Agent derives liveness from heartbeats rather than systemd start-completion. Each unit comes up independently when systemd reaches it.
 
@@ -162,7 +164,7 @@ c. **Raw capture.** Each incoming WebSocket frame is written as-is (raw bytes, n
 
 d. **REST polling.** REST endpoints are polled on independent timers (cadences pinned in §7.b). Responses are written as raw JSON to the same minute-segment file structure, with a wrapper envelope identifying the source endpoint, request parameters, and poll-issue wall-clock timestamp. Failed polls (HTTP 429 rate-limit, 5xx, timeout, connection error) are themselves recorded as envelopes — same shape but with an `error` field carrying the HTTP status or error class — so that raw-fidelity is preserved for failures and downstream consumers can distinguish "no response captured" from "response captured but Binance returned an error." Retries are scheduled per-endpoint with exponential backoff; both the failed envelope and the eventual successful envelope are kept in the minute file.
 
-e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A **frame-buffer window** (default 5s) buffers frames during the minute so late-arriving frames near the boundary route to the correct minute; after that the file is sealed at minute close + **seal-grace window** (default 10s). Any frame arriving after seal is dropped and recorded in `late_frames_dropped` (§10.d). The closed segment is immutable after sealing. Minute boundaries identify which file a frame goes to (using the frame's server event time per §8.c), but the seal-grace timer itself uses **`CLOCK_MONOTONIC`** (design doc §3.4) — an NTP step does not prematurely seal or double-seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
+e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A **frame-buffer window** (default 5s) buffers frames during the minute so late-arriving frames near the boundary route to the correct minute; after that the file is sealed at minute close + **seal-grace window** (default 10s). Any frame arriving after seal is dropped and recorded in `late_frames_dropped` (§10.d). The closed segment is immutable after sealing. Minute boundaries identify which file a frame goes to (using the frame's server event time per §8.c) and are evaluated against the node's **UTC** wall clock (`TZ=UTC` per §6.b), so all nodes seal the same Binance minute at the same wall instant regardless of region. The seal-grace timer itself uses **`CLOCK_MONOTONIC`** (design doc §3.4) — an NTP step does not prematurely seal or double-seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
 
 ## 9. WAL & local sealing & upload
 
@@ -200,7 +202,7 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
     <node-id>/<symbol>/<stream>/<date>/hour-<HH>.manifest.json
     ```
 
-    Where `<date>` is `YYYY-MM-DD` (matches the manifest's `date` field) and `<HH>` is `00`–`23` zero-padded. The manifest object is uploaded last per §9.c.1, so its presence in S3 is the consumer-side completeness signal.
+    Where `<date>` is `YYYY-MM-DD` and `<HH>` is `00`–`23` zero-padded, both **in UTC** (matches the manifest's `date` and `hour` fields). A key like `vps-fra-1/btcusdt/trade/2026-06-13/hour-14.jsonl.zst` denotes the UTC hour 14:00–14:59 of 2026-06-13 on node `vps-fra-1`; the same UTC hour on `vps-tyo-1` uses the identical date/hour suffix, giving the cross-region merge tool (out of scope per §1.b) a trivial join key. The manifest object is uploaded last per §9.c.1, so its presence in S3 is the consumer-side completeness signal.
 
 - d. **Manifest format** (`hour-<HH>.manifest.json`). Representative example for an ID-bearing gap-fillable stream (`trade`) with a missing minute, a backfilled gap, and a WS rotation event during the hour:
 
@@ -506,6 +508,8 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
     **Validation.** Components fail-fast at startup if the config is malformed, missing required keys, or contains contradictions (e.g., overlapping `forbidden_window` and `rotation_window`). The error message identifies the offending key and the expected shape; there is no silent acceptance of bad config.
 
     **Hot-reload.** Keys marked `# HOT-RELOADABLE` in the examples below can be changed without restarting the process (signal-based reload via `SIGHUP`). All other keys require a process restart to take effect. The hot-reload set is intentionally narrow (currently: log level) to keep operational behavior predictable.
+
+    **Timezone is fixed at UTC.** All wall-clock decisions in CryptoPanner (minute/hour boundaries, file naming, scheduled REST polls, rotation windows, deploy forbidden window, alert daily self-test time) are interpreted as UTC. The deployment requirement `TZ=UTC` on every component's systemd unit (§6.b) makes the JVM's local-time methods return UTC values, removing any ambiguity for log readers and for components that compare timestamps. There is no `timezone` configuration key — UTC is not an opinion.
 
 - b. **Node config** (`/etc/cryptopanner/config.yaml`):
 
