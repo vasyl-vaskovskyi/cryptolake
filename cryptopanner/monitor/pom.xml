@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.cryptopanner</groupId>
+        <artifactId>cryptopanner-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>cryptopanner-monitor</artifactId>
+    <packaging>jar</packaging>
+
+    <description>Cross-node monitoring, dashboard, alert escalation, restart orchestration.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.cryptopanner</groupId>
+            <artifactId>cryptopanner-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>appassembler-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>install</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>assemble</goal>
+                        </goals>
+                        <configuration>
+                            <assembleDirectory>${project.build.directory}/install</assembleDirectory>
+                            <repositoryLayout>flat</repositoryLayout>
+                            <repositoryName>repo</repositoryName>
+                            <useWildcardClassPath>true</useWildcardClassPath>
+                            <programs>
+                                <program>
+                                    <mainClass>com.cryptopanner.monitor.Main</mainClass>
+                                    <id>monitor</id>
+                                </program>
+                            </programs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

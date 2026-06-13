@@ -2,23 +2,23 @@
 
 help:
 	@echo "Targets:"
-	@echo "  build      — ./gradlew build (compile + spotlessCheck + tests, all modules)"
-	@echo "  test       — ./gradlew test"
-	@echo "  format     — ./gradlew spotlessApply (auto-format Java)"
+	@echo "  build      — mvn verify (compile + tests + spotless:check, all modules)"
+	@echo "  test       — mvn test"
+	@echo "  format     — mvn spotless:apply (auto-format Java)"
 	@echo "  dev-up     — docker compose up -d (local e2e stack per master spec §14.b)"
 	@echo "  dev-down   — docker compose down -v"
 	@echo "  dev-logs   — docker compose logs -f"
 	@echo "  chaos-all  — run every tests/chaos/NN_*.sh scenario"
-	@echo "  clean      — ./gradlew clean"
+	@echo "  clean      — mvn clean"
 
 build:
-	./gradlew build
+	mvn verify
 
 test:
-	./gradlew test
+	mvn test
 
 format:
-	./gradlew spotlessApply
+	mvn spotless:apply
 
 dev-up:
 	docker compose up -d
@@ -33,4 +33,4 @@ chaos-all:
 	bash scripts/run-chaos-tests.sh
 
 clean:
-	./gradlew clean
+	mvn clean

@@ -4,22 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-CryptoPanner is a raw-first, multi-region capture pipeline for Binance USD-M Futures market data. The end product is an append-only, byte-faithful collection of per-node hourly sealed files in IONOS S3-compatible object storage. Java 21, multi-module Gradle. Clean-room successor to CryptoLake (v1) — no shared code, configuration, or data.
+CryptoPanner is a raw-first, multi-region capture pipeline for Binance USD-M Futures market data. The end product is an append-only, byte-faithful collection of per-node hourly sealed files in IONOS S3-compatible object storage. Java 21, multi-module Maven. Clean-room successor to CryptoLake (v1) — no shared code, configuration, or data.
 
 Authoritative spec: `docs/00-master-spec.md` (reviewed end-to-end 2026-06-12). The make-before-break hot-swap and WS rotation mechanism lives in `docs/superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md` (same review date). The invariants in master spec §3 are non-negotiable: raw-payload fidelity, durability before acknowledgement, manifest-as-source-of-truth, per-node independence, idempotent upload, no silent data loss.
 
 ## Build & test
 
-Use the Gradle wrapper. Spotless (google-java-format 1.23.0) runs on every build; CI fails on unformatted code. `removeUnusedImports()` is intentionally omitted from the Spotless config — google-java-format already handles it (matches CryptoLake parent convention).
+Use Maven 3.9+. Spotless (google-java-format 1.23.0) is bound to the `verify` phase; CI fails on unformatted code. `removeUnusedImports()` is intentionally omitted from the Spotless config — google-java-format already handles it (matches CryptoLake parent convention).
 
 ```bash
-./gradlew build                                    # compile + spotlessCheck + tests, all modules
-./gradlew :collector:test                          # one module
-./gradlew :collector:test --tests "*ClassNameTest*"
-./gradlew :collector:test --tests "*ClassNameTest.methodName"
-./gradlew spotlessApply                            # auto-format before commit
-./gradlew :verify:installDist                      # produces verify/build/install/verify/bin/verify
+mvn verify                                         # compile + tests + spotless:check, all modules
+mvn -pl collector test                             # one module
+mvn -pl collector test -Dtest=ClassNameTest        # one test class
+mvn -pl collector test -Dtest=ClassNameTest#method # one test method
+mvn spotless:apply                                 # auto-format before commit
+mvn -pl verify -am package                         # produces verify/target/install/bin/verify
 ```
+
+`-am` ("also make") includes the verify module's upstream dependencies (`common`) in the reactor build.
 
 ## Running locally
 
@@ -40,7 +42,7 @@ Each `tests/chaos/NN_*.sh` spins up an isolated `cryptopanner-chaos-NN` compose 
 ```bash
 bash tests/chaos/01_collector_active_crash.sh         # one scenario
 make chaos-all                                         # all scenarios
-./gradlew :verify:test --tests "*ChaosVerifyIT*"       # JUnit harness wraps all scenarios
+mvn -pl verify test -Dtest=ChaosVerifyIT               # JUnit harness wraps all scenarios
 ```
 
 ## Modules at a glance
@@ -50,10 +52,12 @@ make chaos-all                                         # all scenarios
 | `common` | config (YAML), envelope codec, S3 client helpers, logging, identity | — |
 | `collector` | WS supervisor, capture, slot-templated (`@a`/`@b`), in-process daily rotation, hot-swap mechanics | common |
 | `sealer` | hourly merge + REST backfill (gap-fillable streams) + manifest generation | common |
-| `uploader` | S3 upload with manifest-last ordering and infinite backoff | common, S3 SDK |
-| `agent` | Node Agent HTTP server: `/status`, `/metrics` (OpenMetrics), `/restart/<comp>`, `/rotation/trigger` | common |
-| `monitor` | Cross-node monitoring, dashboard, alert escalation, restart orchestration | common |
+| `uploader` | S3 upload with manifest-last ordering and infinite backoff | common, AWS S3 SDK |
+| `agent` | Node Agent HTTP server (`/status`, `/metrics`, `/restart`, `/rotation/trigger`) | common |
+| `monitor` | Cross-node monitoring + alerting + restart orchestration | common |
 | `verify` | `cryptopanner-verify` audit/integrity CLI; subcommands `verify`, `manifest`, `gaps`, `integrity` | common, picocli |
+
+Each app module's `package` phase runs the `appassembler-maven-plugin` to produce `<module>/target/install/{bin/<name>, repo/*.jar}` — the Maven equivalent of an `installDist` layout. The systemd unit's `ExecStart` on the node points at the `bin/<name>` launcher script.
 
 ## Architecture conventions worth knowing
 
@@ -68,7 +72,7 @@ make chaos-all                                         # all scenarios
 - **Java 21, virtual threads.** Use `Executors.newVirtualThreadPerTaskExecutor()` for I/O loops. SIGTERM hooks run on a platform thread (JVM requirement). That one exception is intentional.
 - **Single `ObjectMapper` per service.** Constructed in `common` via `EnvelopeCodec.newMapper()` and threaded through wiring. Don't create ad-hoc Jackson mappers.
 - **`CLOCK_MONOTONIC` for grace-window timers.** Wall clock is only used to identify which minute a frame goes to; sealing timers use `System.nanoTime()`. See design doc §3.4.
-- **Spotless enforced.** Run `./gradlew spotlessApply` before committing.
+- **Spotless enforced.** Run `mvn spotless:apply` before committing.
 
 ## Where to look first
 

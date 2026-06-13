@@ -1,9 +1,8 @@
-# Gradle
-.gradle/
-build/
-!**/src/**/build/
-gradle-app.setting
-!gradle-wrapper.jar
+# Maven
+target/
+dependency-reduced-pom.xml
+!**/src/**/target/
+!.mvn/wrapper/maven-wrapper.jar
 
 # IntelliJ IDEA
 .idea/
