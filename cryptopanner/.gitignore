@@ -37,3 +37,7 @@ tests/chaos/.chaos-run-*/
 # Heap dumps and JFR
 *.hprof
 *.jfr
+
+# Python virtual environments
+.venv/
+venv/
