@@ -18,16 +18,9 @@ docker run -d --name "$MINIO_NAME" -p 9000:9000 \
   -e MINIO_ROOT_PASSWORD=changeme-dev \
   minio/minio:RELEASE.2024-05-10T01-41-38Z server /data >/dev/null
 
-# 3) Start the mock WS server (Python venv).
-MOCK_DIR="$REPO_ROOT/tests/mocks/binance-ws"
-cd "$MOCK_DIR"
-[ -d .venv ] || python3 -m venv .venv
-. .venv/bin/activate
-pip install -q -r requirements.txt
-python mock_ws.py &
+# 3) Start the mock WS server (Java).
+"$REPO_ROOT/tests/mocks/binance-ws/target/install/bin/mock-binance-ws" &
 MOCK_PID=$!
-deactivate
-cd "$REPO_ROOT"
 
 # Cleanup on exit (success or failure).
 cleanup() {

@@ -21,6 +21,7 @@
         <module>agent</module>
         <module>monitor</module>
         <module>verify</module>
+        <module>tests/mocks/binance-ws</module>
     </modules>
 
     <properties>
