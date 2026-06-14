@@ -2,6 +2,7 @@ package com.cryptopanner.sealer;
 
 import com.cryptopanner.common.Paths;
 import com.cryptopanner.common.Sha256Sidecar;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.Zstd;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -21,8 +22,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Reads minute-segment files for one hour and produces one sealed hour file. Skeleton-only: no
- * backfill, no sequence-ID validation, no event arrays.
+ * Reads minute-segment files for one hour and produces one sealed hour file. Skeleton: no backfill
+ * yet, no event arrays. Sequence-ID continuity is validated for ID-bearing streams (trade,
+ * aggTrade) and surfaced through {@link Result#sequence}.
  */
 public final class HourMerger {
 
@@ -35,19 +37,30 @@ public final class HourMerger {
 
   private final Path baseSegments;
   private final Path baseSealed;
+  private final ObjectMapper mapper;
 
   public HourMerger(Path baseSegments, Path baseSealed) {
-    this.baseSegments = baseSegments;
-    this.baseSealed = baseSealed;
+    this(baseSegments, baseSealed, new ObjectMapper());
   }
 
-  /** Result of one merge, used by the manifest writer. */
+  public HourMerger(Path baseSegments, Path baseSealed, ObjectMapper mapper) {
+    this.baseSegments = baseSegments;
+    this.baseSealed = baseSealed;
+    this.mapper = mapper;
+  }
+
+  /**
+   * Result of one merge, used by the manifest writer. {@code sequence} is {@code null} for streams
+   * that aren't ID-bearing — the manifest then omits the sequence fields entirely (master spec
+   * §10.d).
+   */
   public record Result(
       Path file,
       String sha256Hex,
       long fileSizeBytes,
       long recordCount,
-      List<Integer> minutesPresent) {}
+      List<Integer> minutesPresent,
+      SequenceAnalyzer.Analysis sequence) {}
 
   public Result mergeHour(String symbol, String stream, Instant hourStart) throws IOException {
     String date = DATE.format(hourStart);
@@ -85,6 +98,7 @@ public final class HourMerger {
     }
 
     byte[] mergedBytes = merged.toByteArray();
+    SequenceAnalyzer.Analysis sequence = SequenceAnalyzer.analyze(mergedBytes, stream, mapper);
     byte[] compressedOut = Zstd.compress(mergedBytes, 3);
 
     Path out = Paths.hourSealed(baseSealed, symbol, stream, hourStart);
@@ -104,6 +118,7 @@ public final class HourMerger {
     Path sidecar = out.resolveSibling(out.getFileName() + ".sha256");
     Sha256Sidecar.computeAndWrite(out, sidecar);
 
-    return new Result(out, Sha256Sidecar.readHash(sidecar), Files.size(out), records, present);
+    return new Result(
+        out, Sha256Sidecar.readHash(sidecar), Files.size(out), records, present, sequence);
   }
 }

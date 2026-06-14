@@ -41,10 +41,28 @@ public final class ManifestWriter {
     for (int m : merge.minutesPresent()) {
       minutes.add(m);
     }
-    root.putArray("minutes_missing"); // empty for skeleton (no gap tracking)
+    root.putArray("minutes_missing"); // skeleton: minute-segment gap tracking is post-skeleton.
     root.put("file_sha256", merge.sha256Hex());
     root.put("file_size_bytes", merge.fileSizeBytes());
     root.put("record_count", merge.recordCount());
+
+    // Sequence-ID fields for ID-bearing streams only (master spec §10.d "non-ID streams omit
+    // sequence_id_range, sequence_gaps, backfill_attempts entirely").
+    SequenceAnalyzer.Analysis seq = merge.sequence();
+    if (seq != null && seq.firstId() >= 0) {
+      ObjectNode range = root.putObject("sequence_id_range");
+      range.put("first", seq.firstId());
+      range.put("last", seq.lastId());
+      ArrayNode gaps = root.putArray("sequence_gaps");
+      for (SequenceAnalyzer.Gap g : seq.gaps()) {
+        ObjectNode gn = gaps.addObject();
+        gn.put("from", g.from());
+        gn.put("to", g.to());
+        gn.put("count", g.count());
+        gn.put("backfill_outcome", "NOT_ATTEMPTED");
+      }
+      root.putArray("backfill_attempts"); // populated once REST backfill is wired in (§9.b.3).
+    }
 
     // Pretty-printed, LF line endings (master spec §10.d).
     String json = mapper.writeValueAsString(root);

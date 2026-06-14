@@ -1,6 +1,8 @@
 package com.cryptopanner.sealer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.luben.zstd.Zstd;
@@ -14,11 +16,15 @@ import org.junit.jupiter.api.io.TempDir;
 
 class HourMergerTest {
 
+  /**
+   * Uses {@code ticker} (non-ID-bearing) so the merge succeeds on opaque content; sequence analysis
+   * is covered by the trade-specific test below and by {@link SequenceAnalyzerTest}.
+   */
   @Test
   void mergesMinutesInOrder(@TempDir Path tmp) throws IOException {
     Path segments = tmp.resolve("segments");
     Path sealed = tmp.resolve("sealed");
-    Path minDir = segments.resolve("btcusdt/trade/2026-06-14");
+    Path minDir = segments.resolve("btcusdt/ticker/2026-06-14");
     Files.createDirectories(minDir);
     writeMinute(minDir, "minute-14-00.jsonl.zst", "a1\na2\n");
     writeMinute(minDir, "minute-14-01.jsonl.zst", "b1\n");
@@ -26,9 +32,9 @@ class HourMergerTest {
 
     HourMerger merger = new HourMerger(segments, sealed);
     HourMerger.Result result =
-        merger.mergeHour("btcusdt", "trade", Instant.parse("2026-06-14T14:00:00Z"));
+        merger.mergeHour("btcusdt", "ticker", Instant.parse("2026-06-14T14:00:00Z"));
 
-    Path expectedFile = sealed.resolve("btcusdt/trade/2026-06-14/hour-14.jsonl.zst");
+    Path expectedFile = sealed.resolve("btcusdt/ticker/2026-06-14/hour-14.jsonl.zst");
     assertTrue(Files.exists(expectedFile));
     assertTrue(Files.exists(expectedFile.resolveSibling("hour-14.jsonl.zst.sha256")));
 
@@ -36,6 +42,39 @@ class HourMergerTest {
     assertEquals("a1\na2\nb1\nc1\nc2\nc3\n", new String(decompressed));
     assertEquals(6, result.recordCount());
     assertEquals(List.of(0, 1, 2), result.minutesPresent());
+    assertNull(result.sequence(), "ticker is not ID-bearing — sequence analysis must be null");
+  }
+
+  @Test
+  void detectsSequenceGapForTrade(@TempDir Path tmp) throws IOException {
+    Path segments = tmp.resolve("segments");
+    Path sealed = tmp.resolve("sealed");
+    Path minDir = segments.resolve("btcusdt/trade/2026-06-14");
+    Files.createDirectories(minDir);
+    // IDs 100, 101 then 104, 105 — gap covers 102..103.
+    writeMinute(
+        minDir,
+        "minute-14-00.jsonl.zst",
+        "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":100}}\n"
+            + "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":101}}\n");
+    writeMinute(
+        minDir,
+        "minute-14-01.jsonl.zst",
+        "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":104}}\n"
+            + "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":105}}\n");
+
+    HourMerger.Result result =
+        new HourMerger(segments, sealed)
+            .mergeHour("btcusdt", "trade", Instant.parse("2026-06-14T14:00:00Z"));
+
+    assertNotNull(result.sequence());
+    assertEquals(100, result.sequence().firstId());
+    assertEquals(105, result.sequence().lastId());
+    assertEquals(1, result.sequence().gaps().size());
+    SequenceAnalyzer.Gap g = result.sequence().gaps().get(0);
+    assertEquals(102, g.from());
+    assertEquals(103, g.to());
+    assertEquals(2, g.count());
   }
 
   private static void writeMinute(Path dir, String name, String content) throws IOException {

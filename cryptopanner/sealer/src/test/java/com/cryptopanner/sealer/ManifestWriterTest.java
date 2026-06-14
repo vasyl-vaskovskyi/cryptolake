@@ -1,6 +1,7 @@
 package com.cryptopanner.sealer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,11 +17,18 @@ import org.junit.jupiter.api.io.TempDir;
 class ManifestWriterTest {
 
   @Test
-  void writesPrettyPrintedManifestWithExpectedFields(@TempDir Path tmp) throws IOException {
+  void writesPrettyPrintedManifestWithSequenceFieldsForIdBearingStream(@TempDir Path tmp)
+      throws IOException {
     Path target = tmp.resolve("hour-14.manifest.json");
     HourMerger.Result merge =
         new HourMerger.Result(
-            tmp.resolve("hour-14.jsonl.zst"), "deadbeef".repeat(8), 12345L, 42L, List.of(0, 1, 2));
+            tmp.resolve("hour-14.jsonl.zst"),
+            "deadbeef".repeat(8),
+            12345L,
+            42L,
+            List.of(0, 1, 2),
+            new SequenceAnalyzer.Analysis(
+                100L, 142L, List.of(new SequenceAnalyzer.Gap(110L, 110L, 1L))));
 
     ManifestWriter.write(
         target,
@@ -42,5 +50,39 @@ class ManifestWriterTest {
     assertEquals(14, root.get("hour").asInt());
     assertEquals(3, root.get("minutes_present").size());
     assertEquals(42L, root.get("record_count").asLong());
+
+    JsonNode range = root.get("sequence_id_range");
+    assertEquals(100L, range.get("first").asLong());
+    assertEquals(142L, range.get("last").asLong());
+    JsonNode gaps = root.get("sequence_gaps");
+    assertEquals(1, gaps.size());
+    assertEquals(110L, gaps.get(0).get("from").asLong());
+    assertEquals(110L, gaps.get(0).get("to").asLong());
+    assertEquals(1L, gaps.get(0).get("count").asLong());
+    assertEquals("NOT_ATTEMPTED", gaps.get(0).get("backfill_outcome").asText());
+    assertEquals(0, root.get("backfill_attempts").size());
+  }
+
+  @Test
+  void omitsSequenceFieldsForNonIdBearingStream(@TempDir Path tmp) throws IOException {
+    Path target = tmp.resolve("hour-14.manifest.json");
+    HourMerger.Result merge =
+        new HourMerger.Result(
+            tmp.resolve("hour-14.jsonl.zst"), "deadbeef".repeat(8), 999L, 7L, List.of(0), null);
+
+    ManifestWriter.write(
+        target,
+        "dev-node",
+        "btcusdt",
+        "ticker",
+        Instant.parse("2026-06-14T14:00:00Z"),
+        merge,
+        Instant.parse("2026-06-14T15:02:08Z"));
+
+    JsonNode root = new ObjectMapper().readTree(Files.readString(target));
+    assertEquals("ticker", root.get("stream").asText());
+    assertFalse(root.has("sequence_id_range"));
+    assertFalse(root.has("sequence_gaps"));
+    assertFalse(root.has("backfill_attempts"));
   }
 }
