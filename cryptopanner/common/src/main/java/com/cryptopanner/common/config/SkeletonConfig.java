@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Skeleton-only YAML config. Replaced by the full §15 schema once we add hot-swap, rotation,
@@ -12,12 +13,13 @@ import java.nio.file.Path;
  */
 public record SkeletonConfig(
     String nodeId,
-    String symbol,
-    String stream,
+    List<Subscription> subscriptions,
     String wsEndpointUrl,
     Paths paths,
     int collectorMaxRuntimeS,
     Storage storage) {
+
+  public record Subscription(String symbol, String stream) {}
 
   public record Paths(Path segments, Path sealed) {}
 

@@ -1,0 +1,25 @@
+# config/dev/real-binance.yaml
+# Walking-skeleton config pointed at the real Binance USD-M Futures WS.
+# Used by tests/skeleton/run-real-binance.sh — keep collector_max_runtime_s
+# small (a few minutes) for first runs.
+
+node_id: dev-real
+subscriptions:
+  - symbol: btcusdt
+    stream: trade
+
+ws_endpoint_url: wss://fstream.binance.com/stream
+
+paths:
+  segments: /tmp/cryptopanner-real/segments
+  sealed:   /tmp/cryptopanner-real/sealed
+
+collector_max_runtime_s: 120
+
+storage:
+  endpoint:           http://localhost:9000
+  bucket:             cryptopanner-real
+  access_key:         cryptopanner
+  secret_key:         changeme-dev
+  region:             us-east-1
+  path_style_access:  true

@@ -17,8 +17,11 @@ class SkeletonConfigTest {
         yaml,
         """
         node_id: vps-fra-1
-        symbol:  btcusdt
-        stream:  trade
+        subscriptions:
+          - symbol: btcusdt
+            stream: trade
+          - symbol: ethusdt
+            stream: aggTrade
         ws_endpoint_url: ws://mock-binance-ws:9001/ws
         paths:
           segments: /data/cryptopanner/segments
@@ -36,8 +39,11 @@ class SkeletonConfigTest {
     SkeletonConfig cfg = SkeletonConfig.load(yaml);
 
     assertEquals("vps-fra-1", cfg.nodeId());
-    assertEquals("btcusdt", cfg.symbol());
-    assertEquals("trade", cfg.stream());
+    assertEquals(2, cfg.subscriptions().size());
+    assertEquals("btcusdt", cfg.subscriptions().get(0).symbol());
+    assertEquals("trade", cfg.subscriptions().get(0).stream());
+    assertEquals("ethusdt", cfg.subscriptions().get(1).symbol());
+    assertEquals("aggTrade", cfg.subscriptions().get(1).stream());
     assertEquals("ws://mock-binance-ws:9001/ws", cfg.wsEndpointUrl());
     assertEquals(Path.of("/data/cryptopanner/segments"), cfg.paths().segments());
     assertEquals(Path.of("/data/cryptopanner/sealed"), cfg.paths().sealed());

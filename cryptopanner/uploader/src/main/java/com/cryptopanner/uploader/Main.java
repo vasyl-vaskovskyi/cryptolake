@@ -24,10 +24,12 @@ public final class Main {
     SkeletonConfig cfg = SkeletonConfig.load(configPath);
     String dateStr = required(args, "--date");
     int hour = Integer.parseInt(required(args, "--hour"));
+    String symbol = required(args, "--symbol", cfg.subscriptions().get(0).symbol());
+    String stream = required(args, "--stream", cfg.subscriptions().get(0).stream());
     Instant hourStart =
         LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
 
-    Path data = Paths.hourSealed(cfg.paths().sealed(), cfg.symbol(), cfg.stream(), hourStart);
+    Path data = Paths.hourSealed(cfg.paths().sealed(), symbol, stream, hourStart);
     Path sidecar = data.resolveSibling(data.getFileName() + ".sha256");
     Path manifest = data.resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
     if (!Files.exists(data) || !Files.exists(sidecar) || !Files.exists(manifest)) {
@@ -55,7 +57,7 @@ public final class Main {
       // already exists
     }
 
-    String key = Paths.s3Key(cfg.nodeId(), cfg.symbol(), cfg.stream(), hourStart);
+    String key = Paths.s3Key(cfg.nodeId(), symbol, stream, hourStart);
     System.out.println("[uploader] uploading to s3://" + cfg.storage().bucket() + "/" + key);
     new S3Uploader(s3, cfg.storage().bucket()).upload(key, data, sidecar, manifest);
 
@@ -70,5 +72,12 @@ public final class Main {
       if (args[i].equals(flag)) return args[i + 1];
     }
     throw new IllegalArgumentException("missing flag: " + flag);
+  }
+
+  private static String required(String[] args, String flag, String defaultValue) {
+    for (int i = 0; i < args.length - 1; i++) {
+      if (args[i].equals(flag)) return args[i + 1];
+    }
+    return defaultValue;
   }
 }
