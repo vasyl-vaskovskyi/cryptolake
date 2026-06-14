@@ -20,11 +20,7 @@ class ManifestWriterTest {
     Path target = tmp.resolve("hour-14.manifest.json");
     HourMerger.Result merge =
         new HourMerger.Result(
-            tmp.resolve("hour-14.jsonl.zst"),
-            "deadbeef".repeat(8),
-            12345L,
-            42L,
-            List.of(0, 1, 2));
+            tmp.resolve("hour-14.jsonl.zst"), "deadbeef".repeat(8), 12345L, 42L, List.of(0, 1, 2));
 
     ManifestWriter.write(
         target,

@@ -11,7 +11,7 @@ import java.security.NoSuchAlgorithmException;
 /**
  * sha256sum-style sidecar format per master spec §10.a.
  *
- * <p>Content: {@code <lowercase 64 hex> + "  " + <bare filename> + "\n"}. Compatible with {@code
+ * <p>Content: {@code <lowercase 64 hex> + " " + <bare filename> + "\n"}. Compatible with {@code
  * sha256sum -c} from any shell.
  */
 public final class Sha256Sidecar {

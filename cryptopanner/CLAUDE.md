@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-CryptoPanner is a raw-first, multi-region capture pipeline for Binance USD-M Futures market data. The end product is an append-only, byte-faithful collection of per-node hourly sealed files in IONOS S3-compatible object storage. Java 21, multi-module Maven. Clean-room successor to CryptoLake (v1) — no shared code, configuration, or data.
+CryptoPanner is a raw-first, multi-region capture pipeline for Binance USD-M Futures market data. The end product is an append-only, byte-faithful collection of per-node hourly sealed files in IONOS S3-compatible object storage. Java 26, multi-module Maven. Clean-room successor to CryptoLake (v1) — no shared code, configuration, or data.
 
 Authoritative spec: `docs/00-master-spec.md` (reviewed end-to-end 2026-06-12). The make-before-break hot-swap and WS rotation mechanism lives in `docs/superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md` (same review date). The invariants in master spec §3 are non-negotiable: raw-payload fidelity, durability before acknowledgement, manifest-as-source-of-truth, per-node independence, idempotent upload, no silent data loss.
 
 ## Build & test
 
-Use Maven 3.9+. Spotless (google-java-format 1.23.0) is bound to the `verify` phase; CI fails on unformatted code. `removeUnusedImports()` is intentionally omitted from the Spotless config — google-java-format already handles it (matches CryptoLake parent convention).
+Use Maven 3.9+. Spotless (google-java-format 1.35.0) is bound to the `verify` phase; CI fails on unformatted code. `removeUnusedImports()` is intentionally omitted from the Spotless config — google-java-format already handles it (matches CryptoLake parent convention).
 
 ```bash
 mvn verify                                         # compile + tests + spotless:check, all modules
@@ -69,7 +69,7 @@ Each app module's `package` phase runs the `appassembler-maven-plugin` to produc
 
 ## Code conventions
 
-- **Java 21, virtual threads.** Use `Executors.newVirtualThreadPerTaskExecutor()` for I/O loops. SIGTERM hooks run on a platform thread (JVM requirement). That one exception is intentional.
+- **Java 26, virtual threads.** Use `Executors.newVirtualThreadPerTaskExecutor()` for I/O loops. SIGTERM hooks run on a platform thread (JVM requirement). That one exception is intentional.
 - **Single `ObjectMapper` per service.** Constructed in `common` via `EnvelopeCodec.newMapper()` and threaded through wiring. Don't create ad-hoc Jackson mappers.
 - **`CLOCK_MONOTONIC` for grace-window timers.** Wall clock is only used to identify which minute a frame goes to; sealing timers use `System.nanoTime()`. See design doc §3.4.
 - **Spotless enforced.** Run `mvn spotless:apply` before committing.

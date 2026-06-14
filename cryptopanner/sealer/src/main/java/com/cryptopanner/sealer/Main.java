@@ -17,26 +17,18 @@ public final class Main {
     String dateStr = required(args, "--date");
     int hour = Integer.parseInt(required(args, "--hour"));
     Instant hourStart =
-        LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0))
-            .toInstant(ZoneOffset.UTC);
+        LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
 
     HourMerger merger = new HourMerger(cfg.paths().segments(), cfg.paths().sealed());
     System.out.println("[sealer] merging hour " + hour + " of " + dateStr);
     HourMerger.Result result = merger.mergeHour(cfg.symbol(), cfg.stream(), hourStart);
-    System.out.println("[sealer] merged " + result.recordCount() + " records into " + result.file());
+    System.out.println(
+        "[sealer] merged " + result.recordCount() + " records into " + result.file());
 
     Path manifestPath =
-        result
-            .file()
-            .resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
+        result.file().resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
     ManifestWriter.write(
-        manifestPath,
-        cfg.nodeId(),
-        cfg.symbol(),
-        cfg.stream(),
-        hourStart,
-        result,
-        Instant.now());
+        manifestPath, cfg.nodeId(), cfg.symbol(), cfg.stream(), hourStart, result, Instant.now());
     System.out.println("[sealer] manifest written: " + manifestPath);
   }
 

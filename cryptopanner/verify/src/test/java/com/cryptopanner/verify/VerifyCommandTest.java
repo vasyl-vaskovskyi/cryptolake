@@ -56,13 +56,20 @@ class VerifyCommandTest {
         new CommandLine(new Main())
             .execute(
                 "verify",
-                "--endpoint", S3.getServiceEndpoint(),
-                "--bucket", "bkt",
-                "--node-id", "vps-fra-1",
-                "--symbol", "btcusdt",
-                "--stream", "trade",
-                "--date", "2026-06-14",
-                "--hour", "14");
+                "--endpoint",
+                S3.getServiceEndpoint(),
+                "--bucket",
+                "bkt",
+                "--node-id",
+                "vps-fra-1",
+                "--symbol",
+                "btcusdt",
+                "--stream",
+                "trade",
+                "--date",
+                "2026-06-14",
+                "--hour",
+                "14");
     assertEquals(0, code);
   }
 

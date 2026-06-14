@@ -46,14 +46,11 @@ class S3UploaderTest {
     new S3Uploader(s3, "bucket")
         .upload("vps-fra-1/btcusdt/trade/2026-06-14/hour-14.jsonl.zst", data, sidecar, manifest);
 
+    assertTrue(objectExists(s3, "bucket", "vps-fra-1/btcusdt/trade/2026-06-14/hour-14.jsonl.zst"));
     assertTrue(
-        objectExists(s3, "bucket", "vps-fra-1/btcusdt/trade/2026-06-14/hour-14.jsonl.zst"));
+        objectExists(s3, "bucket", "vps-fra-1/btcusdt/trade/2026-06-14/hour-14.jsonl.zst.sha256"));
     assertTrue(
-        objectExists(
-            s3, "bucket", "vps-fra-1/btcusdt/trade/2026-06-14/hour-14.jsonl.zst.sha256"));
-    assertTrue(
-        objectExists(
-            s3, "bucket", "vps-fra-1/btcusdt/trade/2026-06-14/hour-14.manifest.json"));
+        objectExists(s3, "bucket", "vps-fra-1/btcusdt/trade/2026-06-14/hour-14.manifest.json"));
   }
 
   private static boolean objectExists(S3Client s3, String bucket, String key) {

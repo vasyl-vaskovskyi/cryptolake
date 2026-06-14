@@ -25,13 +25,11 @@ public final class Main {
     String dateStr = required(args, "--date");
     int hour = Integer.parseInt(required(args, "--hour"));
     Instant hourStart =
-        LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0))
-            .toInstant(ZoneOffset.UTC);
+        LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
 
     Path data = Paths.hourSealed(cfg.paths().sealed(), cfg.symbol(), cfg.stream(), hourStart);
     Path sidecar = data.resolveSibling(data.getFileName() + ".sha256");
-    Path manifest =
-        data.resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
+    Path manifest = data.resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
     if (!Files.exists(data) || !Files.exists(sidecar) || !Files.exists(manifest)) {
       throw new IllegalStateException("missing sealed files; run sealer first");
     }
