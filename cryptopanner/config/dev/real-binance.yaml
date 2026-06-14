@@ -11,6 +11,14 @@ subscriptions:
 ws_public_endpoint_url: wss://fstream.binance.com/public/stream
 ws_market_endpoint_url: wss://fstream.binance.com/market/stream
 
+# REST polling — §7.b. Spec cadence is 60s for openInterest.
+rest_base_url: https://fapi.binance.com
+rest_polls:
+  - stream: openInterest
+    endpoint: /fapi/v1/openInterest
+    cadence_seconds: 60
+    per_symbol: true
+
 paths:
   segments: /tmp/cryptopanner-real/segments
   sealed:   /tmp/cryptopanner-real/sealed

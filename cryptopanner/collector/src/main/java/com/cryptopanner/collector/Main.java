@@ -1,10 +1,12 @@
 package com.cryptopanner.collector;
 
+import com.cryptopanner.common.RestPoller;
 import com.cryptopanner.common.StreamRouting;
 import com.cryptopanner.common.config.SkeletonConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -48,6 +50,18 @@ public final class Main {
             k ->
                 new MinuteSegmentWriter(
                     cfg.paths().segments(), symbol, FORCE_ORDER_STREAM, Clock.systemUTC()));
+      }
+    }
+    // REST-poll fan-out writers: one (symbol, restPoll.stream) per configured symbol.
+    for (SkeletonConfig.RestPoll p : cfg.restPolls()) {
+      if (!p.perSymbol()) continue; // non-per-symbol REST polls need a global path scheme — TODO.
+      for (String symbol : cfg.symbols()) {
+        String key = symbol + "@" + p.stream();
+        writers.computeIfAbsent(
+            key,
+            k ->
+                new MinuteSegmentWriter(
+                    cfg.paths().segments(), symbol, p.stream(), Clock.systemUTC()));
       }
     }
 
@@ -121,6 +135,42 @@ public final class Main {
       System.out.println("[collector] /market connected with " + marketSubs);
     }
 
+    // REST pollers — one per (rest_poll, configured symbol). Cadences pinned per spec §7.b in
+    // production; the skeleton config can override for fast smoke tests.
+    PollerScheduler scheduler = new PollerScheduler();
+    if (!cfg.restPolls().isEmpty()) {
+      if (cfg.restBaseUrl() == null) {
+        throw new IllegalStateException("rest_polls configured but rest_base_url is missing");
+      }
+      HttpClient httpClient = RestPoller.newHttpClient();
+      URI baseUrl = URI.create(cfg.restBaseUrl());
+      for (SkeletonConfig.RestPoll p : cfg.restPolls()) {
+        if (!p.perSymbol()) continue;
+        for (String symbol : cfg.symbols()) {
+          MinuteSegmentWriter writer = writers.get(symbol + "@" + p.stream());
+          Consumer<byte[]> sink =
+              b -> {
+                try {
+                  writer.accept(b);
+                } catch (Exception e) {
+                  System.err.println(
+                      "[collector] rest sink write failed for "
+                          + symbol
+                          + "@"
+                          + p.stream()
+                          + ": "
+                          + e.getMessage());
+                }
+              };
+          RestPoller poller =
+              new RestPoller(
+                  httpClient, mapper, baseUrl, p.endpoint(), Map.of("symbol", symbol), sink);
+          scheduler.add(poller, p.cadenceSeconds(), symbol + "@" + p.stream());
+        }
+      }
+      scheduler.start();
+    }
+
     System.out.println(
         "[collector] started; running for "
             + cfg.collectorMaxRuntimeS()
@@ -130,6 +180,7 @@ public final class Main {
     Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
 
     System.out.println("[collector] stopping after " + framesSeen.get() + " frames");
+    scheduler.close();
     for (BinanceWsClient c : clients) {
       c.stop();
     }

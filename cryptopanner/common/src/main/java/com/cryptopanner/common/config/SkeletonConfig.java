@@ -18,6 +18,8 @@ public record SkeletonConfig(
     String nodeId,
     List<Subscription> subscriptions,
     List<String> broadcasts,
+    String restBaseUrl,
+    List<RestPoll> restPolls,
     String wsPublicEndpointUrl,
     String wsMarketEndpointUrl,
     Paths paths,
@@ -26,9 +28,16 @@ public record SkeletonConfig(
 
   public SkeletonConfig {
     if (broadcasts == null) broadcasts = List.of();
+    if (restPolls == null) restPolls = List.of();
   }
 
   public record Subscription(String symbol, String stream) {}
+
+  /**
+   * One REST endpoint to poll. {@code perSymbol=true} fans out across configured symbols; {@code
+   * false} polls a single global instance (e.g. {@code /fapi/v1/exchangeInfo}).
+   */
+  public record RestPoll(String stream, String endpoint, int cadenceSeconds, boolean perSymbol) {}
 
   public record Paths(Path segments, Path sealed) {}
 
@@ -49,10 +58,10 @@ public record SkeletonConfig(
 
   /**
    * Returns every {@code (symbol, stream)} triple that should appear on disk and in S3 — explicit
-   * subscriptions plus broadcasts fanned out across configured symbols (e.g. {@code
-   * !forceOrder@arr} yields one {@code (symbol, "forceOrder")} per symbol). Sealer, Uploader, and
-   * Verify iterate this rather than {@link #subscriptions()} so broadcast-fanout files aren't
-   * silently skipped.
+   * subscriptions, broadcasts fanned across configured symbols (e.g. {@code !forceOrder@arr} → one
+   * {@code (symbol, "forceOrder")} per symbol), and per-symbol REST polls (e.g. {@code
+   * openInterest} → one per symbol). Sealer, Uploader, and Verify iterate this rather than {@link
+   * #subscriptions()} so broadcast- and REST-fanout files aren't silently skipped.
    */
   public List<Subscription> effectiveSubscriptions() {
     List<Subscription> out = new ArrayList<>(subscriptions);
@@ -61,6 +70,14 @@ public record SkeletonConfig(
       for (String symbol : symbols()) {
         out.add(new Subscription(symbol, streamName));
       }
+    }
+    for (RestPoll p : restPolls) {
+      if (p.perSymbol()) {
+        for (String symbol : symbols()) {
+          out.add(new Subscription(symbol, p.stream()));
+        }
+      }
+      // Non-per-symbol REST polls (exchangeInfo) need a global path scheme — TODO.
     }
     return out;
   }

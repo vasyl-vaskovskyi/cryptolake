@@ -11,23 +11,25 @@ import java.util.List;
 public final class Main {
 
   public static void main(String[] args) throws Exception {
-    int port = Integer.parseInt(System.getenv().getOrDefault("MOCK_WS_PORT", "9001"));
+    int wsPort = Integer.parseInt(System.getenv().getOrDefault("MOCK_WS_PORT", "9001"));
+    int restPort = Integer.parseInt(System.getenv().getOrDefault("MOCK_REST_PORT", "9002"));
     double rate = Double.parseDouble(System.getenv().getOrDefault("REPLAY_RATE_HZ", "10"));
 
     List<String> lines = loadFixture("/fixture.jsonl");
     System.out.println("[mock-ws] loaded " + lines.size() + " lines from classpath:/fixture.jsonl");
-    System.out.println("[mock-ws] listening on 0.0.0.0:" + port);
+    System.out.println("[mock-ws] listening on 0.0.0.0:" + wsPort);
 
-    try (WsServer server = new WsServer(port, lines, rate)) {
-      // Park forever; SIGTERM will close the server in the shutdown hook below.
+    try (WsServer wsServer = new WsServer(wsPort, lines, rate);
+        MockRestServer restServer = new MockRestServer(restPort)) {
       Runtime.getRuntime()
           .addShutdownHook(
               new Thread(
                   () -> {
                     try {
-                      server.close();
+                      wsServer.close();
                     } catch (IOException ignored) {
                     }
+                    restServer.close();
                   }));
       Thread.currentThread().join();
     }
