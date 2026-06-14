@@ -8,7 +8,8 @@ subscriptions:
   - symbol: btcusdt
     stream: trade
 
-ws_endpoint_url: wss://fstream.binance.com/stream
+ws_public_endpoint_url: wss://fstream.binance.com/public/stream
+ws_market_endpoint_url: wss://fstream.binance.com/market/stream
 
 paths:
   segments: /tmp/cryptopanner-real/segments

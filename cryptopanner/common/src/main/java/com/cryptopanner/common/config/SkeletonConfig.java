@@ -14,7 +14,8 @@ import java.util.List;
 public record SkeletonConfig(
     String nodeId,
     List<Subscription> subscriptions,
-    String wsEndpointUrl,
+    String wsPublicEndpointUrl,
+    String wsMarketEndpointUrl,
     Paths paths,
     int collectorMaxRuntimeS,
     Storage storage) {

@@ -22,7 +22,8 @@ class SkeletonConfigTest {
             stream: trade
           - symbol: ethusdt
             stream: aggTrade
-        ws_endpoint_url: ws://mock-binance-ws:9001/ws
+        ws_public_endpoint_url: ws://mock-binance-ws:9001/public/stream
+        ws_market_endpoint_url: ws://mock-binance-ws:9001/market/stream
         paths:
           segments: /data/cryptopanner/segments
           sealed:   /data/cryptopanner/sealed
@@ -44,7 +45,8 @@ class SkeletonConfigTest {
     assertEquals("trade", cfg.subscriptions().get(0).stream());
     assertEquals("ethusdt", cfg.subscriptions().get(1).symbol());
     assertEquals("aggTrade", cfg.subscriptions().get(1).stream());
-    assertEquals("ws://mock-binance-ws:9001/ws", cfg.wsEndpointUrl());
+    assertEquals("ws://mock-binance-ws:9001/public/stream", cfg.wsPublicEndpointUrl());
+    assertEquals("ws://mock-binance-ws:9001/market/stream", cfg.wsMarketEndpointUrl());
     assertEquals(Path.of("/data/cryptopanner/segments"), cfg.paths().segments());
     assertEquals(Path.of("/data/cryptopanner/sealed"), cfg.paths().sealed());
     assertEquals(120, cfg.collectorMaxRuntimeS());
