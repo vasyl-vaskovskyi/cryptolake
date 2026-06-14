@@ -10,6 +10,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380801000,"s":"BTCUSDT","t":3500000010,"p":"60001.00","q":"0.001","T":1718380800990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380801100,"s":"BTCUSDT","t":3500000011,"p":"60001.00","q":"0.001","T":1718380801090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380801200,"s":"BTCUSDT","t":3500000012,"p":"60001.00","q":"0.001","T":1718380801190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380800000,"s":"BTCUSDT","a":5000000001,"p":"60001.50","q":"0.010","f":3500000001,"l":3500000005,"T":1718380799990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380801300,"s":"BTCUSDT","t":3500000013,"p":"60001.00","q":"0.001","T":1718380801290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380801400,"s":"BTCUSDT","t":3500000014,"p":"60001.00","q":"0.001","T":1718380801390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380801500,"s":"BTCUSDT","t":3500000015,"p":"60001.00","q":"0.001","T":1718380801490,"m":false}}
@@ -22,6 +23,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380802200,"s":"BTCUSDT","t":3500000022,"p":"60001.00","q":"0.001","T":1718380802190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380802300,"s":"BTCUSDT","t":3500000023,"p":"60001.00","q":"0.001","T":1718380802290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380802400,"s":"BTCUSDT","t":3500000024,"p":"60001.00","q":"0.001","T":1718380802390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380800200,"s":"BTCUSDT","a":5000000002,"p":"60001.50","q":"0.010","f":3500000002,"l":3500000006,"T":1718380800190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380802500,"s":"BTCUSDT","t":3500000025,"p":"60001.00","q":"0.001","T":1718380802490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380802600,"s":"BTCUSDT","t":3500000026,"p":"60001.00","q":"0.001","T":1718380802590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380802700,"s":"BTCUSDT","t":3500000027,"p":"60001.00","q":"0.001","T":1718380802690,"m":false}}
@@ -34,6 +36,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380803400,"s":"BTCUSDT","t":3500000034,"p":"60001.00","q":"0.001","T":1718380803390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380803500,"s":"BTCUSDT","t":3500000035,"p":"60001.00","q":"0.001","T":1718380803490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380803600,"s":"BTCUSDT","t":3500000036,"p":"60001.00","q":"0.001","T":1718380803590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380800400,"s":"BTCUSDT","a":5000000003,"p":"60001.50","q":"0.010","f":3500000003,"l":3500000007,"T":1718380800390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380803700,"s":"BTCUSDT","t":3500000037,"p":"60001.00","q":"0.001","T":1718380803690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380803800,"s":"BTCUSDT","t":3500000038,"p":"60001.00","q":"0.001","T":1718380803790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380803900,"s":"BTCUSDT","t":3500000039,"p":"60001.00","q":"0.001","T":1718380803890,"m":false}}
@@ -46,6 +49,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380804600,"s":"BTCUSDT","t":3500000046,"p":"60001.00","q":"0.001","T":1718380804590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380804700,"s":"BTCUSDT","t":3500000047,"p":"60001.00","q":"0.001","T":1718380804690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380804800,"s":"BTCUSDT","t":3500000048,"p":"60001.00","q":"0.001","T":1718380804790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380800600,"s":"BTCUSDT","a":5000000004,"p":"60001.50","q":"0.010","f":3500000004,"l":3500000008,"T":1718380800590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380804900,"s":"BTCUSDT","t":3500000049,"p":"60001.00","q":"0.001","T":1718380804890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380805000,"s":"BTCUSDT","t":3500000050,"p":"60001.00","q":"0.001","T":1718380804990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380805100,"s":"BTCUSDT","t":3500000051,"p":"60001.00","q":"0.001","T":1718380805090,"m":false}}
@@ -58,6 +62,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380805800,"s":"BTCUSDT","t":3500000058,"p":"60001.00","q":"0.001","T":1718380805790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380805900,"s":"BTCUSDT","t":3500000059,"p":"60001.00","q":"0.001","T":1718380805890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380806000,"s":"BTCUSDT","t":3500000060,"p":"60001.00","q":"0.001","T":1718380805990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380800800,"s":"BTCUSDT","a":5000000005,"p":"60001.50","q":"0.010","f":3500000005,"l":3500000009,"T":1718380800790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380806100,"s":"BTCUSDT","t":3500000061,"p":"60001.00","q":"0.001","T":1718380806090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380806200,"s":"BTCUSDT","t":3500000062,"p":"60001.00","q":"0.001","T":1718380806190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380806300,"s":"BTCUSDT","t":3500000063,"p":"60001.00","q":"0.001","T":1718380806290,"m":false}}
@@ -70,6 +75,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380807000,"s":"BTCUSDT","t":3500000070,"p":"60001.00","q":"0.001","T":1718380806990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380807100,"s":"BTCUSDT","t":3500000071,"p":"60001.00","q":"0.001","T":1718380807090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380807200,"s":"BTCUSDT","t":3500000072,"p":"60001.00","q":"0.001","T":1718380807190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380801000,"s":"BTCUSDT","a":5000000006,"p":"60001.50","q":"0.010","f":3500000006,"l":3500000010,"T":1718380800990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380807300,"s":"BTCUSDT","t":3500000073,"p":"60001.00","q":"0.001","T":1718380807290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380807400,"s":"BTCUSDT","t":3500000074,"p":"60001.00","q":"0.001","T":1718380807390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380807500,"s":"BTCUSDT","t":3500000075,"p":"60001.00","q":"0.001","T":1718380807490,"m":false}}
@@ -82,6 +88,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380808200,"s":"BTCUSDT","t":3500000082,"p":"60001.00","q":"0.001","T":1718380808190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380808300,"s":"BTCUSDT","t":3500000083,"p":"60001.00","q":"0.001","T":1718380808290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380808400,"s":"BTCUSDT","t":3500000084,"p":"60001.00","q":"0.001","T":1718380808390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380801200,"s":"BTCUSDT","a":5000000007,"p":"60001.50","q":"0.010","f":3500000007,"l":3500000011,"T":1718380801190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380808500,"s":"BTCUSDT","t":3500000085,"p":"60001.00","q":"0.001","T":1718380808490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380808600,"s":"BTCUSDT","t":3500000086,"p":"60001.00","q":"0.001","T":1718380808590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380808700,"s":"BTCUSDT","t":3500000087,"p":"60001.00","q":"0.001","T":1718380808690,"m":false}}
@@ -94,6 +101,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380809400,"s":"BTCUSDT","t":3500000094,"p":"60001.00","q":"0.001","T":1718380809390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380809500,"s":"BTCUSDT","t":3500000095,"p":"60001.00","q":"0.001","T":1718380809490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380809600,"s":"BTCUSDT","t":3500000096,"p":"60001.00","q":"0.001","T":1718380809590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380801400,"s":"BTCUSDT","a":5000000008,"p":"60001.50","q":"0.010","f":3500000008,"l":3500000012,"T":1718380801390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380809700,"s":"BTCUSDT","t":3500000097,"p":"60001.00","q":"0.001","T":1718380809690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380809800,"s":"BTCUSDT","t":3500000098,"p":"60001.00","q":"0.001","T":1718380809790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380809900,"s":"BTCUSDT","t":3500000099,"p":"60001.00","q":"0.001","T":1718380809890,"m":false}}
@@ -106,6 +114,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380810600,"s":"BTCUSDT","t":3500000106,"p":"60001.00","q":"0.001","T":1718380810590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380810700,"s":"BTCUSDT","t":3500000107,"p":"60001.00","q":"0.001","T":1718380810690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380810800,"s":"BTCUSDT","t":3500000108,"p":"60001.00","q":"0.001","T":1718380810790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380801600,"s":"BTCUSDT","a":5000000009,"p":"60001.50","q":"0.010","f":3500000009,"l":3500000013,"T":1718380801590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380810900,"s":"BTCUSDT","t":3500000109,"p":"60001.00","q":"0.001","T":1718380810890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380811000,"s":"BTCUSDT","t":3500000110,"p":"60001.00","q":"0.001","T":1718380810990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380811100,"s":"BTCUSDT","t":3500000111,"p":"60001.00","q":"0.001","T":1718380811090,"m":false}}
@@ -118,6 +127,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380811800,"s":"BTCUSDT","t":3500000118,"p":"60001.00","q":"0.001","T":1718380811790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380811900,"s":"BTCUSDT","t":3500000119,"p":"60001.00","q":"0.001","T":1718380811890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380812000,"s":"BTCUSDT","t":3500000120,"p":"60001.00","q":"0.001","T":1718380811990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380801800,"s":"BTCUSDT","a":5000000010,"p":"60001.50","q":"0.010","f":3500000010,"l":3500000014,"T":1718380801790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380812100,"s":"BTCUSDT","t":3500000121,"p":"60001.00","q":"0.001","T":1718380812090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380812200,"s":"BTCUSDT","t":3500000122,"p":"60001.00","q":"0.001","T":1718380812190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380812300,"s":"BTCUSDT","t":3500000123,"p":"60001.00","q":"0.001","T":1718380812290,"m":false}}
@@ -130,6 +140,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380813000,"s":"BTCUSDT","t":3500000130,"p":"60001.00","q":"0.001","T":1718380812990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380813100,"s":"BTCUSDT","t":3500000131,"p":"60001.00","q":"0.001","T":1718380813090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380813200,"s":"BTCUSDT","t":3500000132,"p":"60001.00","q":"0.001","T":1718380813190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380802000,"s":"BTCUSDT","a":5000000011,"p":"60001.50","q":"0.010","f":3500000011,"l":3500000015,"T":1718380801990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380813300,"s":"BTCUSDT","t":3500000133,"p":"60001.00","q":"0.001","T":1718380813290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380813400,"s":"BTCUSDT","t":3500000134,"p":"60001.00","q":"0.001","T":1718380813390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380813500,"s":"BTCUSDT","t":3500000135,"p":"60001.00","q":"0.001","T":1718380813490,"m":false}}
@@ -142,6 +153,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380814200,"s":"BTCUSDT","t":3500000142,"p":"60001.00","q":"0.001","T":1718380814190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380814300,"s":"BTCUSDT","t":3500000143,"p":"60001.00","q":"0.001","T":1718380814290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380814400,"s":"BTCUSDT","t":3500000144,"p":"60001.00","q":"0.001","T":1718380814390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380802200,"s":"BTCUSDT","a":5000000012,"p":"60001.50","q":"0.010","f":3500000012,"l":3500000016,"T":1718380802190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380814500,"s":"BTCUSDT","t":3500000145,"p":"60001.00","q":"0.001","T":1718380814490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380814600,"s":"BTCUSDT","t":3500000146,"p":"60001.00","q":"0.001","T":1718380814590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380814700,"s":"BTCUSDT","t":3500000147,"p":"60001.00","q":"0.001","T":1718380814690,"m":false}}
@@ -154,6 +166,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380815400,"s":"BTCUSDT","t":3500000154,"p":"60001.00","q":"0.001","T":1718380815390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380815500,"s":"BTCUSDT","t":3500000155,"p":"60001.00","q":"0.001","T":1718380815490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380815600,"s":"BTCUSDT","t":3500000156,"p":"60001.00","q":"0.001","T":1718380815590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380802400,"s":"BTCUSDT","a":5000000013,"p":"60001.50","q":"0.010","f":3500000013,"l":3500000017,"T":1718380802390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380815700,"s":"BTCUSDT","t":3500000157,"p":"60001.00","q":"0.001","T":1718380815690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380815800,"s":"BTCUSDT","t":3500000158,"p":"60001.00","q":"0.001","T":1718380815790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380815900,"s":"BTCUSDT","t":3500000159,"p":"60001.00","q":"0.001","T":1718380815890,"m":false}}
@@ -166,6 +179,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380816600,"s":"BTCUSDT","t":3500000166,"p":"60001.00","q":"0.001","T":1718380816590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380816700,"s":"BTCUSDT","t":3500000167,"p":"60001.00","q":"0.001","T":1718380816690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380816800,"s":"BTCUSDT","t":3500000168,"p":"60001.00","q":"0.001","T":1718380816790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380802600,"s":"BTCUSDT","a":5000000014,"p":"60001.50","q":"0.010","f":3500000014,"l":3500000018,"T":1718380802590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380816900,"s":"BTCUSDT","t":3500000169,"p":"60001.00","q":"0.001","T":1718380816890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380817000,"s":"BTCUSDT","t":3500000170,"p":"60001.00","q":"0.001","T":1718380816990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380817100,"s":"BTCUSDT","t":3500000171,"p":"60001.00","q":"0.001","T":1718380817090,"m":false}}
@@ -178,6 +192,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380817800,"s":"BTCUSDT","t":3500000178,"p":"60001.00","q":"0.001","T":1718380817790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380817900,"s":"BTCUSDT","t":3500000179,"p":"60001.00","q":"0.001","T":1718380817890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380818000,"s":"BTCUSDT","t":3500000180,"p":"60001.00","q":"0.001","T":1718380817990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380802800,"s":"BTCUSDT","a":5000000015,"p":"60001.50","q":"0.010","f":3500000015,"l":3500000019,"T":1718380802790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380818100,"s":"BTCUSDT","t":3500000181,"p":"60001.00","q":"0.001","T":1718380818090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380818200,"s":"BTCUSDT","t":3500000182,"p":"60001.00","q":"0.001","T":1718380818190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380818300,"s":"BTCUSDT","t":3500000183,"p":"60001.00","q":"0.001","T":1718380818290,"m":false}}
@@ -190,6 +205,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380819000,"s":"BTCUSDT","t":3500000190,"p":"60001.00","q":"0.001","T":1718380818990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380819100,"s":"BTCUSDT","t":3500000191,"p":"60001.00","q":"0.001","T":1718380819090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380819200,"s":"BTCUSDT","t":3500000192,"p":"60001.00","q":"0.001","T":1718380819190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380803000,"s":"BTCUSDT","a":5000000016,"p":"60001.50","q":"0.010","f":3500000016,"l":3500000020,"T":1718380802990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380819300,"s":"BTCUSDT","t":3500000193,"p":"60001.00","q":"0.001","T":1718380819290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380819400,"s":"BTCUSDT","t":3500000194,"p":"60001.00","q":"0.001","T":1718380819390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380819500,"s":"BTCUSDT","t":3500000195,"p":"60001.00","q":"0.001","T":1718380819490,"m":false}}
@@ -202,6 +218,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380820200,"s":"BTCUSDT","t":3500000202,"p":"60001.00","q":"0.001","T":1718380820190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380820300,"s":"BTCUSDT","t":3500000203,"p":"60001.00","q":"0.001","T":1718380820290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380820400,"s":"BTCUSDT","t":3500000204,"p":"60001.00","q":"0.001","T":1718380820390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380803200,"s":"BTCUSDT","a":5000000017,"p":"60001.50","q":"0.010","f":3500000017,"l":3500000021,"T":1718380803190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380820500,"s":"BTCUSDT","t":3500000205,"p":"60001.00","q":"0.001","T":1718380820490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380820600,"s":"BTCUSDT","t":3500000206,"p":"60001.00","q":"0.001","T":1718380820590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380820700,"s":"BTCUSDT","t":3500000207,"p":"60001.00","q":"0.001","T":1718380820690,"m":false}}
@@ -214,6 +231,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380821400,"s":"BTCUSDT","t":3500000214,"p":"60001.00","q":"0.001","T":1718380821390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380821500,"s":"BTCUSDT","t":3500000215,"p":"60001.00","q":"0.001","T":1718380821490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380821600,"s":"BTCUSDT","t":3500000216,"p":"60001.00","q":"0.001","T":1718380821590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380803400,"s":"BTCUSDT","a":5000000018,"p":"60001.50","q":"0.010","f":3500000018,"l":3500000022,"T":1718380803390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380821700,"s":"BTCUSDT","t":3500000217,"p":"60001.00","q":"0.001","T":1718380821690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380821800,"s":"BTCUSDT","t":3500000218,"p":"60001.00","q":"0.001","T":1718380821790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380821900,"s":"BTCUSDT","t":3500000219,"p":"60001.00","q":"0.001","T":1718380821890,"m":false}}
@@ -226,6 +244,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380822600,"s":"BTCUSDT","t":3500000226,"p":"60001.00","q":"0.001","T":1718380822590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380822700,"s":"BTCUSDT","t":3500000227,"p":"60001.00","q":"0.001","T":1718380822690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380822800,"s":"BTCUSDT","t":3500000228,"p":"60001.00","q":"0.001","T":1718380822790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380803600,"s":"BTCUSDT","a":5000000019,"p":"60001.50","q":"0.010","f":3500000019,"l":3500000023,"T":1718380803590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380822900,"s":"BTCUSDT","t":3500000229,"p":"60001.00","q":"0.001","T":1718380822890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380823000,"s":"BTCUSDT","t":3500000230,"p":"60001.00","q":"0.001","T":1718380822990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380823100,"s":"BTCUSDT","t":3500000231,"p":"60001.00","q":"0.001","T":1718380823090,"m":false}}
@@ -238,6 +257,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380823800,"s":"BTCUSDT","t":3500000238,"p":"60001.00","q":"0.001","T":1718380823790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380823900,"s":"BTCUSDT","t":3500000239,"p":"60001.00","q":"0.001","T":1718380823890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380824000,"s":"BTCUSDT","t":3500000240,"p":"60001.00","q":"0.001","T":1718380823990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380803800,"s":"BTCUSDT","a":5000000020,"p":"60001.50","q":"0.010","f":3500000020,"l":3500000024,"T":1718380803790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380824100,"s":"BTCUSDT","t":3500000241,"p":"60001.00","q":"0.001","T":1718380824090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380824200,"s":"BTCUSDT","t":3500000242,"p":"60001.00","q":"0.001","T":1718380824190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380824300,"s":"BTCUSDT","t":3500000243,"p":"60001.00","q":"0.001","T":1718380824290,"m":false}}
@@ -250,6 +270,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380825000,"s":"BTCUSDT","t":3500000250,"p":"60001.00","q":"0.001","T":1718380824990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380825100,"s":"BTCUSDT","t":3500000251,"p":"60001.00","q":"0.001","T":1718380825090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380825200,"s":"BTCUSDT","t":3500000252,"p":"60001.00","q":"0.001","T":1718380825190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380804000,"s":"BTCUSDT","a":5000000021,"p":"60001.50","q":"0.010","f":3500000021,"l":3500000025,"T":1718380803990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380825300,"s":"BTCUSDT","t":3500000253,"p":"60001.00","q":"0.001","T":1718380825290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380825400,"s":"BTCUSDT","t":3500000254,"p":"60001.00","q":"0.001","T":1718380825390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380825500,"s":"BTCUSDT","t":3500000255,"p":"60001.00","q":"0.001","T":1718380825490,"m":false}}
@@ -262,6 +283,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380826200,"s":"BTCUSDT","t":3500000262,"p":"60001.00","q":"0.001","T":1718380826190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380826300,"s":"BTCUSDT","t":3500000263,"p":"60001.00","q":"0.001","T":1718380826290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380826400,"s":"BTCUSDT","t":3500000264,"p":"60001.00","q":"0.001","T":1718380826390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380804200,"s":"BTCUSDT","a":5000000022,"p":"60001.50","q":"0.010","f":3500000022,"l":3500000026,"T":1718380804190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380826500,"s":"BTCUSDT","t":3500000265,"p":"60001.00","q":"0.001","T":1718380826490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380826600,"s":"BTCUSDT","t":3500000266,"p":"60001.00","q":"0.001","T":1718380826590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380826700,"s":"BTCUSDT","t":3500000267,"p":"60001.00","q":"0.001","T":1718380826690,"m":false}}
@@ -274,6 +296,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380827400,"s":"BTCUSDT","t":3500000274,"p":"60001.00","q":"0.001","T":1718380827390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380827500,"s":"BTCUSDT","t":3500000275,"p":"60001.00","q":"0.001","T":1718380827490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380827600,"s":"BTCUSDT","t":3500000276,"p":"60001.00","q":"0.001","T":1718380827590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380804400,"s":"BTCUSDT","a":5000000023,"p":"60001.50","q":"0.010","f":3500000023,"l":3500000027,"T":1718380804390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380827700,"s":"BTCUSDT","t":3500000277,"p":"60001.00","q":"0.001","T":1718380827690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380827800,"s":"BTCUSDT","t":3500000278,"p":"60001.00","q":"0.001","T":1718380827790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380827900,"s":"BTCUSDT","t":3500000279,"p":"60001.00","q":"0.001","T":1718380827890,"m":false}}
@@ -286,6 +309,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380828600,"s":"BTCUSDT","t":3500000286,"p":"60001.00","q":"0.001","T":1718380828590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380828700,"s":"BTCUSDT","t":3500000287,"p":"60001.00","q":"0.001","T":1718380828690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380828800,"s":"BTCUSDT","t":3500000288,"p":"60001.00","q":"0.001","T":1718380828790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380804600,"s":"BTCUSDT","a":5000000024,"p":"60001.50","q":"0.010","f":3500000024,"l":3500000028,"T":1718380804590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380828900,"s":"BTCUSDT","t":3500000289,"p":"60001.00","q":"0.001","T":1718380828890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380829000,"s":"BTCUSDT","t":3500000290,"p":"60001.00","q":"0.001","T":1718380828990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380829100,"s":"BTCUSDT","t":3500000291,"p":"60001.00","q":"0.001","T":1718380829090,"m":false}}
@@ -298,6 +322,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380829800,"s":"BTCUSDT","t":3500000298,"p":"60001.00","q":"0.001","T":1718380829790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380829900,"s":"BTCUSDT","t":3500000299,"p":"60001.00","q":"0.001","T":1718380829890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380830000,"s":"BTCUSDT","t":3500000300,"p":"60001.00","q":"0.001","T":1718380829990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380804800,"s":"BTCUSDT","a":5000000025,"p":"60001.50","q":"0.010","f":3500000025,"l":3500000029,"T":1718380804790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380830100,"s":"BTCUSDT","t":3500000301,"p":"60001.00","q":"0.001","T":1718380830090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380830200,"s":"BTCUSDT","t":3500000302,"p":"60001.00","q":"0.001","T":1718380830190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380830300,"s":"BTCUSDT","t":3500000303,"p":"60001.00","q":"0.001","T":1718380830290,"m":false}}
@@ -310,6 +335,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380831000,"s":"BTCUSDT","t":3500000310,"p":"60001.00","q":"0.001","T":1718380830990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380831100,"s":"BTCUSDT","t":3500000311,"p":"60001.00","q":"0.001","T":1718380831090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380831200,"s":"BTCUSDT","t":3500000312,"p":"60001.00","q":"0.001","T":1718380831190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380805000,"s":"BTCUSDT","a":5000000026,"p":"60001.50","q":"0.010","f":3500000026,"l":3500000030,"T":1718380804990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380831300,"s":"BTCUSDT","t":3500000313,"p":"60001.00","q":"0.001","T":1718380831290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380831400,"s":"BTCUSDT","t":3500000314,"p":"60001.00","q":"0.001","T":1718380831390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380831500,"s":"BTCUSDT","t":3500000315,"p":"60001.00","q":"0.001","T":1718380831490,"m":false}}
@@ -322,6 +348,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380832200,"s":"BTCUSDT","t":3500000322,"p":"60001.00","q":"0.001","T":1718380832190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380832300,"s":"BTCUSDT","t":3500000323,"p":"60001.00","q":"0.001","T":1718380832290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380832400,"s":"BTCUSDT","t":3500000324,"p":"60001.00","q":"0.001","T":1718380832390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380805200,"s":"BTCUSDT","a":5000000027,"p":"60001.50","q":"0.010","f":3500000027,"l":3500000031,"T":1718380805190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380832500,"s":"BTCUSDT","t":3500000325,"p":"60001.00","q":"0.001","T":1718380832490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380832600,"s":"BTCUSDT","t":3500000326,"p":"60001.00","q":"0.001","T":1718380832590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380832700,"s":"BTCUSDT","t":3500000327,"p":"60001.00","q":"0.001","T":1718380832690,"m":false}}
@@ -334,6 +361,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380833400,"s":"BTCUSDT","t":3500000334,"p":"60001.00","q":"0.001","T":1718380833390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380833500,"s":"BTCUSDT","t":3500000335,"p":"60001.00","q":"0.001","T":1718380833490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380833600,"s":"BTCUSDT","t":3500000336,"p":"60001.00","q":"0.001","T":1718380833590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380805400,"s":"BTCUSDT","a":5000000028,"p":"60001.50","q":"0.010","f":3500000028,"l":3500000032,"T":1718380805390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380833700,"s":"BTCUSDT","t":3500000337,"p":"60001.00","q":"0.001","T":1718380833690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380833800,"s":"BTCUSDT","t":3500000338,"p":"60001.00","q":"0.001","T":1718380833790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380833900,"s":"BTCUSDT","t":3500000339,"p":"60001.00","q":"0.001","T":1718380833890,"m":false}}
@@ -346,6 +374,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380834600,"s":"BTCUSDT","t":3500000346,"p":"60001.00","q":"0.001","T":1718380834590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380834700,"s":"BTCUSDT","t":3500000347,"p":"60001.00","q":"0.001","T":1718380834690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380834800,"s":"BTCUSDT","t":3500000348,"p":"60001.00","q":"0.001","T":1718380834790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380805600,"s":"BTCUSDT","a":5000000029,"p":"60001.50","q":"0.010","f":3500000029,"l":3500000033,"T":1718380805590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380834900,"s":"BTCUSDT","t":3500000349,"p":"60001.00","q":"0.001","T":1718380834890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380835000,"s":"BTCUSDT","t":3500000350,"p":"60001.00","q":"0.001","T":1718380834990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380835100,"s":"BTCUSDT","t":3500000351,"p":"60001.00","q":"0.001","T":1718380835090,"m":false}}
@@ -358,6 +387,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380835800,"s":"BTCUSDT","t":3500000358,"p":"60001.00","q":"0.001","T":1718380835790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380835900,"s":"BTCUSDT","t":3500000359,"p":"60001.00","q":"0.001","T":1718380835890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380836000,"s":"BTCUSDT","t":3500000360,"p":"60001.00","q":"0.001","T":1718380835990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380805800,"s":"BTCUSDT","a":5000000030,"p":"60001.50","q":"0.010","f":3500000030,"l":3500000034,"T":1718380805790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380836100,"s":"BTCUSDT","t":3500000361,"p":"60001.00","q":"0.001","T":1718380836090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380836200,"s":"BTCUSDT","t":3500000362,"p":"60001.00","q":"0.001","T":1718380836190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380836300,"s":"BTCUSDT","t":3500000363,"p":"60001.00","q":"0.001","T":1718380836290,"m":false}}
@@ -370,6 +400,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380837000,"s":"BTCUSDT","t":3500000370,"p":"60001.00","q":"0.001","T":1718380836990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380837100,"s":"BTCUSDT","t":3500000371,"p":"60001.00","q":"0.001","T":1718380837090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380837200,"s":"BTCUSDT","t":3500000372,"p":"60001.00","q":"0.001","T":1718380837190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380806000,"s":"BTCUSDT","a":5000000031,"p":"60001.50","q":"0.010","f":3500000031,"l":3500000035,"T":1718380805990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380837300,"s":"BTCUSDT","t":3500000373,"p":"60001.00","q":"0.001","T":1718380837290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380837400,"s":"BTCUSDT","t":3500000374,"p":"60001.00","q":"0.001","T":1718380837390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380837500,"s":"BTCUSDT","t":3500000375,"p":"60001.00","q":"0.001","T":1718380837490,"m":false}}
@@ -382,6 +413,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380838200,"s":"BTCUSDT","t":3500000382,"p":"60001.00","q":"0.001","T":1718380838190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380838300,"s":"BTCUSDT","t":3500000383,"p":"60001.00","q":"0.001","T":1718380838290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380838400,"s":"BTCUSDT","t":3500000384,"p":"60001.00","q":"0.001","T":1718380838390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380806200,"s":"BTCUSDT","a":5000000032,"p":"60001.50","q":"0.010","f":3500000032,"l":3500000036,"T":1718380806190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380838500,"s":"BTCUSDT","t":3500000385,"p":"60001.00","q":"0.001","T":1718380838490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380838600,"s":"BTCUSDT","t":3500000386,"p":"60001.00","q":"0.001","T":1718380838590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380838700,"s":"BTCUSDT","t":3500000387,"p":"60001.00","q":"0.001","T":1718380838690,"m":false}}
@@ -394,6 +426,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380839400,"s":"BTCUSDT","t":3500000394,"p":"60001.00","q":"0.001","T":1718380839390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380839500,"s":"BTCUSDT","t":3500000395,"p":"60001.00","q":"0.001","T":1718380839490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380839600,"s":"BTCUSDT","t":3500000396,"p":"60001.00","q":"0.001","T":1718380839590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380806400,"s":"BTCUSDT","a":5000000033,"p":"60001.50","q":"0.010","f":3500000033,"l":3500000037,"T":1718380806390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380839700,"s":"BTCUSDT","t":3500000397,"p":"60001.00","q":"0.001","T":1718380839690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380839800,"s":"BTCUSDT","t":3500000398,"p":"60001.00","q":"0.001","T":1718380839790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380839900,"s":"BTCUSDT","t":3500000399,"p":"60001.00","q":"0.001","T":1718380839890,"m":false}}
@@ -406,6 +439,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380840600,"s":"BTCUSDT","t":3500000406,"p":"60001.00","q":"0.001","T":1718380840590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380840700,"s":"BTCUSDT","t":3500000407,"p":"60001.00","q":"0.001","T":1718380840690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380840800,"s":"BTCUSDT","t":3500000408,"p":"60001.00","q":"0.001","T":1718380840790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380806600,"s":"BTCUSDT","a":5000000034,"p":"60001.50","q":"0.010","f":3500000034,"l":3500000038,"T":1718380806590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380840900,"s":"BTCUSDT","t":3500000409,"p":"60001.00","q":"0.001","T":1718380840890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380841000,"s":"BTCUSDT","t":3500000410,"p":"60001.00","q":"0.001","T":1718380840990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380841100,"s":"BTCUSDT","t":3500000411,"p":"60001.00","q":"0.001","T":1718380841090,"m":false}}
@@ -418,6 +452,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380841800,"s":"BTCUSDT","t":3500000418,"p":"60001.00","q":"0.001","T":1718380841790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380841900,"s":"BTCUSDT","t":3500000419,"p":"60001.00","q":"0.001","T":1718380841890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380842000,"s":"BTCUSDT","t":3500000420,"p":"60001.00","q":"0.001","T":1718380841990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380806800,"s":"BTCUSDT","a":5000000035,"p":"60001.50","q":"0.010","f":3500000035,"l":3500000039,"T":1718380806790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380842100,"s":"BTCUSDT","t":3500000421,"p":"60001.00","q":"0.001","T":1718380842090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380842200,"s":"BTCUSDT","t":3500000422,"p":"60001.00","q":"0.001","T":1718380842190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380842300,"s":"BTCUSDT","t":3500000423,"p":"60001.00","q":"0.001","T":1718380842290,"m":false}}
@@ -430,6 +465,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380843000,"s":"BTCUSDT","t":3500000430,"p":"60001.00","q":"0.001","T":1718380842990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380843100,"s":"BTCUSDT","t":3500000431,"p":"60001.00","q":"0.001","T":1718380843090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380843200,"s":"BTCUSDT","t":3500000432,"p":"60001.00","q":"0.001","T":1718380843190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380807000,"s":"BTCUSDT","a":5000000036,"p":"60001.50","q":"0.010","f":3500000036,"l":3500000040,"T":1718380806990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380843300,"s":"BTCUSDT","t":3500000433,"p":"60001.00","q":"0.001","T":1718380843290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380843400,"s":"BTCUSDT","t":3500000434,"p":"60001.00","q":"0.001","T":1718380843390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380843500,"s":"BTCUSDT","t":3500000435,"p":"60001.00","q":"0.001","T":1718380843490,"m":false}}
@@ -442,6 +478,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380844200,"s":"BTCUSDT","t":3500000442,"p":"60001.00","q":"0.001","T":1718380844190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380844300,"s":"BTCUSDT","t":3500000443,"p":"60001.00","q":"0.001","T":1718380844290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380844400,"s":"BTCUSDT","t":3500000444,"p":"60001.00","q":"0.001","T":1718380844390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380807200,"s":"BTCUSDT","a":5000000037,"p":"60001.50","q":"0.010","f":3500000037,"l":3500000041,"T":1718380807190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380844500,"s":"BTCUSDT","t":3500000445,"p":"60001.00","q":"0.001","T":1718380844490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380844600,"s":"BTCUSDT","t":3500000446,"p":"60001.00","q":"0.001","T":1718380844590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380844700,"s":"BTCUSDT","t":3500000447,"p":"60001.00","q":"0.001","T":1718380844690,"m":false}}
@@ -454,6 +491,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380845400,"s":"BTCUSDT","t":3500000454,"p":"60001.00","q":"0.001","T":1718380845390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380845500,"s":"BTCUSDT","t":3500000455,"p":"60001.00","q":"0.001","T":1718380845490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380845600,"s":"BTCUSDT","t":3500000456,"p":"60001.00","q":"0.001","T":1718380845590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380807400,"s":"BTCUSDT","a":5000000038,"p":"60001.50","q":"0.010","f":3500000038,"l":3500000042,"T":1718380807390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380845700,"s":"BTCUSDT","t":3500000457,"p":"60001.00","q":"0.001","T":1718380845690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380845800,"s":"BTCUSDT","t":3500000458,"p":"60001.00","q":"0.001","T":1718380845790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380845900,"s":"BTCUSDT","t":3500000459,"p":"60001.00","q":"0.001","T":1718380845890,"m":false}}
@@ -466,6 +504,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380846600,"s":"BTCUSDT","t":3500000466,"p":"60001.00","q":"0.001","T":1718380846590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380846700,"s":"BTCUSDT","t":3500000467,"p":"60001.00","q":"0.001","T":1718380846690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380846800,"s":"BTCUSDT","t":3500000468,"p":"60001.00","q":"0.001","T":1718380846790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380807600,"s":"BTCUSDT","a":5000000039,"p":"60001.50","q":"0.010","f":3500000039,"l":3500000043,"T":1718380807590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380846900,"s":"BTCUSDT","t":3500000469,"p":"60001.00","q":"0.001","T":1718380846890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380847000,"s":"BTCUSDT","t":3500000470,"p":"60001.00","q":"0.001","T":1718380846990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380847100,"s":"BTCUSDT","t":3500000471,"p":"60001.00","q":"0.001","T":1718380847090,"m":false}}
@@ -478,6 +517,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380847800,"s":"BTCUSDT","t":3500000478,"p":"60001.00","q":"0.001","T":1718380847790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380847900,"s":"BTCUSDT","t":3500000479,"p":"60001.00","q":"0.001","T":1718380847890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380848000,"s":"BTCUSDT","t":3500000480,"p":"60001.00","q":"0.001","T":1718380847990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380807800,"s":"BTCUSDT","a":5000000040,"p":"60001.50","q":"0.010","f":3500000040,"l":3500000044,"T":1718380807790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380848100,"s":"BTCUSDT","t":3500000481,"p":"60001.00","q":"0.001","T":1718380848090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380848200,"s":"BTCUSDT","t":3500000482,"p":"60001.00","q":"0.001","T":1718380848190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380848300,"s":"BTCUSDT","t":3500000483,"p":"60001.00","q":"0.001","T":1718380848290,"m":false}}
@@ -490,6 +530,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380849000,"s":"BTCUSDT","t":3500000490,"p":"60001.00","q":"0.001","T":1718380848990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380849100,"s":"BTCUSDT","t":3500000491,"p":"60001.00","q":"0.001","T":1718380849090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380849200,"s":"BTCUSDT","t":3500000492,"p":"60001.00","q":"0.001","T":1718380849190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380808000,"s":"BTCUSDT","a":5000000041,"p":"60001.50","q":"0.010","f":3500000041,"l":3500000045,"T":1718380807990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380849300,"s":"BTCUSDT","t":3500000493,"p":"60001.00","q":"0.001","T":1718380849290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380849400,"s":"BTCUSDT","t":3500000494,"p":"60001.00","q":"0.001","T":1718380849390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380849500,"s":"BTCUSDT","t":3500000495,"p":"60001.00","q":"0.001","T":1718380849490,"m":false}}
@@ -502,6 +543,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380850200,"s":"BTCUSDT","t":3500000502,"p":"60001.00","q":"0.001","T":1718380850190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380850300,"s":"BTCUSDT","t":3500000503,"p":"60001.00","q":"0.001","T":1718380850290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380850400,"s":"BTCUSDT","t":3500000504,"p":"60001.00","q":"0.001","T":1718380850390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380808200,"s":"BTCUSDT","a":5000000042,"p":"60001.50","q":"0.010","f":3500000042,"l":3500000046,"T":1718380808190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380850500,"s":"BTCUSDT","t":3500000505,"p":"60001.00","q":"0.001","T":1718380850490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380850600,"s":"BTCUSDT","t":3500000506,"p":"60001.00","q":"0.001","T":1718380850590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380850700,"s":"BTCUSDT","t":3500000507,"p":"60001.00","q":"0.001","T":1718380850690,"m":false}}
@@ -514,6 +556,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380851400,"s":"BTCUSDT","t":3500000514,"p":"60001.00","q":"0.001","T":1718380851390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380851500,"s":"BTCUSDT","t":3500000515,"p":"60001.00","q":"0.001","T":1718380851490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380851600,"s":"BTCUSDT","t":3500000516,"p":"60001.00","q":"0.001","T":1718380851590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380808400,"s":"BTCUSDT","a":5000000043,"p":"60001.50","q":"0.010","f":3500000043,"l":3500000047,"T":1718380808390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380851700,"s":"BTCUSDT","t":3500000517,"p":"60001.00","q":"0.001","T":1718380851690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380851800,"s":"BTCUSDT","t":3500000518,"p":"60001.00","q":"0.001","T":1718380851790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380851900,"s":"BTCUSDT","t":3500000519,"p":"60001.00","q":"0.001","T":1718380851890,"m":false}}
@@ -526,6 +569,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380852600,"s":"BTCUSDT","t":3500000526,"p":"60001.00","q":"0.001","T":1718380852590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380852700,"s":"BTCUSDT","t":3500000527,"p":"60001.00","q":"0.001","T":1718380852690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380852800,"s":"BTCUSDT","t":3500000528,"p":"60001.00","q":"0.001","T":1718380852790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380808600,"s":"BTCUSDT","a":5000000044,"p":"60001.50","q":"0.010","f":3500000044,"l":3500000048,"T":1718380808590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380852900,"s":"BTCUSDT","t":3500000529,"p":"60001.00","q":"0.001","T":1718380852890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380853000,"s":"BTCUSDT","t":3500000530,"p":"60001.00","q":"0.001","T":1718380852990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380853100,"s":"BTCUSDT","t":3500000531,"p":"60001.00","q":"0.001","T":1718380853090,"m":false}}
@@ -538,6 +582,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380853800,"s":"BTCUSDT","t":3500000538,"p":"60001.00","q":"0.001","T":1718380853790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380853900,"s":"BTCUSDT","t":3500000539,"p":"60001.00","q":"0.001","T":1718380853890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380854000,"s":"BTCUSDT","t":3500000540,"p":"60001.00","q":"0.001","T":1718380853990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380808800,"s":"BTCUSDT","a":5000000045,"p":"60001.50","q":"0.010","f":3500000045,"l":3500000049,"T":1718380808790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380854100,"s":"BTCUSDT","t":3500000541,"p":"60001.00","q":"0.001","T":1718380854090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380854200,"s":"BTCUSDT","t":3500000542,"p":"60001.00","q":"0.001","T":1718380854190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380854300,"s":"BTCUSDT","t":3500000543,"p":"60001.00","q":"0.001","T":1718380854290,"m":false}}
@@ -550,6 +595,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380855000,"s":"BTCUSDT","t":3500000550,"p":"60001.00","q":"0.001","T":1718380854990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380855100,"s":"BTCUSDT","t":3500000551,"p":"60001.00","q":"0.001","T":1718380855090,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380855200,"s":"BTCUSDT","t":3500000552,"p":"60001.00","q":"0.001","T":1718380855190,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380809000,"s":"BTCUSDT","a":5000000046,"p":"60001.50","q":"0.010","f":3500000046,"l":3500000050,"T":1718380808990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380855300,"s":"BTCUSDT","t":3500000553,"p":"60001.00","q":"0.001","T":1718380855290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380855400,"s":"BTCUSDT","t":3500000554,"p":"60001.00","q":"0.001","T":1718380855390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380855500,"s":"BTCUSDT","t":3500000555,"p":"60001.00","q":"0.001","T":1718380855490,"m":false}}
@@ -562,6 +608,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380856200,"s":"BTCUSDT","t":3500000562,"p":"60001.00","q":"0.001","T":1718380856190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380856300,"s":"BTCUSDT","t":3500000563,"p":"60001.00","q":"0.001","T":1718380856290,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380856400,"s":"BTCUSDT","t":3500000564,"p":"60001.00","q":"0.001","T":1718380856390,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380809200,"s":"BTCUSDT","a":5000000047,"p":"60001.50","q":"0.010","f":3500000047,"l":3500000051,"T":1718380809190,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380856500,"s":"BTCUSDT","t":3500000565,"p":"60001.00","q":"0.001","T":1718380856490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380856600,"s":"BTCUSDT","t":3500000566,"p":"60001.00","q":"0.001","T":1718380856590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380856700,"s":"BTCUSDT","t":3500000567,"p":"60001.00","q":"0.001","T":1718380856690,"m":false}}
@@ -574,6 +621,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380857400,"s":"BTCUSDT","t":3500000574,"p":"60001.00","q":"0.001","T":1718380857390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380857500,"s":"BTCUSDT","t":3500000575,"p":"60001.00","q":"0.001","T":1718380857490,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380857600,"s":"BTCUSDT","t":3500000576,"p":"60001.00","q":"0.001","T":1718380857590,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380809400,"s":"BTCUSDT","a":5000000048,"p":"60001.50","q":"0.010","f":3500000048,"l":3500000052,"T":1718380809390,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380857700,"s":"BTCUSDT","t":3500000577,"p":"60001.00","q":"0.001","T":1718380857690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380857800,"s":"BTCUSDT","t":3500000578,"p":"60001.00","q":"0.001","T":1718380857790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380857900,"s":"BTCUSDT","t":3500000579,"p":"60001.00","q":"0.001","T":1718380857890,"m":false}}
@@ -586,6 +634,7 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380858600,"s":"BTCUSDT","t":3500000586,"p":"60001.00","q":"0.001","T":1718380858590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380858700,"s":"BTCUSDT","t":3500000587,"p":"60001.00","q":"0.001","T":1718380858690,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380858800,"s":"BTCUSDT","t":3500000588,"p":"60001.00","q":"0.001","T":1718380858790,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380809600,"s":"BTCUSDT","a":5000000049,"p":"60001.50","q":"0.010","f":3500000049,"l":3500000053,"T":1718380809590,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380858900,"s":"BTCUSDT","t":3500000589,"p":"60001.00","q":"0.001","T":1718380858890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380859000,"s":"BTCUSDT","t":3500000590,"p":"60001.00","q":"0.001","T":1718380858990,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380859100,"s":"BTCUSDT","t":3500000591,"p":"60001.00","q":"0.001","T":1718380859090,"m":false}}
@@ -598,3 +647,4 @@
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380859800,"s":"BTCUSDT","t":3500000598,"p":"60001.00","q":"0.001","T":1718380859790,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380859900,"s":"BTCUSDT","t":3500000599,"p":"60001.00","q":"0.001","T":1718380859890,"m":false}}
 {"stream":"btcusdt@trade","data":{"e":"trade","E":1718380860000,"s":"BTCUSDT","t":3500000600,"p":"60001.00","q":"0.001","T":1718380859990,"m":false}}
+{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1718380809800,"s":"BTCUSDT","a":5000000050,"p":"60001.50","q":"0.010","f":3500000050,"l":3500000054,"T":1718380809790,"m":false}}

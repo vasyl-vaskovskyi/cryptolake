@@ -17,8 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Multi-session bare-bones WebSocket server for reconnect tests. Accepts clients in a loop until
- * {@link #close()} is called. Each session: RFC 6455 handshake → consume one masked SUBSCRIBE
- * frame (discarded) → send all script frames → close the socket from the server side.
+ * {@link #close()} is called. Each session: RFC 6455 handshake → consume one masked SUBSCRIBE frame
+ * (discarded) → send all script frames → close the socket from the server side.
  *
  * <p>Use {@link #sessionCount()} to assert how many reconnects occurred.
  */

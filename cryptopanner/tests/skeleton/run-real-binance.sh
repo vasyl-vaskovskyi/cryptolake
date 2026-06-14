@@ -67,16 +67,10 @@ JAVA_OPTS="-Dconfig=$CONFIG" \
   "$REPO_ROOT/uploader/target/install/bin/uploader" \
   --date "$DATE" --hour "$HOUR"
 
-# 9) Run Verify.
+# 9) Run Verify across all configured subscriptions.
 "$REPO_ROOT/verify/target/install/bin/verify" verify \
-  --endpoint http://localhost:9000 \
-  --bucket cryptopanner-real \
-  --node-id dev-real \
-  --symbol btcusdt \
-  --stream trade \
+  --config "$CONFIG" \
   --date "$DATE" \
-  --hour "$HOUR" \
-  --access-key cryptopanner \
-  --secret-key changeme-dev
+  --hour "$HOUR"
 
 echo "[real-binance] OK"

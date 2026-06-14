@@ -71,16 +71,10 @@ JAVA_OPTS="-Dconfig=$REPO_ROOT/config/dev/skeleton.yaml" \
   "$REPO_ROOT/uploader/target/install/bin/uploader" \
   --date "$DATE" --hour "$HOUR"
 
-# 10) Run Verify.
+# 10) Run Verify across all configured subscriptions.
 "$REPO_ROOT/verify/target/install/bin/verify" verify \
-  --endpoint http://localhost:9000 \
-  --bucket cryptopanner-dev \
-  --node-id dev-node \
-  --symbol btcusdt \
-  --stream trade \
+  --config "$REPO_ROOT/config/dev/skeleton.yaml" \
   --date "$DATE" \
-  --hour "$HOUR" \
-  --access-key cryptopanner \
-  --secret-key changeme-dev
+  --hour "$HOUR"
 
 echo "[skeleton] OK"

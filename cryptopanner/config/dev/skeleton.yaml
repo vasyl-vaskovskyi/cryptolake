@@ -3,6 +3,8 @@ node_id: dev-node
 subscriptions:
   - symbol: btcusdt
     stream: trade
+  - symbol: btcusdt
+    stream: aggTrade
 
 # Capture target — mock-binance-ws in the dev stack (dual-socket routing per §8.a)
 ws_public_endpoint_url: ws://localhost:9001/public/stream

@@ -24,17 +24,8 @@ public final class Main {
     SkeletonConfig cfg = SkeletonConfig.load(configPath);
     String dateStr = required(args, "--date");
     int hour = Integer.parseInt(required(args, "--hour"));
-    String symbol = required(args, "--symbol", cfg.subscriptions().get(0).symbol());
-    String stream = required(args, "--stream", cfg.subscriptions().get(0).stream());
     Instant hourStart =
         LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
-
-    Path data = Paths.hourSealed(cfg.paths().sealed(), symbol, stream, hourStart);
-    Path sidecar = data.resolveSibling(data.getFileName() + ".sha256");
-    Path manifest = data.resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
-    if (!Files.exists(data) || !Files.exists(sidecar) || !Files.exists(manifest)) {
-      throw new IllegalStateException("missing sealed files; run sealer first");
-    }
 
     S3Client s3 =
         S3Client.builder()
@@ -57,14 +48,49 @@ public final class Main {
       // already exists
     }
 
-    String key = Paths.s3Key(cfg.nodeId(), symbol, stream, hourStart);
-    System.out.println("[uploader] uploading to s3://" + cfg.storage().bucket() + "/" + key);
-    new S3Uploader(s3, cfg.storage().bucket()).upload(key, data, sidecar, manifest);
+    S3Uploader uploader = new S3Uploader(s3, cfg.storage().bucket());
 
-    System.out.println("[uploader] success; cleaning local sealed files");
-    Files.delete(data);
-    Files.delete(sidecar);
-    Files.delete(manifest);
+    System.out.println(
+        "[uploader] uploading hour "
+            + hour
+            + " of "
+            + dateStr
+            + " for "
+            + cfg.subscriptions().size()
+            + " subscription(s) to s3://"
+            + cfg.storage().bucket());
+
+    int failures = 0;
+    for (SkeletonConfig.Subscription sub : cfg.subscriptions()) {
+      String symbol = sub.symbol();
+      String stream = sub.stream();
+      try {
+        Path data = Paths.hourSealed(cfg.paths().sealed(), symbol, stream, hourStart);
+        Path sidecar = data.resolveSibling(data.getFileName() + ".sha256");
+        Path manifest =
+            data.resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
+        if (!Files.exists(data) || !Files.exists(sidecar) || !Files.exists(manifest)) {
+          throw new IllegalStateException(
+              "missing sealed files for " + symbol + "@" + stream + "; run sealer first");
+        }
+
+        String key = Paths.s3Key(cfg.nodeId(), symbol, stream, hourStart);
+        System.out.println("[uploader] " + symbol + "@" + stream + ": -> " + key);
+        uploader.upload(key, data, sidecar, manifest);
+
+        Files.delete(data);
+        Files.delete(sidecar);
+        Files.delete(manifest);
+      } catch (Exception e) {
+        System.err.println("[uploader] " + symbol + "@" + stream + ": FAILED — " + e.getMessage());
+        failures++;
+      }
+    }
+
+    if (failures > 0) {
+      System.err.println("[uploader] " + failures + " subscription(s) failed");
+      System.exit(1);
+    }
   }
 
   private static String required(String[] args, String flag) {
@@ -72,12 +98,5 @@ public final class Main {
       if (args[i].equals(flag)) return args[i + 1];
     }
     throw new IllegalArgumentException("missing flag: " + flag);
-  }
-
-  private static String required(String[] args, String flag, String defaultValue) {
-    for (int i = 0; i < args.length - 1; i++) {
-      if (args[i].equals(flag)) return args[i + 1];
-    }
-    return defaultValue;
   }
 }

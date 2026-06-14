@@ -1,8 +1,12 @@
 package com.cryptopanner.verify;
 
+import com.cryptopanner.common.config.SkeletonConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -15,22 +19,33 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
-@Command(name = "verify", description = "Download and integrity-check one (symbol, stream, hour).")
+@Command(
+    name = "verify",
+    description =
+        "Integrity-check sealed hours in S3. Verifies one (symbol, stream) triple if both "
+            + "--symbol and --stream are set; otherwise iterates all subscriptions in --config.")
 public final class VerifyCommand implements Callable<Integer> {
 
-  @Option(names = "--endpoint", required = true)
+  @Option(
+      names = "--config",
+      description =
+          "Path to config.yaml. Pulls bucket, node-id, "
+              + "credentials, and subscription list from it. CLI flags override config values.")
+  String configPath;
+
+  @Option(names = "--endpoint")
   String endpoint;
 
-  @Option(names = "--bucket", required = true)
+  @Option(names = "--bucket")
   String bucket;
 
-  @Option(names = "--node-id", required = true)
+  @Option(names = "--node-id")
   String nodeId;
 
-  @Option(names = "--symbol", required = true)
+  @Option(names = "--symbol")
   String symbol;
 
-  @Option(names = "--stream", required = true)
+  @Option(names = "--stream")
   String stream;
 
   @Option(names = "--date", required = true)
@@ -39,17 +54,47 @@ public final class VerifyCommand implements Callable<Integer> {
   @Option(names = "--hour", required = true)
   int hour;
 
-  @Option(names = "--access-key", defaultValue = "cryptopanner")
+  @Option(names = "--access-key")
   String accessKey;
 
-  @Option(names = "--secret-key", defaultValue = "changeme-dev")
+  @Option(names = "--secret-key")
   String secretKey;
 
-  @Option(names = "--region", defaultValue = "us-east-1")
+  @Option(names = "--region")
   String region;
 
   @Override
   public Integer call() throws Exception {
+    SkeletonConfig cfg = null;
+    if (configPath != null) {
+      cfg = SkeletonConfig.load(Path.of(configPath));
+      if (endpoint == null) endpoint = cfg.storage().endpoint();
+      if (bucket == null) bucket = cfg.storage().bucket();
+      if (nodeId == null) nodeId = cfg.nodeId();
+      if (accessKey == null) accessKey = cfg.storage().accessKey();
+      if (secretKey == null) secretKey = cfg.storage().secretKey();
+      if (region == null) region = cfg.storage().region();
+    }
+    if (accessKey == null) accessKey = "cryptopanner";
+    if (secretKey == null) secretKey = "changeme-dev";
+    if (region == null) region = "us-east-1";
+
+    if (endpoint == null || bucket == null || nodeId == null) {
+      System.err.println(
+          "verify needs --endpoint, --bucket, --node-id (or pass --config to default them)");
+      return 2;
+    }
+
+    List<SkeletonConfig.Subscription> targets = new ArrayList<>();
+    if (symbol != null && stream != null) {
+      targets.add(new SkeletonConfig.Subscription(symbol, stream));
+    } else if (cfg != null) {
+      targets.addAll(cfg.subscriptions());
+    } else {
+      System.err.println("verify needs either (--symbol and --stream) or --config");
+      return 2;
+    }
+
     S3Client s3 =
         S3Client.builder()
             .endpointOverride(URI.create(endpoint))
@@ -59,31 +104,62 @@ public final class VerifyCommand implements Callable<Integer> {
             .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
             .build();
 
+    int errors = 0;
+    for (SkeletonConfig.Subscription sub : targets) {
+      errors += verifyOne(s3, sub.symbol(), sub.stream());
+    }
+
+    System.out.println("ERRORS=" + errors);
+    return errors == 0 ? 0 : 1;
+  }
+
+  private int verifyOne(S3Client s3, String symbol, String stream) throws Exception {
     String prefix = nodeId + "/" + symbol + "/" + stream + "/" + date;
     String dataKey = prefix + "/hour-" + String.format("%02d", hour) + ".jsonl.zst";
     String sidecarKey = dataKey + ".sha256";
     String manifestKey = prefix + "/hour-" + String.format("%02d", hour) + ".manifest.json";
 
-    byte[] data = fetch(s3, dataKey);
-    byte[] sidecar = fetch(s3, sidecarKey);
-    byte[] manifest = fetch(s3, manifestKey);
-
     int errors = 0;
-    String computedSha = sha256Hex(data);
-    String sidecarHex = new String(sidecar).split("\\s+")[0];
-    String manifestSha = new ObjectMapper().readTree(manifest).get("file_sha256").asText();
+    try {
+      byte[] data = fetch(s3, dataKey);
+      byte[] sidecar = fetch(s3, sidecarKey);
+      byte[] manifest = fetch(s3, manifestKey);
 
-    if (!computedSha.equals(sidecarHex)) {
-      System.err.println("MISMATCH: computed=" + computedSha + " sidecar=" + sidecarHex);
+      String computedSha = sha256Hex(data);
+      String sidecarHex = new String(sidecar).split("\\s+")[0];
+      String manifestSha = new ObjectMapper().readTree(manifest).get("file_sha256").asText();
+
+      if (!computedSha.equals(sidecarHex)) {
+        System.err.println(
+            symbol
+                + "@"
+                + stream
+                + " MISMATCH: computed="
+                + computedSha
+                + " sidecar="
+                + sidecarHex);
+        errors++;
+      }
+      if (!computedSha.equals(manifestSha)) {
+        System.err.println(
+            symbol
+                + "@"
+                + stream
+                + " MISMATCH: computed="
+                + computedSha
+                + " manifest="
+                + manifestSha);
+        errors++;
+      }
+      if (errors == 0) {
+        System.out.println(
+            symbol + "@" + stream + " OK (sha=" + computedSha.substring(0, 12) + ")");
+      }
+    } catch (Exception e) {
+      System.err.println(symbol + "@" + stream + " FAILED — " + e.getMessage());
       errors++;
     }
-    if (!computedSha.equals(manifestSha)) {
-      System.err.println("MISMATCH: computed=" + computedSha + " manifest=" + manifestSha);
-      errors++;
-    }
-
-    System.out.println("ERRORS=" + errors);
-    return errors == 0 ? 0 : 1;
+    return errors;
   }
 
   private byte[] fetch(S3Client s3, String key) throws Exception {

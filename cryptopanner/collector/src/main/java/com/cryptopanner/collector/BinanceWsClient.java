@@ -95,8 +95,7 @@ public final class BinanceWsClient {
           }
 
           @Override
-          public CompletionStage<?> onText(
-              WebSocket webSocket, CharSequence data, boolean last) {
+          public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             buf.append(data);
             if (last) {
               String full = buf.toString();
@@ -113,8 +112,7 @@ public final class BinanceWsClient {
           }
 
           @Override
-          public CompletionStage<?> onClose(
-              WebSocket webSocket, int statusCode, String reason) {
+          public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
             // Complete the ack future exceptionally so start() doesn't hang if ACK never arrived.
             ackSeen.completeExceptionally(
                 new Exception("ws closed before ACK: " + statusCode + " " + reason));

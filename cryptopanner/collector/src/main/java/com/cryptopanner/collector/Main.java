@@ -82,7 +82,10 @@ public final class Main {
     }
 
     System.out.println(
-        "[collector] started; running for " + cfg.collectorMaxRuntimeS() + "s; sockets=" + clients.size());
+        "[collector] started; running for "
+            + cfg.collectorMaxRuntimeS()
+            + "s; sockets="
+            + clients.size());
 
     Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
 

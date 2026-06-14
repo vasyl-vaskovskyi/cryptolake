@@ -19,20 +19,47 @@ public final class Main {
     Instant hourStart =
         LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
 
-    String symbol = required(args, "--symbol", cfg.subscriptions().get(0).symbol());
-    String stream = required(args, "--stream", cfg.subscriptions().get(0).stream());
-
     HourMerger merger = new HourMerger(cfg.paths().segments(), cfg.paths().sealed());
-    System.out.println("[sealer] merging hour " + hour + " of " + dateStr);
-    HourMerger.Result result = merger.mergeHour(symbol, stream, hourStart);
     System.out.println(
-        "[sealer] merged " + result.recordCount() + " records into " + result.file());
+        "[sealer] sealing hour "
+            + hour
+            + " of "
+            + dateStr
+            + " for "
+            + cfg.subscriptions().size()
+            + " subscription(s)");
 
-    Path manifestPath =
-        result.file().resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
-    ManifestWriter.write(
-        manifestPath, cfg.nodeId(), symbol, stream, hourStart, result, Instant.now());
-    System.out.println("[sealer] manifest written: " + manifestPath);
+    int failures = 0;
+    for (SkeletonConfig.Subscription sub : cfg.subscriptions()) {
+      String symbol = sub.symbol();
+      String stream = sub.stream();
+      try {
+        HourMerger.Result result = merger.mergeHour(symbol, stream, hourStart);
+        System.out.println(
+            "[sealer] "
+                + symbol
+                + "@"
+                + stream
+                + ": merged "
+                + result.recordCount()
+                + " records into "
+                + result.file());
+
+        Path manifestPath =
+            result.file().resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
+        ManifestWriter.write(
+            manifestPath, cfg.nodeId(), symbol, stream, hourStart, result, Instant.now());
+        System.out.println("[sealer] " + symbol + "@" + stream + ": manifest " + manifestPath);
+      } catch (Exception e) {
+        System.err.println("[sealer] " + symbol + "@" + stream + ": FAILED — " + e.getMessage());
+        failures++;
+      }
+    }
+
+    if (failures > 0) {
+      System.err.println("[sealer] " + failures + " subscription(s) failed");
+      System.exit(1);
+    }
   }
 
   private static String required(String[] args, String flag) {
@@ -40,12 +67,5 @@ public final class Main {
       if (args[i].equals(flag)) return args[i + 1];
     }
     throw new IllegalArgumentException("missing required flag: " + flag);
-  }
-
-  private static String required(String[] args, String flag, String defaultValue) {
-    for (int i = 0; i < args.length - 1; i++) {
-      if (args[i].equals(flag)) return args[i + 1];
-    }
-    return defaultValue;
   }
 }
