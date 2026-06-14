@@ -89,7 +89,7 @@ public final class VerifyCommand implements Callable<Integer> {
     if (symbol != null && stream != null) {
       targets.add(new SkeletonConfig.Subscription(symbol, stream));
     } else if (cfg != null) {
-      targets.addAll(cfg.subscriptions());
+      targets.addAll(cfg.effectiveSubscriptions());
     } else {
       System.err.println("verify needs either (--symbol and --stream) or --config");
       return 2;

@@ -16,6 +16,10 @@ subscriptions:
   - symbol: btcusdt
     stream: markPrice@1s
 
+# All-symbol broadcasts (no per-symbol entry; the Collector partitions by data.o.s).
+broadcasts:
+  - "!forceOrder@arr"
+
 # Capture target — mock-binance-ws in the dev stack (dual-socket routing per §8.a)
 ws_public_endpoint_url: ws://localhost:9001/public/stream
 ws_market_endpoint_url: ws://localhost:9001/market/stream

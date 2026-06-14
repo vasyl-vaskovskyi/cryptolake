@@ -26,11 +26,11 @@ public final class Main {
             + " of "
             + dateStr
             + " for "
-            + cfg.subscriptions().size()
+            + cfg.effectiveSubscriptions().size()
             + " subscription(s)");
 
     int failures = 0;
-    for (SkeletonConfig.Subscription sub : cfg.subscriptions()) {
+    for (SkeletonConfig.Subscription sub : cfg.effectiveSubscriptions()) {
       String symbol = sub.symbol();
       String stream = sub.stream();
       try {
