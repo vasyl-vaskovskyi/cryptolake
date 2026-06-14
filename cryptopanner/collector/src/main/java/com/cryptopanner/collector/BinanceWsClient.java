@@ -57,7 +57,7 @@ public final class BinanceWsClient {
             if (last) {
               String full = buf.toString();
               buf.setLength(0);
-              if (!ackSeen.isDone() && full.contains("\"id\":" + subscribeId)) {
+              if (!ackSeen.isDone() && full.contains("\"result\"")) {
                 ackSeen.complete(null);
               } else {
                 onFrame.accept(full);
