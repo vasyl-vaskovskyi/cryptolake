@@ -12,7 +12,7 @@ paths:
   sealed:   /tmp/cryptopanner/sealed
 
 # Skeleton-only knob: how long the Collector runs before exiting
-collector_max_runtime_s: 180
+collector_max_runtime_s: 30
 
 # S3 (MinIO in dev)
 storage:
