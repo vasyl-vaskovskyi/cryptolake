@@ -1,0 +1,24 @@
+# config/dev/skeleton.yaml
+node_id: dev-node
+symbol:  btcusdt
+stream:  trade
+
+# Capture target — mock-binance-ws in the dev stack
+ws_endpoint_url: ws://localhost:9001/ws
+
+# Local filesystem layout
+paths:
+  segments: /tmp/cryptopanner/segments
+  sealed:   /tmp/cryptopanner/sealed
+
+# Skeleton-only knob: how long the Collector runs before exiting
+collector_max_runtime_s: 180
+
+# S3 (MinIO in dev)
+storage:
+  endpoint:           http://localhost:9000
+  bucket:             cryptopanner-dev
+  access_key:         cryptopanner
+  secret_key:         changeme-dev
+  region:             us-east-1
+  path_style_access:  true
