@@ -5,6 +5,16 @@ subscriptions:
     stream: trade
   - symbol: btcusdt
     stream: aggTrade
+  - symbol: btcusdt
+    stream: depth@100ms
+  - symbol: btcusdt
+    stream: kline_1m
+  - symbol: btcusdt
+    stream: ticker
+  - symbol: btcusdt
+    stream: bookTicker
+  - symbol: btcusdt
+    stream: markPrice@1s
 
 # Capture target — mock-binance-ws in the dev stack (dual-socket routing per §8.a)
 ws_public_endpoint_url: ws://localhost:9001/public/stream
