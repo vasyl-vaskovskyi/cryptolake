@@ -1,6 +1,8 @@
 package com.cryptopanner.sealer;
 
 import com.cryptopanner.common.config.SkeletonConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -19,7 +21,19 @@ public final class Main {
     Instant hourStart =
         LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
 
-    HourMerger merger = new HourMerger(cfg.paths().segments(), cfg.paths().sealed());
+    ObjectMapper mapper = new ObjectMapper();
+    RestBackfiller backfiller = null;
+    if (cfg.restBaseUrl() != null) {
+      backfiller =
+          new RestBackfiller(
+              RestBackfiller.newHttpClient(),
+              URI.create(cfg.restBaseUrl()),
+              cfg.restApiKey(),
+              mapper);
+      System.out.println("[sealer] REST backfill enabled via " + cfg.restBaseUrl());
+    }
+    HourMerger merger =
+        new HourMerger(cfg.paths().segments(), cfg.paths().sealed(), mapper, backfiller);
     System.out.println(
         "[sealer] sealing hour "
             + hour

@@ -54,14 +54,30 @@ public final class ManifestWriter {
       range.put("first", seq.firstId());
       range.put("last", seq.lastId());
       ArrayNode gaps = root.putArray("sequence_gaps");
-      for (SequenceAnalyzer.Gap g : seq.gaps()) {
+      for (int i = 0; i < seq.gaps().size(); i++) {
+        SequenceAnalyzer.Gap g = seq.gaps().get(i);
         ObjectNode gn = gaps.addObject();
         gn.put("from", g.from());
         gn.put("to", g.to());
         gn.put("count", g.count());
-        gn.put("backfill_outcome", "NOT_ATTEMPTED");
+        RestBackfiller.Outcome outcome =
+            i < merge.gapOutcomes().size()
+                ? merge.gapOutcomes().get(i)
+                : RestBackfiller.Outcome.NOT_ATTEMPTED;
+        gn.put("backfill_outcome", outcome.name());
       }
-      root.putArray("backfill_attempts"); // populated once REST backfill is wired in (§9.b.3).
+      ArrayNode attempts = root.putArray("backfill_attempts");
+      for (BackfillAttempt a : merge.backfillAttempts()) {
+        ObjectNode an = attempts.addObject();
+        an.put("endpoint", a.endpoint());
+        an.put("from_id", a.fromId());
+        an.put("to_id", a.toId());
+        an.put("attempts", a.attempts());
+        an.put("http_status", a.httpStatus());
+        an.put("records_inserted", a.recordsInserted());
+        an.put("outcome", a.outcome().name());
+        if (a.error() != null) an.put("error", a.error());
+      }
     }
 
     // Pretty-printed, LF line endings (master spec §10.d).

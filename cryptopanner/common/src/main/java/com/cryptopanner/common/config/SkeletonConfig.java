@@ -19,6 +19,7 @@ public record SkeletonConfig(
     List<Subscription> subscriptions,
     List<String> broadcasts,
     String restBaseUrl,
+    String restApiKey,
     List<RestPoll> restPolls,
     String wsPublicEndpointUrl,
     String wsMarketEndpointUrl,

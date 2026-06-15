@@ -75,6 +75,9 @@ class HourMergerTest {
     assertEquals(102, g.from());
     assertEquals(103, g.to());
     assertEquals(2, g.count());
+    // No backfiller configured → outcomes are NOT_ATTEMPTED, attempts list empty.
+    assertEquals(List.of(RestBackfiller.Outcome.NOT_ATTEMPTED), result.gapOutcomes());
+    assertTrue(result.backfillAttempts().isEmpty());
   }
 
   private static void writeMinute(Path dir, String name, String content) throws IOException {
