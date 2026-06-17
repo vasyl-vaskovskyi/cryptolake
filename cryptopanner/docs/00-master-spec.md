@@ -490,9 +490,9 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 ## 14. Testing strategy
 
 - a. **Test layers**, fastest to most expensive:
-    1. **Unit** — module-level isolation; no I/O, no docker. Key areas: `MinuteSegmentWriter` server-event-time bucketing (§8.c), `EquivalenceChecker` over synthetic primary/shadow pairs, `OverlapMerger` for ID and non-ID streams (§7.d), sequence-ID continuity validation (including `pu`-chain for `depth@100ms`), manifest generation against schema_version=1 (§10.d), SHA-256 computation, S3 key derivation, slot state-machine transitions (§6.b), late-frame-after-seal accounting (§8.e, §10.d).
-    2. **Integration** — in-process pair-wise tests without the full docker stack. WsConnectionManager + MinuteSegmentWriter; Sealer + Uploader against a local filesystem and a single MinIO container; deploy state machine against a fake systemd interface.
-    3. **Chaos / end-to-end** — full docker-compose stack with injected faults. See §14.e for the catalogue.
+    1. **Unit** — module-level isolation; no I/O, no docker. Key areas: `MinuteSegmentWriter` server-event-time bucketing (§8.c), `EquivalenceChecker` over synthetic primary/shadow pairs, `OverlapMerger` for ID and non-ID streams (§7.d), sequence-ID continuity validation (including `pu`-chain for `depth@100ms`), manifest generation against schema_version=1 (§10.d), SHA-256 computation, S3 key derivation, slot state-machine transitions (§6.b), late-frame-after-seal accounting (§8.e, §10.d). **§12 failure modes whose verification is pure logic — state machines, classifiers, policy decisions, and recovery from a manually-prepared dirty filesystem state — are exercised at this layer** (e.g. recovery for §12.a/c/e, reconnect backoff for §12.b, 429 handling for §12.l, clock-skew detection for §12.n, active-slot mismatch for §12.m, STAGED-too-long for §12.i, monitor-down isolation for §12.g, VPN-partition isolation for §12.h).
+    2. **Integration** — in-process pair-wise tests without the full docker stack. Uses TinyWsServer + captured fixtures from `tests/fixtures/binance/` + an in-memory S3 stub (or Testcontainers MinIO where real S3 semantics matter, or `ProcessBuilder`-spawned child JVMs where cross-process semantics matter — `flock(2)` contention, SIGKILL during `write(2)`). **Covers §12 failure modes whose verification needs wiring** — WS disconnect end-to-end (§12.b), uploader idempotency against real S3 (§12.d), sealer crash + `.fs-heavy.lock` auto-release via child-JVM SIGKILL (§12.c), rotation happy path with paired TinyWsServers (§8.b.2), forced cutover after EquivalenceChecker FAIL (§12.j), backfill end-to-end against the mock REST server (§12.k), candidate-JVM crash during deploy overlap (§12.a candidate-side), S3 outage with retry and backlog drain (§12.f). Convention: **test class names reference the §12 entry they cover** (e.g. `WsDisconnectIT` for §12.b, `Rest429StormUnitTest` for §12.l), so the spec↔test mapping is greppable without spec enumeration.
+    3. **Soak** — one long-running real-environment test. See §14.e. The only test in the suite that pays the docker-compose startup cost.
 
 - b. **Local end-to-end stack.** A `docker-compose.yml` at the repo root brings up the complete pipeline locally with one command (e.g. `make dev-up`):
     1. `mock-binance-ws` — replays a captured frame fixture; supports fault injection (§14.c).
@@ -511,42 +511,27 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 - d. **Test fixtures and replay determinism.** Captured raw-frame fixtures live under `tests/fixtures/binance/` — one minute of frames per stream type (`trade`, `depth@100ms`, `aggTrade`, `kline_1m`, `ticker`, `bookTicker`, `markPrice`, `forceOrder`), plus a matching `/depth` snapshot. Feeding the same fixture into the same Collector configuration twice **MUST produce byte-identical sealed `.jsonl.zst` files** (modulo the `sealed_at` timestamp in the manifest). This is the critical invariant that makes the make-before-break overlap protocol reviewable — without it, equivalence checks become non-deterministic.
 
-- e. **Chaos test catalogue.** Each scenario is one script at `tests/chaos/NN_<name>.sh` that spins up an isolated docker-compose project (`cryptopanner-chaos-NN`), injects a specific fault, then asserts (via `cryptopanner-verify`) that the archive ends up in the expected state. One-to-one mapping with §12 plus hot-swap-specific scenarios:
+- e. **Real-environment soak.** The only test in the suite that pays the docker-compose startup cost. One script: `tests/soak/run.sh` brings up the full local stack (`make dev-up`) with **two collector nodes in parallel** against the shared mock-binance-ws, runs at the §7.c target load for ≥ 5 min wall-clock, and triggers one synthetic WS rotation mid-run.
 
-    | # | Scenario | Maps to | Expected outcome |
-    |---|---|---|---|
-    | 01 | `collector_active_crash` | §12.a | Active slot SIGKILL mid-minute; systemd restarts; `partial_minute` recorded; ID gaps backfilled; non-ID gap permanent in manifest |
-    | 02 | `collector_candidate_crash_during_deploy` | §12.a | Candidate JVM SIGKILL during overlap; deploy aborts cleanly; no production impact |
-    | 03 | `ws_disconnect_unplanned` | §12.b | Network blip mid-stream; immediate reconnect; ID gap backfilled; non-ID gap recorded permanent |
-    | 04 | `sealer_crash_mid_merge` | §12.c | SIGKILL during merge; on restart, partial sealed file deleted; merge re-runs; `.fs-heavy.lock` auto-released |
-    | 05 | `uploader_crash_mid_upload` | §12.d | SIGKILL between data and manifest upload; on restart all three re-uploaded idempotently; consumers see manifest only on completion |
-    | 06 | `vps_reboot_with_rotation_in_flight` | §12.e | Compose host restart while a `.shadow.jsonl.zst` exists; startup recovery merges it; capture resumes |
-    | 07 | `s3_outage_extended` | §12.f | MinIO killed for 30+ min; Uploader retries indefinitely; on recovery the full backlog drains; `/data` disk-pressure Warning fires at 80% |
-    | 08 | `monitor_down` | §12.g | Monitor container stopped; nodes continue capturing; mock-healthchecks records absence of push |
-    | 09 | `vpn_partition` | §12.h | Monitor↔Node network broken; data flow to S3 continues; Monitor reports node unreachable Critical |
-    | 10 | `hot_swap_deploy_stuck` | §12.i | Deploy left in STAGED for >1h (simulated time); Warning fires; abort path verified |
-    | 11 | `rotation_equivalence_fail_forced_cutover` | §12.j | Mock injects divergence; 3 consecutive FAILs; forced cutover; `verify_result: "FORCED"` in manifest |
-    | 12 | `binance_outage_hours` | §12.k | WS mock unreachable for 2 hours of simulated time; minutes recorded as missing; partial backfill on recovery for ID streams |
-    | 13 | `rest_429_storm` | §12.l | REST mock returns sustained 429s; failed-poll envelopes recorded; backfill outcomes show `PARTIAL` / `FAILED`; alert escalation |
-    | 14 | `active_slot_corruption` | §12.m | `active-slot` file rewritten to a value not matching running PIDs; MISMATCH flag surfaces in `/status`; operator-rewrite path verified |
-    | 15 | `clock_skew` | §12.n | Time injection drifts node clock by minutes; `clock_skew_detected` log event emitted; frames continue bucketing by server-event-time |
-    | 16 | `hot_swap_happy_path` | §5.f | Full deploy: stage → verify (PASS) → promote → cleanup; overlap minutes merged; `active-slot` flipped |
-    | 17 | `rotation_happy_path` | §8.b.2 | Connection-age trigger; rotation completes; `connection_rotation_events[]` recorded in manifest |
-    | 18 | `lock_contention_sealer_vs_rotation` | §9.d | Rotation tries to cutover while Sealer holds `.fs-heavy.lock`; rotation defers to next minute; both complete |
+    Pass criterion:
+    - `cryptopanner-verify --base-dir <test-dir> --date <test-date>` exits 0 with `ERRORS=0` for each node;
+    - both nodes produce an independent complete archive in their own S3 prefix (invariant 3.d); failure or restart of one does not affect the other;
+    - no missed minutes outside the rotation overlap window;
+    - `late_frames_dropped` < 0.1% of total frames;
+    - the rotation event is recorded in the manifest under `connection_rotation_events[]`;
+    - CPU and memory within the §6.d 2vCPU/4GB envelope per node.
 
-    Pass criterion for every scenario: `cryptopanner-verify --base-dir <test-dir> --date <test-date>` exits 0 with `ERRORS=0` and the expected gap/event annotations appear in the manifest. Failures are preserved under the scenario's compose project name for postmortem.
+    Naturally covers §8.b.2 (rotation happy path) and the multi-node independence invariant (§3.d) at real-env. **All other §12 failure modes are exercised at unit / integration level per §14.a.1 / §14.a.2** — the soak is intentionally the only test that pays the docker-compose startup cost. The longer 2 h wall-clock / 24 h simulated variant in §14.g remains the pre-release gate.
 
 - f. **`cryptopanner-verify` CLI tests.** The audit/integrity CLI is unit + integration tested. Subcommands: `verify` (archive integrity), `manifest` (inspect), `gaps` (gap report), `integrity` (SHA-256 check). Coverage includes schema_version=1 manifests, all per-stream-type variants (§10.e), and degraded-input handling (truncated zstd, missing sidecar, mismatched SHA).
 
 - g. **Performance / load tests.** Run the local stack at the §7.c target load (20 symbols × 8 streams = 141 subscriptions, §8.a) for at least 2 hours of wall-clock or 24 hours of simulated time. Assert: no missed minutes outside injected faults, `late_frames_dropped` < 0.1% of total frames, CPU and memory headroom on the §6.d 2vCPU/4GB envelope, hourly merge completing well before the next hour starts.
 
-- h. **Multi-node independence test.** Two node containers run in parallel against the same mock-binance-ws (each acquires its own WS connection — same as production). Assert: each produces an independent complete archive in its own S3 prefix (invariant 3.d); failure of one does not affect the other.
+- h. **Monitor tests.** Test the Monitor's scrape loop, restart logic with active-slot targeting (§13.b), exponential backoff, circuit breaker, alert deduplication, correlation grouping (§13.e), and recovery messages against a mock Node Agent that simulates the §11.b heartbeat-state transitions.
 
-- i. **Monitor tests.** Test the Monitor's scrape loop, restart logic with active-slot targeting (§13.b), exponential backoff, circuit breaker, alert deduplication, correlation grouping (§13.e), and recovery messages against a mock Node Agent that simulates the §11.b heartbeat-state transitions.
+- i. **CI integration.** `mvn verify` runs the full unit + integration suite on every PR — including all §12 failure-mode coverage per §14.a.1 / §14.a.2. The real-environment soak (§14.e) runs nightly as `bash tests/soak/run.sh`. There is no separate "chaos" CI target — the §12 ↔ test mapping is enforced by class-name convention, not a spec-enumerated catalogue.
 
-- j. **CI integration.** Unit and integration tests run on every PR via the standard build (`./gradlew build`). The chaos suite runs on every PR via a JUnit wrapper (e.g., `:consolidation:test --tests "*ChaosVerifyIT*"`) that iterates the §14.e catalogue; individual scripts can be invoked standalone (`bash tests/chaos/NN_*.sh`). Chaos scenarios are parallelized where their compose projects don't share ports.
-
-- k. **VPN-independent testing.** All tests run locally on a single host without requiring a VPN mesh. The Node Agent binds to `0.0.0.0` in test mode; production deployment binds to the VPN interface (§4.f).
+- j. **VPN-independent testing.** All tests run locally on a single host without requiring a VPN mesh. The Node Agent binds to `0.0.0.0` in test mode; production deployment binds to the VPN interface (§4.f).
 
 ## 15. Configuration
 
@@ -645,7 +630,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
     agent:
       listen_address:  100.x.y.z:9100                                    # VPN IP:port in production
       token_file:      /etc/cryptopanner/agent.token
-      test_mode:       false                                             # true → bind to 0.0.0.0 (§14.b, §14.k)
+      test_mode:       false                                             # true → bind to 0.0.0.0 (§14.b, §14.j)
       metrics_enabled: true                                              # /metrics endpoint (§11.c)
       disk_mounts:                                                       # mounts reported in /status (§11.c)
         - /

@@ -35,14 +35,17 @@ docker compose logs -f cryptopanner-collector-a
 
 The mock Binance WS replays captured frame fixtures from `tests/fixtures/binance/`. MinIO stands in for IONOS S3. The Monitor's dashboard is at `http://localhost:9200/dashboard`.
 
-## Chaos suite
+## Tests
 
-Each `tests/chaos/NN_*.sh` spins up an isolated `cryptopanner-chaos-NN` compose project, injects a fault, then asserts `cryptopanner-verify` exits 0 with `ERRORS=0` and the expected gap/event annotations in the manifest. The 18-scenario catalogue is in master spec §14.e.
+Test layers (see master spec §14 for detail):
+
+- **Unit + integration** — everything except the soak. `mvn verify` runs the full suite. §12 failure modes are covered here using TinyWsServer + captured fixtures from `tests/fixtures/binance/` + an in-memory S3 stub (or Testcontainers MinIO where real S3 semantics matter, or `ProcessBuilder`-spawned child JVMs for cross-process semantics like `flock(2)` and SIGKILL during `write(2)`).
+- **Convention:** test class names reference the §12 entry they cover (e.g. `WsDisconnectIT` for §12.b, `Rest429StormUnitTest` for §12.l). The spec ↔ test mapping is greppable, not spec-enumerated.
+- **Soak** — one real-environment test, `tests/soak/run.sh`. Brings up the full `make dev-up` stack with two collector nodes in parallel, runs for ≥ 5 min at target load, triggers one synthetic WS rotation mid-run. Naturally covers rotation happy path (§8.b.2) and multi-node independence (§3.d) at real-env. The pre-release variant in spec §14.g extends to 2 h wall-clock / 24 h simulated.
 
 ```bash
-bash tests/chaos/01_collector_active_crash.sh         # one scenario
-make chaos-all                                         # all scenarios
-mvn -pl verify test -Dtest=ChaosVerifyIT               # JUnit harness wraps all scenarios
+mvn verify                          # unit + integration; runs every PR
+bash tests/soak/run.sh              # the one real-env test; runs nightly
 ```
 
 ## Modules at a glance
