@@ -76,10 +76,11 @@ Each app module's `package` phase runs the `appassembler-maven-plugin` to produc
 - **Single `ObjectMapper` per service.** Constructed in `common` via `EnvelopeCodec.newMapper()` and threaded through wiring. Don't create ad-hoc Jackson mappers.
 - **`CLOCK_MONOTONIC` for grace-window timers.** Wall clock is only used to identify which minute a frame goes to; sealing timers use `System.nanoTime()`. See design doc §3.4.
 - **Spotless enforced.** Run `mvn spotless:apply` before committing.
+- **TDD for new features.** Test-first: failing test → run (fails) → minimal implementation → run (passes) → commit. Strict for feature work. For bug fixes, write a regression test that reproduces the bug, then fix. Refactors keep all existing tests green. Exemptions: the soak, YAML configs, build scripts (`pom.xml`), docs, fixture captures. See master spec §14.k for the full policy and `docs/superpowers/plans/2026-06-14-walking-skeleton.md` for the canonical task shape (each task = failing test → impl → green → commit). Future plan files MUST follow the same shape.
 
 ## Where to look first
 
 - New to the project? Read `docs/00-master-spec.md` end-to-end. It's ~700 lines but covers the whole system.
 - Implementing hot-swap? Read design doc §3 (architecture) then §4 (Variant A) then §5 (Variant B).
-- Implementing the chaos suite? Master spec §14 lists the 18 scenarios with expected outcomes.
+- Writing tests? Master spec §14 lays out the test layers; §14.k pins the TDD discipline; `tests/fixtures/binance/` holds captured frame fixtures; the walking-skeleton plan demonstrates the TDD task shape end-to-end.
 - Touching the manifest? Master spec §10.d shows the full schema with `manifest_schema_version: 1`.

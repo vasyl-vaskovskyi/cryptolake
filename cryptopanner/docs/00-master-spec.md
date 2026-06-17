@@ -533,6 +533,8 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 - j. **VPN-independent testing.** All tests run locally on a single host without requiring a VPN mesh. The Node Agent binds to `0.0.0.0` in test mode; production deployment binds to the VPN interface (§4.f).
 
+- k. **TDD discipline.** New features land **test-first**: write a failing test that expresses the required behaviour, run it to confirm it fails, write the smallest implementation that makes it pass, run again to confirm green, then commit. Strict for new feature work. **Pragmatic for bug fixes**: write a regression test that reproduces the bug first, then fix; this prevents the bug from silently returning. **Refactors** keep all existing tests green throughout; the diff signal is "behaviour unchanged, structure improved." The walking-skeleton plan (`docs/superpowers/plans/2026-06-14-walking-skeleton.md`) is the reference shape for how a TDD plan task is structured (each task = failing test → run (fails) → implementation → run (passes) → commit); future plans MUST follow the same shape. **Exemptions** — TDD does not apply to: the soak (§14.e, no meaningful fail-first surface), YAML configs, build scripts (`pom.xml`, Maven config), documentation, fixture captures. For these, "verified by inspection / by running the soak" is acceptable.
+
 ## 15. Configuration
 
 - a. **Config files.** Each node reads `/etc/cryptopanner/config.yaml`; the Monitor reads `/etc/cryptopanner-monitor/monitor.yaml`. Both are YAML. Nested groups map to the dotted key notation used elsewhere in this spec (e.g., `collector.frame_buffer_window` = `collector:\n  frame_buffer_window: ...`).
