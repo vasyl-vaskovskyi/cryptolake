@@ -7,7 +7,15 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
-/** S3 upload in master spec §9.c.1 order: data → sidecar → manifest. */
+/**
+ * S3 upload in master spec §9.c.1 order: data → sidecar → manifest.
+ *
+ * <p><b>Known limitation (master spec §12.f):</b> there is no retry — a single network failure
+ * during {@link #upload} aborts the hour's upload until the next sealer/uploader cycle. §12.f
+ * mandates infinite backoff with the manifest-last sequence preserved. The retry strategy
+ * (in-process loop vs systemd respawn vs persistent queue) is an open design decision; this class
+ * is the spot where it lands when chosen.
+ */
 public final class S3Uploader {
 
   private final S3Client s3;

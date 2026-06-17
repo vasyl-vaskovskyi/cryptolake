@@ -31,10 +31,14 @@ public final class BinanceWsClient {
   private final List<String> streams;
   private final Consumer<String> onFrame;
   private final AtomicInteger nextId = new AtomicInteger(1);
+  // Reused across reconnects — JDK HttpClient owns its own executor and is meant to be shared.
+  private final HttpClient http = HttpClient.newHttpClient();
+  // Written from caller (start), WS reader thread (onText ACK), and the reconnect executor;
+  // AtomicInteger keeps the field JMM-safe under those three accessors.
+  private final AtomicInteger attempt = new AtomicInteger(0);
 
   private volatile WebSocket ws;
   private volatile boolean stopped = false;
-  private int attempt = 0; // guarded by single-threaded reconnectExec
 
   private final ScheduledExecutorService reconnectExec =
       Executors.newSingleThreadScheduledExecutor(
@@ -56,7 +60,7 @@ public final class BinanceWsClient {
    * asynchronously. The client automatically reconnects if the connection drops.
    */
   public void start() throws Exception {
-    attempt = 0;
+    attempt.set(0);
     connectAndSubscribe();
   }
 
@@ -73,7 +77,6 @@ public final class BinanceWsClient {
   // ── internals ────────────────────────────────────────────────────────────────
 
   private void connectAndSubscribe() throws Exception {
-    HttpClient http = HttpClient.newHttpClient();
     int id = nextId.getAndIncrement();
     CompletableFuture<Void> ackSeen = new CompletableFuture<>();
 
@@ -101,7 +104,7 @@ public final class BinanceWsClient {
               String full = buf.toString();
               buf.setLength(0);
               if (!ackSeen.isDone() && full.contains("\"result\"")) {
-                attempt = 0; // reset backoff after successful handshake
+                attempt.set(0); // reset backoff after successful handshake
                 ackSeen.complete(null);
               } else if (ackSeen.isDone()) {
                 onFrame.accept(full);
@@ -145,7 +148,7 @@ public final class BinanceWsClient {
 
   private void scheduleReconnect() {
     if (stopped) return;
-    long delayMs = computeBackoffMillis(attempt++);
+    long delayMs = computeBackoffMillis(attempt.getAndIncrement());
     try {
       reconnectExec.schedule(
           () -> {

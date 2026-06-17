@@ -1,7 +1,7 @@
 package com.cryptopanner.sealer;
 
+import com.cryptopanner.common.EnvelopeCodec;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
@@ -16,6 +16,8 @@ public final class ManifestWriter {
 
   private static final DateTimeFormatter DATE =
       DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.UTC);
+  // Pretty-printed; sealer only writes manifests at hour boundaries, so per-class instance is fine.
+  private static final ObjectMapper MAPPER = EnvelopeCodec.newPrettyMapper();
 
   private ManifestWriter() {}
 
@@ -28,8 +30,7 @@ public final class ManifestWriter {
       HourMerger.Result merge,
       Instant sealedAt)
       throws IOException {
-    ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
-    ObjectNode root = mapper.createObjectNode();
+    ObjectNode root = MAPPER.createObjectNode();
     root.put("manifest_schema_version", 1);
     root.put("node", node);
     root.put("symbol", symbol);
@@ -81,7 +82,7 @@ public final class ManifestWriter {
     }
 
     // Pretty-printed, LF line endings (master spec §10.d).
-    String json = mapper.writeValueAsString(root);
+    String json = MAPPER.writeValueAsString(root);
     Files.writeString(target, json);
   }
 }

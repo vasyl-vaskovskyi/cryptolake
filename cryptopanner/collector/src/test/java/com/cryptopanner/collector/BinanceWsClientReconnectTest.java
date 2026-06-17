@@ -3,11 +3,15 @@ package com.cryptopanner.collector;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.cryptopanner.collector.testutil.ReconnectingTinyWsServer;
+import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,6 +84,54 @@ class BinanceWsClientReconnectTest {
             + sessionsAtStop
             + " after="
             + sessionsAfterWait);
+  }
+
+  @Test
+  void retriesAfterHandshakeFailureOnInitialStart() throws Exception {
+    // A plain TCP server that accepts the connection then immediately closes the socket — the
+    // WebSocket handshake never completes, so buildAsync().get() throws before the listener is
+    // wired. Without the fix, the reconnect chain has no anchor and dies silently.
+    AtomicInteger connectAttempts = new AtomicInteger();
+    ServerSocket failServer = new ServerSocket();
+    failServer.setReuseAddress(true);
+    failServer.bind(new InetSocketAddress("127.0.0.1", 0));
+    int port = failServer.getLocalPort();
+
+    Thread acceptor =
+        new Thread(
+            () -> {
+              while (!failServer.isClosed()) {
+                try (Socket s = failServer.accept()) {
+                  connectAttempts.incrementAndGet();
+                } catch (IOException ignored) {
+                  return;
+                }
+              }
+            },
+            "fail-acceptor");
+    acceptor.setDaemon(true);
+    acceptor.start();
+
+    URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
+    BinanceWsClient client = new BinanceWsClient(uri, List.of("btcusdt@trade"), f -> {});
+
+    try {
+      client.start();
+    } catch (Exception ignored) {
+      // Expected: initial handshake fails.
+    }
+
+    // Backoff schedule: attempt 0 ≈ 1 s, attempt 1 ≈ 2 s. 5 s window catches ≥ 2 retries.
+    Thread.sleep(5000);
+
+    client.stop();
+    failServer.close();
+    acceptor.join(1000);
+
+    assertTrue(
+        connectAttempts.get() >= 2,
+        "expected >= 2 connect attempts after initial handshake failure, got "
+            + connectAttempts.get());
   }
 
   @Test

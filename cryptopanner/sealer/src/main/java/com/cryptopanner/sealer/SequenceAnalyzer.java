@@ -13,6 +13,19 @@ import java.util.List;
  * reports the first/last IDs seen plus any gaps. Duplicates ({@code id == prev}) are treated as
  * no-op (Binance can re-emit during reconnect); only {@code id > prev + 1} counts as a gap (master
  * spec §10.b for ID-bearing gap-fillable streams).
+ *
+ * <p><b>Known limitations</b> (master spec §7.d / §10.b — planned, not in scope yet):
+ *
+ * <ul>
+ *   <li><b>Cross-hour gaps are invisible.</b> A gap that spans an hour boundary — last ID of hour N
+ *       → first ID of hour N+1 — is structurally undetectable here because the analyzer carries no
+ *       cross-hour state. Closing this needs a "last ID seen" cursor persisted between sealer runs
+ *       (file in {@code /data/cryptopanner} or PG row).
+ *   <li><b>Out-of-order IDs ({@code id < prevId}) are silently accepted</b> and update {@code
+ *       lastId} to the smaller value. Binance is not expected to emit out-of-order IDs on a fresh
+ *       stream; if it does, this analyzer would lie. Add a strict-mode flag once we observe the
+ *       real-world rate.
+ * </ul>
  */
 public final class SequenceAnalyzer {
 

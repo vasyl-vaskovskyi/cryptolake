@@ -1,10 +1,12 @@
 package com.cryptopanner.collector;
 
+import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.RestPoller;
 import com.cryptopanner.common.StreamRouting;
 import com.cryptopanner.common.config.SkeletonConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -28,7 +31,7 @@ public final class Main {
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
     SkeletonConfig cfg = SkeletonConfig.load(configPath);
-    ObjectMapper mapper = new ObjectMapper();
+    ObjectMapper mapper = EnvelopeCodec.newMapper();
 
     // Per-(symbol,stream) writers. Keyed by "<symbol>@<stream>" for direct lookup from
     // wrapper.stream
@@ -177,16 +180,30 @@ public final class Main {
             + "s; sockets="
             + clients.size());
 
-    Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
+    // Single idempotent close path used by both the timed-exit and the SIGTERM hook so buffered
+    // minute segments are never lost on signal — durability invariant (master spec §3.b).
+    AtomicBoolean closed = new AtomicBoolean(false);
+    Runnable closeAll =
+        () -> {
+          if (!closed.compareAndSet(false, true)) return;
+          System.out.println("[collector] stopping after " + framesSeen.get() + " frames");
+          scheduler.close();
+          for (BinanceWsClient c : clients) {
+            c.stop();
+          }
+          for (MinuteSegmentWriter w : writers.values()) {
+            try {
+              w.close();
+            } catch (IOException e) {
+              System.err.println("[collector] writer close failed: " + e.getMessage());
+            }
+          }
+          System.out.println("[collector] done");
+        };
 
-    System.out.println("[collector] stopping after " + framesSeen.get() + " frames");
-    scheduler.close();
-    for (BinanceWsClient c : clients) {
-      c.stop();
-    }
-    for (MinuteSegmentWriter w : writers.values()) {
-      w.close();
-    }
-    System.out.println("[collector] done");
+    Runtime.getRuntime().addShutdownHook(new Thread(closeAll, "collector-shutdown"));
+
+    Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
+    closeAll.run();
   }
 }

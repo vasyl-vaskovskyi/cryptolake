@@ -1,5 +1,6 @@
 package com.cryptopanner.sealer;
 
+import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.config.SkeletonConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -21,7 +22,7 @@ public final class Main {
     Instant hourStart =
         LocalDateTime.of(LocalDate.parse(dateStr), LocalTime.of(hour, 0)).toInstant(ZoneOffset.UTC);
 
-    ObjectMapper mapper = new ObjectMapper();
+    ObjectMapper mapper = EnvelopeCodec.newMapper();
     RestBackfiller backfiller = null;
     if (cfg.restBaseUrl() != null) {
       backfiller =

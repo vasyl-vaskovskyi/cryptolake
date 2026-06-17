@@ -1,5 +1,6 @@
 package com.cryptopanner.verify;
 
+import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.config.SkeletonConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -25,6 +26,8 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
         "Integrity-check sealed hours in S3. Verifies one (symbol, stream) triple if both "
             + "--symbol and --stream are set; otherwise iterates all subscriptions in --config.")
 public final class VerifyCommand implements Callable<Integer> {
+
+  private final ObjectMapper mapper = EnvelopeCodec.newMapper();
 
   @Option(
       names = "--config",
@@ -127,7 +130,7 @@ public final class VerifyCommand implements Callable<Integer> {
 
       String computedSha = sha256Hex(data);
       String sidecarHex = new String(sidecar).split("\\s+")[0];
-      String manifestSha = new ObjectMapper().readTree(manifest).get("file_sha256").asText();
+      String manifestSha = mapper.readTree(manifest).get("file_sha256").asText();
 
       if (!computedSha.equals(sidecarHex)) {
         System.err.println(

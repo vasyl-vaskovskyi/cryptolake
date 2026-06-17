@@ -1,5 +1,6 @@
 package com.cryptopanner.sealer;
 
+import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.Paths;
 import com.cryptopanner.common.SequenceId;
 import com.cryptopanner.common.Sha256Sidecar;
@@ -46,7 +47,7 @@ public final class HourMerger {
   private final RestBackfiller backfiller; // nullable; null disables backfill
 
   public HourMerger(Path baseSegments, Path baseSealed) {
-    this(baseSegments, baseSealed, new ObjectMapper(), null);
+    this(baseSegments, baseSealed, EnvelopeCodec.newMapper(), null);
   }
 
   public HourMerger(
