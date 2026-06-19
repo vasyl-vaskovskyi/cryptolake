@@ -47,7 +47,7 @@ c. The project is a clean-room successor to CryptoLake (v1) with no shared code,
 
 ## 3. Invariants
 
-- a. **Raw-payload fidelity.** Bytes received from the WebSocket or REST response are stored verbatim. No parsing, re-serialization, or field extraction occurs before writing to the minute-segment file.
+- a. **Raw-payload fidelity.** Bytes received from the WebSocket or REST response are preserved verbatim inside a one-line capture envelope (the `ws_frame` envelope for WebSocket frames, the `rest_response` envelope for REST responses). The envelope adds capture metadata — `received_at`, and a `raw_sha256` over the payload — and stores the original payload byte-for-byte in its `raw` field. The Collector may parse a copy of the payload to route and bucket it (§8.c), but the stored `raw` is never the product of parse-then-re-serialize: it is always recoverable exactly as received.
 - b. **Durability before acknowledgement.** A minute segment is considered sealed only after the file is fsynced to disk and the `.sha256` sidecar is written. The upload step begins only after the hourly merge completes and its integrity sidecar is verified.
 - c. **Manifest is the source of truth.** Every hourly file has a `.manifest.json` that records which minute segments are present, which are missing, and — for ID-bearing streams — any sequence gaps that could not be backfilled. If the manifest says a gap exists, it exists. If the manifest says the file is complete, it is complete.
 - d. **Per-node independence.** A node is a single VPS instance running its own capture pipeline. Each node operates in isolation — no node reads from, writes to, or coordinates with another node. Cross-region logic is external to this system.
@@ -185,7 +185,18 @@ b. **Reconnection.** Two distinct cases:
    1. **Unplanned faults** (disconnect, ping timeout, half-open detection): the Collector reconnects immediately with exponential backoff (1s, 2s, 4s, ..., capped at 60s) with **±25% uniform random jitter** applied to each delay (a "2s" base delay is drawn from `[1.5s, 2.5s]`). The jitter prevents multi-node fleets from producing correlated reconnect bursts after a Binance-side incident. After reconnection, it re-subscribes to all configured streams (waiting on the ACK per §8.a). The resulting gap is recorded normally — ID streams may be filled by REST backfill at hourly merge; non-ID streams record the gap in the manifest.
    2. **Planned rotation** (approaching Binance's 24h connection limit): the Collector opens a shadow connection and runs the make-before-break overlap protocol. No gap. The rotation start is constrained to the per-hour window `HH:10 → HH:50` — avoiding the hourly Sealer merge at the start of the hour (§9.d) and ensuring the overlap minute does not span the hour boundary. Within that window, each node's exact rotation minute is deterministic: `(hash(node_id) % 40) + 10` past the hour, so no two nodes in a region rotate at the same minute and Binance never sees a correlated reconnect storm. At cutover the Collector acquires the node-level `/data/cryptopanner/.fs-heavy.lock`; if it cannot (a deploy or merge is in progress), it defers to the next eligible minute within the window. See the [hot-swap and WS rotation design](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §5.
 
-c. **Raw capture.** Each incoming WebSocket frame is written as-is (raw bytes, not re-serialized) to the appropriate minute-segment file. The combined-streams wrapper `{"stream": "<name>", "data": {...}}` is part of the captured bytes and serves as the routing key — the Collector parses the wrapper's `stream` field to select the `<symbol>/<stream>/...` subdirectory, but leaves the wrapper intact in the written line (raw-fidelity, invariant 3.a). Frames are bucketed into minute segments by their **server-side event timestamp** (`E` for most streams, `T` for `trade`/`aggTrade`), not by local receive time. This keeps the same logical event in the same minute file across two parallel connections during an overlap. REST poll responses are bucketed by poll-issue wall-clock time (single-source, no overlap concern). Rationale in the [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §3.4.
+c. **Raw capture.** Each incoming WebSocket frame is wrapped in a one-line **`ws_frame` capture envelope** and written to the appropriate minute-segment file:
+
+   ```json
+   {
+     "envelope": "ws_frame",
+     "received_at": "2026-06-20T14:23:15.182Z",
+     "raw_sha256": "9f2c…",
+     "raw": "{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1750000000182,\"T\":1750000000180,\"t\":145003,...}}"
+   }
+   ```
+
+   The envelope stores the original frame **verbatim** in `raw` (a JSON string — never parsed-and-re-serialized), with `received_at` (the UTC instant the frame arrived, captured in the read loop, so a backtest knows when the record was actually in hand) and `raw_sha256` (SHA-256 over the `raw` bytes, keeping the inner frame provable independent of the envelope). The Collector parses a copy of the frame to read the combined-streams wrapper `{"stream": "<name>", "data": {...}}` — the `stream` field selects the `<symbol>/<stream>/...` subdirectory — but the stored `raw` is byte-for-byte the wire frame (raw-fidelity, invariant 3.a). Frames are bucketed into minute segments by their **server-side event timestamp** (`E` for most streams, `T` for `trade`/`aggTrade`), not by local receive time. This keeps the same logical event in the same minute file across two parallel connections during an overlap. REST poll responses use the analogous `rest_response` envelope (§8.d) and are bucketed by poll-issue wall-clock time (single-source, no overlap concern). Rationale in the [design doc](superpowers/specs/2026-06-09-collector-hot-swap-and-ws-rotation-design.md) §3.4.
 
 d. **REST polling.** REST endpoints are polled on independent timers (cadences pinned in §7.b). HTTP client: **connect timeout 5s, request (response-body-read) timeout 30s, HTTP/1.1 with connection keep-alive, no automatic retries at the HTTP layer** (retries are scheduled by the poller after the failure envelope is written). Responses are written as raw JSON to the same minute-segment file structure, with a wrapper envelope identifying the source endpoint, request parameters, and poll-issue wall-clock timestamp:
 
@@ -203,7 +214,7 @@ d. **REST polling.** REST endpoints are polled on independent timers (cadences p
 
     Failed polls (HTTP 429 rate-limit, 5xx, timeout, connection error) are recorded with the same envelope shape but `response` is replaced by `error: { class: "TIMEOUT", message: "...", http_status: null|<code> }` — raw-fidelity preserved for failures so downstream consumers can distinguish "no response captured" from "Binance returned an error." Retries are scheduled per-endpoint with exponential backoff (same ±25% jitter as §8.b); both the failure envelope and the eventual success envelope are kept in the minute file.
 
-e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A **frame-buffer window** (default 5s) buffers frames during the minute so late-arriving frames near the boundary route to the correct minute; after that the file is sealed at minute close + **seal-grace window** (default 10s). Any frame arriving after seal is dropped and recorded in `late_frames_dropped` (§10.d). The closed segment is immutable after sealing. Minute boundaries identify which file a frame goes to (using the frame's server event time per §8.c) and are evaluated against the node's **UTC** wall clock (`TZ=UTC` per §6.b), so all nodes seal the same Binance minute at the same wall instant regardless of region. The seal-grace timer itself uses **`CLOCK_MONOTONIC`** (design doc §3.4) — an NTP step does not prematurely seal or double-seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
+e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A **frame-buffer window** (default 5s) buffers frames during the minute so late-arriving frames near the boundary route to the correct minute; after that the file is sealed at minute close + **seal-grace window** (default 10s). Any frame whose event-minute is already sealed is **kept** — appended to the current open minute and counted in `late_frames` (§10.d) — never discarded; its own event timestamp and `received_at` make the lateness recoverable downstream. The seal-grace window keeps `late_frames` near zero, but is not the line between kept and lost. The closed segment is immutable after sealing. Minute boundaries identify which file a frame goes to (using the frame's server event time per §8.c) and are evaluated against the node's **UTC** wall clock (`TZ=UTC` per §6.b), so all nodes seal the same Binance minute at the same wall instant regardless of region. The seal-grace timer itself uses **`CLOCK_MONOTONIC`** (design doc §3.4) — an NTP step does not prematurely seal or double-seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
 
 ## 9. WAL & local sealing & upload
 
@@ -229,7 +240,7 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
 
 ## 10. Per-node file format & manifest
 
-- a. **Minute-segment file.** Path: `segments/<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. Each line is one raw WebSocket frame or REST response envelope, stored as received, terminated by a single LF (per invariant 3.g.2). Frames are placed into minute files by server-side event timestamp (§8.c), not local receive time.
+- a. **Minute-segment file.** Path: `segments/<symbol>/<stream>/<date>/minute-<HH-MM>.jsonl.zst`. Each line is one capture envelope — a `ws_frame` envelope wrapping a raw WebSocket frame (§8.c), or a `rest_response` envelope wrapping a REST response (§8.d) — terminated by a single LF (per invariant 3.g.2). Frames are placed into minute files by server-side event timestamp (§8.c), not local receive time.
 
     **zstd parameters** (pinned for reproducibility):
     - Compression level **3** (the zstd default; balances speed vs ratio for our payloads).
@@ -280,7 +291,8 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
           "completed_at": "2026-05-25T15:01:47Z"
         }
       ],
-      "late_frames_dropped": 0,
+      "late_frames": 0,
+      "unparseable_frames": 0,
       "file_sha256": "abcdef0123456789...",
       "file_size_bytes": 1048576,
       "uncompressed_size_bytes": 9437184,
@@ -304,7 +316,8 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
     - `file_sha256`, `file_size_bytes` — describe the **compressed** `.jsonl.zst` file as written to disk and uploaded to S3 (`file_sha256` matches the `.sha256` sidecar contents).
     - `uncompressed_size_bytes` — the JSONL payload size before zstd, for sizing intuition.
     - `record_count` — number of JSONL lines in the **final** file (post-backfill).
-    - `late_frames_dropped` — count of frames received after the §8.e seal grace and discarded. Aggregated across all minutes of the hour. Non-zero values inform tuning of §16.c.
+    - `late_frames` — count of frames whose event-minute was already sealed when they arrived, so they were appended to the then-current open minute rather than their own (kept, never discarded — §8.e). Aggregated across all minutes of the hour. Non-zero values inform tuning of the seal-grace window (§16.c).
+    - `unparseable_frames` — count of frames that could not be parsed to extract an event timestamp and were therefore bucketed by `received_at` (still kept, never discarded — §8.c). Aggregated across the hour.
     - `partial_minutes` — minutes whose file exists but is known to be truncated (Collector crashed mid-minute, file fsynced up to the crash point). The minute still counts as `minutes_present`; the internal gap is also recorded in `sequence_gaps`.
     - `sequence_gaps[].from_id`/`.to_id` — inclusive bounds of the missing range. `count` = `to_id - from_id + 1` for trade/aggTrade; for depth, `from_id`/`to_id` are the surrounding `u` values bracketing a `pu`-chain break.
     - `backfill_outcome` — `FILLED`, `PARTIAL`, `FAILED`, or `SKIPPED_NO_SOURCE` (the last for non-fillable streams).
@@ -391,7 +404,7 @@ c. **Node Agent endpoints.**
 
     During an active deploy, `deploy.state` reflects the state-machine value (`STAGED`, `OVERLAP_READY`, `VERIFIED`, `PROMOTING`, `PROMOTED`) with a `deploy_id` field; the Monitor renders a banner on the dashboard. Similarly `rotation.state` becomes `OVERLAP_VERIFYING` or `CUTOVER_PENDING` during a rotation, with `rotation_id` and `old_connection_age_s`.
 
-    `GET /metrics` — **OpenMetrics text format** (Prometheus-compatible) for historical metrics. Counters: `cryptopanner_late_frames_dropped_total`, `cryptopanner_backfill_attempts_total`, `cryptopanner_uploads_total`, `cryptopanner_rotation_events_total`. Gauges: `cryptopanner_heartbeat_age_seconds`, `cryptopanner_current_connection_age_seconds`, `cryptopanner_sealed_files_pending_upload`, plus VPS metrics. Scraped by an external Prometheus or aggregator if the operator chooses to deploy one; the Monitor does not consume it. Same VPN-bound port as `/status`, no additional auth required (read-only).
+    `GET /metrics` — **OpenMetrics text format** (Prometheus-compatible) for historical metrics. Counters: `cryptopanner_late_frames_total`, `cryptopanner_unparseable_frames_total`, `cryptopanner_backfill_attempts_total`, `cryptopanner_uploads_total`, `cryptopanner_rotation_events_total`. Gauges: `cryptopanner_heartbeat_age_seconds`, `cryptopanner_current_connection_age_seconds`, `cryptopanner_sealed_files_pending_upload`, plus VPS metrics. Scraped by an external Prometheus or aggregator if the operator chooses to deploy one; the Monitor does not consume it. Same VPN-bound port as `/status`, no additional auth required (read-only).
 
 d. **Monitor dashboard.** The Monitor serves a simple HTML page at `GET /dashboard` showing all nodes and their component states, with auto-refresh every 5s (matching the scrape interval in §11.c). Backed by `GET /api/nodes` (JSON). A deploy or rotation in progress on any node surfaces as a banner on that node's card; circuit-breaker trips and unreachable nodes are highlighted at the top of the dashboard.
 
@@ -517,7 +530,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
     - `cryptopanner-verify --base-dir <test-dir> --date <test-date>` exits 0 with `ERRORS=0` for each node;
     - both nodes produce an independent complete archive in their own S3 prefix (invariant 3.d); failure or restart of one does not affect the other;
     - no missed minutes outside the rotation overlap window;
-    - `late_frames_dropped` < 0.1% of total frames;
+    - `late_frames` < 0.1% of total frames;
     - the rotation event is recorded in the manifest under `connection_rotation_events[]`;
     - CPU and memory within the §6.d 2vCPU/4GB envelope per node.
 
@@ -525,7 +538,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 - f. **`cryptopanner-verify` CLI tests.** The audit/integrity CLI is unit + integration tested. Subcommands: `verify` (archive integrity), `manifest` (inspect), `gaps` (gap report), `integrity` (SHA-256 check). Coverage includes schema_version=1 manifests, all per-stream-type variants (§10.e), and degraded-input handling (truncated zstd, missing sidecar, mismatched SHA).
 
-- g. **Performance / load tests.** Run the local stack at the §7.c target load (20 symbols × 8 streams = 141 subscriptions, §8.a) for at least 2 hours of wall-clock or 24 hours of simulated time. Assert: no missed minutes outside injected faults, `late_frames_dropped` < 0.1% of total frames, CPU and memory headroom on the §6.d 2vCPU/4GB envelope, hourly merge completing well before the next hour starts.
+- g. **Performance / load tests.** Run the local stack at the §7.c target load (20 symbols × 8 streams = 141 subscriptions, §8.a) for at least 2 hours of wall-clock or 24 hours of simulated time. Assert: no missed minutes outside injected faults, `late_frames` < 0.1% of total frames, CPU and memory headroom on the §6.d 2vCPU/4GB envelope, hourly merge completing well before the next hour starts.
 
 - h. **Monitor tests.** Test the Monitor's scrape loop, restart logic with active-slot targeting (§13.b), exponential backoff, circuit breaker, alert deduplication, correlation grouping (§13.e), and recovery messages against a mock Node Agent that simulates the §11.b heartbeat-state transitions.
 
