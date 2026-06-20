@@ -25,11 +25,13 @@ public record SkeletonConfig(
     String wsMarketEndpointUrl,
     Paths paths,
     int collectorMaxRuntimeS,
+    int sealGraceSeconds,
     Storage storage) {
 
   public SkeletonConfig {
     if (broadcasts == null) broadcasts = List.of();
     if (restPolls == null) restPolls = List.of();
+    if (sealGraceSeconds <= 0) sealGraceSeconds = 10; // master spec §8.e default
   }
 
   public record Subscription(String symbol, String stream) {}

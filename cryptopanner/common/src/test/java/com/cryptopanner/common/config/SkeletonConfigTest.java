@@ -55,9 +55,39 @@ class SkeletonConfigTest {
     assertEquals(Path.of("/data/cryptopanner/segments"), cfg.paths().segments());
     assertEquals(Path.of("/data/cryptopanner/sealed"), cfg.paths().sealed());
     assertEquals(120, cfg.collectorMaxRuntimeS());
+    assertEquals(10, cfg.sealGraceSeconds(), "seal_grace_seconds defaults to 10 when absent");
     assertEquals("http://minio:9000", cfg.storage().endpoint());
     assertEquals("cryptopanner-prod", cfg.storage().bucket());
     assertEquals(true, cfg.storage().pathStyleAccess());
+  }
+
+  @Test
+  void sealGraceSecondsParsedWhenPresent(@TempDir Path tmp) throws IOException {
+    Path yaml = tmp.resolve("skeleton.yaml");
+    Files.writeString(
+        yaml,
+        """
+        node_id: vps-fra-1
+        subscriptions:
+          - symbol: btcusdt
+            stream: trade
+        ws_public_endpoint_url: ws://x/public
+        ws_market_endpoint_url: ws://x/market
+        seal_grace_seconds: 25
+        paths:
+          segments: /seg
+          sealed:   /sealed
+        collector_max_runtime_s: 60
+        storage:
+          endpoint:          http://minio:9000
+          bucket:            b
+          access_key:        AK
+          secret_key:        SK
+          region:            us-east-1
+          path_style_access: true
+        """);
+
+    assertEquals(25, SkeletonConfig.load(yaml).sealGraceSeconds());
   }
 
   @Test
@@ -245,6 +275,7 @@ class SkeletonConfigTest {
         "ws://m",
         new SkeletonConfig.Paths(Path.of("/seg"), Path.of("/sealed")),
         60,
+        10,
         new SkeletonConfig.Storage("u", "b", "a", "s", "r", true));
   }
 }

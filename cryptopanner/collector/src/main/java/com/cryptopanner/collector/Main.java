@@ -25,13 +25,13 @@ import java.util.function.Consumer;
 
 public final class Main {
 
-  // Seal-grace window before a closed minute is finalized (master spec §8.e default).
-  private static final Duration SEAL_GRACE = Duration.ofSeconds(10);
-
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
     SkeletonConfig cfg = SkeletonConfig.load(configPath);
     ObjectMapper mapper = EnvelopeCodec.newMapper();
+
+    // Seal-grace window before a closed minute is finalized (master spec §8.e; config-overridable).
+    Duration sealGrace = Duration.ofSeconds(cfg.sealGraceSeconds());
 
     // Per-(symbol,stream) writers. Keyed by "<symbol>@<stream>" for direct lookup from
     // wrapper.stream
@@ -40,7 +40,7 @@ public final class Main {
     for (SkeletonConfig.Subscription s : cfg.subscriptions()) {
       String key = s.symbol() + "@" + s.stream();
       writers.put(
-          key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream(), SEAL_GRACE));
+          key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream(), sealGrace));
     }
     // Broadcast fan-out writers: one (symbol, forceOrder) writer per configured symbol.
     if (cfg.broadcasts().contains(FrameRouter.FORCE_ORDER_BROADCAST)) {
@@ -50,7 +50,7 @@ public final class Main {
             key,
             k ->
                 new MinuteSegmentWriter(
-                    cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM, SEAL_GRACE));
+                    cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM, sealGrace));
       }
     }
     // REST-poll fan-out writers: one (symbol, restPoll.stream) per configured symbol.
@@ -60,7 +60,7 @@ public final class Main {
         String key = symbol + "@" + p.stream();
         writers.computeIfAbsent(
             key,
-            k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, p.stream(), SEAL_GRACE));
+            k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, p.stream(), sealGrace));
       }
     }
 
