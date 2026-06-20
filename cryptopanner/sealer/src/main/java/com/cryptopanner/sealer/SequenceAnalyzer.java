@@ -1,5 +1,6 @@
 package com.cryptopanner.sealer;
 
+import com.cryptopanner.common.CaptureEnvelope;
 import com.cryptopanner.common.SequenceId;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -65,8 +66,8 @@ public final class SequenceAnalyzer {
       int len = i - start;
       if (len > 0) {
         String line = new String(mergedBytes, start, len, StandardCharsets.UTF_8);
-        JsonNode root = mapper.readTree(line);
-        JsonNode data = root.get("data");
+        JsonNode frame = CaptureEnvelope.unwrap(mapper, mapper.readTree(line));
+        JsonNode data = frame.get("data");
         if (data == null) {
           throw new IOException("record missing 'data' field: " + previewLine(line));
         }

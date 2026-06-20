@@ -1,5 +1,6 @@
 package com.cryptopanner.sealer;
 
+import com.cryptopanner.common.CaptureEnvelope;
 import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.Paths;
 import com.cryptopanner.common.SequenceId;
@@ -196,8 +197,8 @@ public final class HourMerger {
       int len = i - start;
       if (len > 0) {
         String line = new String(original, start, len, StandardCharsets.UTF_8);
-        JsonNode root = mapper.readTree(line);
-        long id = root.path("data").path(idField).asLong();
+        JsonNode frame = CaptureEnvelope.unwrap(mapper, mapper.readTree(line));
+        long id = frame.path("data").path(idField).asLong();
         if (prevId >= 0 && id > prevId + 1) {
           SequenceAnalyzer.Gap g = new SequenceAnalyzer.Gap(prevId + 1, id - 1, id - prevId - 1);
           List<RecordWithId> filled = backfills.get(g);

@@ -48,6 +48,21 @@ class CaptureEnvelopeTest {
   }
 
   @Test
+  void unwrapReturnsInnerFrameForWsEnvelope() throws Exception {
+    String raw = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":7}}";
+    String line = CaptureEnvelope.wsFrame(MAPPER, raw, Instant.parse("2026-06-20T00:00:00Z"));
+    JsonNode frame = CaptureEnvelope.unwrap(MAPPER, MAPPER.readTree(line));
+    assertEquals(7, frame.get("data").get("t").asInt());
+  }
+
+  @Test
+  void unwrapReturnsNodeUnchangedForBareFrame() throws Exception {
+    JsonNode bare = MAPPER.readTree("{\"data\":{\"t\":9}}");
+    JsonNode frame = CaptureEnvelope.unwrap(MAPPER, bare);
+    assertEquals(9, frame.get("data").get("t").asInt());
+  }
+
+  @Test
   void fieldOrderMatchesSpecExample() {
     String line =
         CaptureEnvelope.wsFrame(MAPPER, "{\"x\":1}", Instant.parse("2026-06-20T00:00:00Z"));

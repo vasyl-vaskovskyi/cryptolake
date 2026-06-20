@@ -1,6 +1,7 @@
 package com.cryptopanner.common;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
@@ -34,6 +35,20 @@ public final class CaptureEnvelope {
       // An ObjectNode of strings cannot fail to serialize; surface defensively.
       throw new IllegalStateException("ws_frame envelope serialization failed", e);
     }
+  }
+
+  /**
+   * Unwraps a parsed capture-envelope line to the original Binance frame: if {@code line} carries a
+   * textual {@code raw} field (a {@code ws_frame} envelope), returns the parsed inner frame;
+   * otherwise returns {@code line} unchanged (a bare frame). Lets downstream readers reach {@code
+   * data.*} fields regardless of whether the line is enveloped.
+   */
+  public static JsonNode unwrap(ObjectMapper mapper, JsonNode line) throws JsonProcessingException {
+    JsonNode raw = line.get("raw");
+    if (raw != null && raw.isTextual()) {
+      return mapper.readTree(raw.asText());
+    }
+    return line;
   }
 
   /** Lowercase hex SHA-256 over the UTF-8 bytes of {@code s}. */

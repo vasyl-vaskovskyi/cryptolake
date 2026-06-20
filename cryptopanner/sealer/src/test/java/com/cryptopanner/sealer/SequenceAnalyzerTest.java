@@ -5,9 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.cryptopanner.common.CaptureEnvelope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 class SequenceAnalyzerTest {
@@ -77,5 +79,30 @@ class SequenceAnalyzerTest {
     assertThrows(
         IOException.class,
         () -> SequenceAnalyzer.analyze(input.getBytes(StandardCharsets.UTF_8), "trade", M));
+  }
+
+  @Test
+  void unwrapsWsFrameEnvelopesAndDetectsGap() throws IOException {
+    // Sealed hour files now hold ws_frame capture envelopes; the sequence ID lives at
+    // raw.data.<id>.
+    String f1 = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":100}}";
+    String f2 = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":101}}";
+    String f3 = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":103}}"; // gap: 102
+    String input =
+        CaptureEnvelope.wsFrame(M, f1, Instant.EPOCH)
+            + "\n"
+            + CaptureEnvelope.wsFrame(M, f2, Instant.EPOCH)
+            + "\n"
+            + CaptureEnvelope.wsFrame(M, f3, Instant.EPOCH)
+            + "\n";
+
+    SequenceAnalyzer.Analysis a =
+        SequenceAnalyzer.analyze(input.getBytes(StandardCharsets.UTF_8), "trade", M);
+
+    assertEquals(100L, a.firstId());
+    assertEquals(103L, a.lastId());
+    assertEquals(1, a.gaps().size());
+    assertEquals(102L, a.gaps().get(0).from());
+    assertEquals(102L, a.gaps().get(0).to());
   }
 }
