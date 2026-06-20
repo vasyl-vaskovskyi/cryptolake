@@ -41,7 +41,8 @@ class BinanceWsClientReconnectTest {
   void reconnectsAfterServerCloseAndResubscribes() throws Exception {
     URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
     CopyOnWriteArrayList<String> seen = new CopyOnWriteArrayList<>();
-    BinanceWsClient client = new BinanceWsClient(uri, List.of("btcusdt@trade"), seen::add);
+    BinanceWsClient client =
+        new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, ts) -> seen.add(raw));
 
     client.start();
 
@@ -60,7 +61,8 @@ class BinanceWsClientReconnectTest {
   void stopCancelsReconnect() throws Exception {
     URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
     CopyOnWriteArrayList<String> seen = new CopyOnWriteArrayList<>();
-    BinanceWsClient client = new BinanceWsClient(uri, List.of("btcusdt@trade"), seen::add);
+    BinanceWsClient client =
+        new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, ts) -> seen.add(raw));
 
     client.start();
 
@@ -113,7 +115,7 @@ class BinanceWsClientReconnectTest {
     acceptor.start();
 
     URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
-    BinanceWsClient client = new BinanceWsClient(uri, List.of("btcusdt@trade"), f -> {});
+    BinanceWsClient client = new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, ts) -> {});
 
     try {
       client.start();

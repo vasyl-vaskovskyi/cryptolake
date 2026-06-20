@@ -20,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public final class Main {
@@ -72,8 +73,8 @@ public final class Main {
 
     // Shared frame consumer — writers.accept() is synchronized, safe for concurrent sockets.
     AtomicLong framesSeen = new AtomicLong();
-    Consumer<String> onFrame =
-        frame -> {
+    BiConsumer<String, Instant> onFrame =
+        (frame, receivedAt) -> {
           try {
             JsonNode root = mapper.readTree(frame);
             String streamName = root.get("stream").asText();

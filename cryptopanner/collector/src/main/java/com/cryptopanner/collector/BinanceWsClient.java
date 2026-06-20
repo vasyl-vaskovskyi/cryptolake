@@ -4,6 +4,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -12,7 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 /**
  * WebSocket client for Binance combined-streams. Connects, sends SUBSCRIBE, waits for ACK, then
@@ -29,7 +30,9 @@ public final class BinanceWsClient {
 
   private final URI endpoint;
   private final List<String> streams;
-  private final Consumer<String> onFrame;
+  // Delivers (raw frame text, receive instant). Receive time is captured in the read loop so a
+  // downstream backtest knows when each record was actually in hand (master spec §8.c).
+  private final BiConsumer<String, Instant> onFrame;
   private final AtomicInteger nextId = new AtomicInteger(1);
   // Reused across reconnects — JDK HttpClient owns its own executor and is meant to be shared.
   private final HttpClient http = HttpClient.newHttpClient();
@@ -48,7 +51,7 @@ public final class BinanceWsClient {
             return t;
           });
 
-  public BinanceWsClient(URI endpoint, List<String> streams, Consumer<String> onFrame) {
+  public BinanceWsClient(URI endpoint, List<String> streams, BiConsumer<String, Instant> onFrame) {
     this.endpoint = endpoint;
     this.streams = streams;
     this.onFrame = onFrame;
@@ -107,7 +110,7 @@ public final class BinanceWsClient {
                 attempt.set(0); // reset backoff after successful handshake
                 ackSeen.complete(null);
               } else if (ackSeen.isDone()) {
-                onFrame.accept(full);
+                onFrame.accept(full, Instant.now());
               }
             }
             webSocket.request(1);
