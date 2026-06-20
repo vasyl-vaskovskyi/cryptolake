@@ -11,20 +11,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Writes raw frames into per-minute zstd files. Skeleton-only:
+ * Writes capture-envelope lines into per-minute zstd files, bucketed by the caller-supplied
+ * <em>server event time</em> (master spec §8.c) rather than local receive time.
  *
- * <ul>
- *   <li>Buckets by <em>local receive time</em>, not server-event-time (post-skeleton work).
- *   <li>No frame-buffer / seal-grace windows.
- *   <li>One zstd frame per minute file (re-compresses at rotation).
- * </ul>
+ * <p>Late frames are never discarded: a frame whose event-minute is already sealed (a straggler) is
+ * appended to the current open minute and counted in {@link #lateFrames()} — its own event
+ * timestamp keeps the lateness recoverable downstream (master spec §8.e). Skeleton-only: one zstd
+ * frame per minute file (re-compresses at rotation); no frame-buffer / seal-grace windows yet.
  */
 public final class MinuteSegmentWriter implements AutoCloseable {
 
@@ -34,30 +33,42 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   private final Path baseSegments;
   private final String symbol;
   private final String stream;
-  private final Clock clock;
 
   private String currentMinuteKey;
   private ByteArrayOutputStream buffer;
+  private long lateFrames;
 
-  public MinuteSegmentWriter(Path baseSegments, String symbol, String stream, Clock clock) {
+  public MinuteSegmentWriter(Path baseSegments, String symbol, String stream) {
     this.baseSegments = baseSegments;
     this.symbol = symbol;
     this.stream = stream;
-    this.clock = clock;
   }
 
-  /** Accept one raw frame (caller must include trailing LF). */
-  public synchronized void accept(byte[] frame) throws IOException {
-    Instant now = clock.instant();
-    String minuteKey = MINUTE_KEY.format(now);
-    if (currentMinuteKey != null && !minuteKey.equals(currentMinuteKey)) {
-      sealCurrent();
-    }
+  /**
+   * Accept one capture-envelope line (caller must include trailing LF), placed by its {@code
+   * bucketInstant} (server event time, or receive time when the event time is unavailable).
+   */
+  public synchronized void accept(byte[] line, Instant bucketInstant) throws IOException {
+    String minuteKey = MINUTE_KEY.format(bucketInstant);
     if (currentMinuteKey == null) {
       currentMinuteKey = minuteKey;
       buffer = new ByteArrayOutputStream();
+    } else if (minuteKey.compareTo(currentMinuteKey) > 0) {
+      // Later minute: seal the open one and start the new minute.
+      sealCurrent();
+      currentMinuteKey = minuteKey;
+      buffer = new ByteArrayOutputStream();
+    } else if (minuteKey.compareTo(currentMinuteKey) < 0) {
+      // Straggler: its minute is already sealed. Keep it in the current open minute, count it.
+      lateFrames++;
     }
-    buffer.write(frame);
+    // (equal minute: append to the open buffer)
+    buffer.write(line);
+  }
+
+  /** Count of frames whose event-minute was already sealed on arrival (kept, never discarded). */
+  public synchronized long lateFrames() {
+    return lateFrames;
   }
 
   @Override

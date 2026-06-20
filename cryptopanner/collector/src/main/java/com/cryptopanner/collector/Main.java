@@ -11,7 +11,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -39,20 +39,14 @@ public final class Main {
     Map<String, MinuteSegmentWriter> writers = new HashMap<>();
     for (SkeletonConfig.Subscription s : cfg.subscriptions()) {
       String key = s.symbol() + "@" + s.stream();
-      writers.put(
-          key,
-          new MinuteSegmentWriter(
-              cfg.paths().segments(), s.symbol(), s.stream(), Clock.systemUTC()));
+      writers.put(key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream()));
     }
     // Broadcast fan-out writers: one (symbol, forceOrder) writer per configured symbol.
     if (cfg.broadcasts().contains(FORCE_ORDER_BROADCAST)) {
       for (String symbol : cfg.symbols()) {
         String key = symbol + "@" + FORCE_ORDER_STREAM;
         writers.computeIfAbsent(
-            key,
-            k ->
-                new MinuteSegmentWriter(
-                    cfg.paths().segments(), symbol, FORCE_ORDER_STREAM, Clock.systemUTC()));
+            key, k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, FORCE_ORDER_STREAM));
       }
     }
     // REST-poll fan-out writers: one (symbol, restPoll.stream) per configured symbol.
@@ -61,10 +55,7 @@ public final class Main {
       for (String symbol : cfg.symbols()) {
         String key = symbol + "@" + p.stream();
         writers.computeIfAbsent(
-            key,
-            k ->
-                new MinuteSegmentWriter(
-                    cfg.paths().segments(), symbol, p.stream(), Clock.systemUTC()));
+            key, k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, p.stream()));
       }
     }
 
@@ -107,7 +98,7 @@ public final class Main {
                 return;
               }
             }
-            w.accept((frame + "\n").getBytes(StandardCharsets.UTF_8));
+            w.accept((frame + "\n").getBytes(StandardCharsets.UTF_8), Instant.now());
             long n = framesSeen.incrementAndGet();
             if (n % 100 == 0) {
               System.out.println("[collector] frames seen: " + n);
@@ -154,7 +145,7 @@ public final class Main {
           Consumer<byte[]> sink =
               b -> {
                 try {
-                  writer.accept(b);
+                  writer.accept(b, Instant.now());
                 } catch (Exception e) {
                   System.err.println(
                       "[collector] rest sink write failed for "
