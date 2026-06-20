@@ -7,6 +7,22 @@ node_id: dev-real
 subscriptions:
   - symbol: btcusdt
     stream: trade
+  - symbol: btcusdt
+    stream: aggTrade
+  - symbol: btcusdt
+    stream: depth@100ms
+  - symbol: btcusdt
+    stream: kline_1m
+  - symbol: btcusdt
+    stream: ticker
+  - symbol: btcusdt
+    stream: bookTicker
+  - symbol: btcusdt
+    stream: markPrice@1s
+
+# All-symbol broadcast; the Collector partitions by data.o.s (master spec §7.a item 8).
+broadcasts:
+  - "!forceOrder@arr"
 
 ws_public_endpoint_url: wss://fstream.binance.com/public/stream
 ws_market_endpoint_url: wss://fstream.binance.com/market/stream

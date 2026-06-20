@@ -74,6 +74,43 @@ class FrameRouterTest {
   }
 
   @Test
+  void depthBucketsByEventTimeEWithSuffixStreamName(@TempDir Path base) throws IOException {
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "depth@100ms");
+    FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@depth@100ms", w));
+    long eMs = 1_750_000_000_000L;
+    String raw =
+        "{\"stream\":\"btcusdt@depth@100ms\",\"data\":{\"e\":\"depthUpdate\",\"E\":"
+            + eMs
+            + ",\"U\":1,\"u\":2,\"pu\":0}}";
+
+    router.handle(raw, RECEIVED);
+    w.close();
+
+    assertTrue(
+        Files.exists(
+            Paths.minuteSegment(base, "btcusdt", "depth@100ms", Instant.ofEpochMilli(eMs))),
+        "depth must bucket by E even with an @-suffixed stream name");
+  }
+
+  @Test
+  void aggTradeBucketsByTradeTimeT(@TempDir Path base) throws IOException {
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "aggTrade");
+    FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@aggTrade", w));
+    long tMs = 1_750_000_000_000L;
+    String raw =
+        "{\"stream\":\"btcusdt@aggTrade\",\"data\":{\"e\":\"aggTrade\",\"E\":1750000000999,\"T\":"
+            + tMs
+            + ",\"a\":42}}";
+
+    router.handle(raw, RECEIVED);
+    w.close();
+
+    assertTrue(
+        Files.exists(Paths.minuteSegment(base, "btcusdt", "aggTrade", Instant.ofEpochMilli(tMs))),
+        "aggTrade must bucket by trade time T");
+  }
+
+  @Test
   void missingEventTimeFallsBackToReceiveTimeAndCounts(@TempDir Path base) throws IOException {
     MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade");
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@trade", w));
