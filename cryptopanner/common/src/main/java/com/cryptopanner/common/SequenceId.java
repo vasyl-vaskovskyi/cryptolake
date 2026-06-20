@@ -20,4 +20,17 @@ public final class SequenceId {
       default -> null;
     };
   }
+
+  /**
+   * Returns the field carrying the sequence ID in a REST backfill record (the {@code record} of a
+   * {@code backfill_record} envelope), or {@code null} if the stream is not ID-bearing. REST keys
+   * trades by {@code id} (vs the WS frame's {@code t}); aggTrades use {@code a} on both sides.
+   */
+  public static String restIdField(String stream) {
+    return switch (stream) {
+      case "trade" -> "id";
+      case "aggTrade" -> "a";
+      default -> null;
+    };
+  }
 }

@@ -82,6 +82,34 @@ class SequenceAnalyzerTest {
   }
 
   @Test
+  void readsBackfillRecordEnvelopesSoFilledGapIsContinuous() throws IOException {
+    // A sealed+backfilled hour mixes ws_frame envelopes with spliced backfill_record envelopes
+    // (ID at record.id for trades). Re-analyzing the full file must show no gap.
+    String f1 = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":100}}";
+    String f2 = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":101}}";
+    String f3 = "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":103}}";
+    String backfill =
+        "{\"envelope\":\"backfill_record\",\"endpoint\":\"/fapi/v1/historicalTrades\","
+            + "\"fetched_at\":\"1970-01-01T00:00:00Z\",\"record\":{\"id\":102,\"price\":\"1\"}}";
+    String input =
+        CaptureEnvelope.wsFrame(M, f1, Instant.EPOCH)
+            + "\n"
+            + CaptureEnvelope.wsFrame(M, f2, Instant.EPOCH)
+            + "\n"
+            + backfill
+            + "\n"
+            + CaptureEnvelope.wsFrame(M, f3, Instant.EPOCH)
+            + "\n";
+
+    SequenceAnalyzer.Analysis a =
+        SequenceAnalyzer.analyze(input.getBytes(StandardCharsets.UTF_8), "trade", M);
+
+    assertEquals(100L, a.firstId());
+    assertEquals(103L, a.lastId());
+    assertTrue(a.gaps().isEmpty(), "backfilled gap should re-analyze as continuous");
+  }
+
+  @Test
   void unwrapsWsFrameEnvelopesAndDetectsGap() throws IOException {
     // Sealed hour files now hold ws_frame capture envelopes; the sequence ID lives at
     // raw.data.<id>.

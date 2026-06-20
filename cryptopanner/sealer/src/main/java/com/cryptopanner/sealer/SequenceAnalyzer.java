@@ -66,14 +66,27 @@ public final class SequenceAnalyzer {
       int len = i - start;
       if (len > 0) {
         String line = new String(mergedBytes, start, len, StandardCharsets.UTF_8);
-        JsonNode frame = CaptureEnvelope.unwrap(mapper, mapper.readTree(line));
-        JsonNode data = frame.get("data");
-        if (data == null) {
-          throw new IOException("record missing 'data' field: " + previewLine(line));
-        }
-        JsonNode idNode = data.get(idField);
-        if (idNode == null || !idNode.canConvertToLong()) {
-          throw new IOException("record missing data." + idField + " (long): " + previewLine(line));
+        JsonNode root = mapper.readTree(line);
+        JsonNode idNode;
+        if ("backfill_record".equals(root.path("envelope").asText())) {
+          // Spliced REST record: ID lives at record.<restIdField> (trades use "id", not "t").
+          String restField = SequenceId.restIdField(stream);
+          JsonNode record = root.get("record");
+          idNode = record == null ? null : record.get(restField);
+          if (idNode == null || !idNode.canConvertToLong()) {
+            throw new IOException(
+                "backfill record missing record." + restField + " (long): " + previewLine(line));
+          }
+        } else {
+          JsonNode data = CaptureEnvelope.unwrap(mapper, root).get("data");
+          if (data == null) {
+            throw new IOException("record missing 'data' field: " + previewLine(line));
+          }
+          idNode = data.get(idField);
+          if (idNode == null || !idNode.canConvertToLong()) {
+            throw new IOException(
+                "record missing data." + idField + " (long): " + previewLine(line));
+          }
         }
         long id = idNode.asLong();
         if (!haveAny) {

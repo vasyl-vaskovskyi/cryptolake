@@ -217,8 +217,7 @@ public final class HourMerger {
 
   private static long extractRestId(JsonNode rec, String stream) {
     // REST endpoints use a different ID field than the WS frame's data.t/data.a.
-    String restIdField = "trade".equals(stream) ? "id" : "a";
-    JsonNode n = rec.get(restIdField);
+    JsonNode n = rec.get(SequenceId.restIdField(stream));
     return n == null ? -1 : n.asLong();
   }
 
