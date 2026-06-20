@@ -12,6 +12,7 @@ import com.github.luben.zstd.Zstd;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ class FrameRouterTest {
 
   private static final ObjectMapper MAPPER = EnvelopeCodec.newMapper();
   private static final Instant RECEIVED = Instant.parse("2026-06-20T14:23:15Z");
+  private static final Duration GRACE = Duration.ofSeconds(10);
 
   private static String readEnvelope(Path file) throws IOException {
     byte[] zstd = Files.readAllBytes(file);
@@ -31,7 +33,7 @@ class FrameRouterTest {
 
   @Test
   void tradeIsWrappedAndBucketedByEventTimeNotReceiveTime(@TempDir Path base) throws IOException {
-    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade");
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@trade", w));
     long tradeTimeMs = 1_750_000_000_000L; // a minute far from RECEIVED's 2026-06-20 14:23
     String raw =
@@ -56,7 +58,7 @@ class FrameRouterTest {
 
   @Test
   void forceOrderRoutesBySymbolAndBucketsByEventTime(@TempDir Path base) throws IOException {
-    MinuteSegmentWriter fo = new MinuteSegmentWriter(base, "btcusdt", "forceOrder");
+    MinuteSegmentWriter fo = new MinuteSegmentWriter(base, "btcusdt", "forceOrder", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@forceOrder", fo));
     long eventMs = 1_750_000_000_000L;
     String raw =
@@ -75,7 +77,7 @@ class FrameRouterTest {
 
   @Test
   void depthBucketsByEventTimeEWithSuffixStreamName(@TempDir Path base) throws IOException {
-    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "depth@100ms");
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "depth@100ms", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@depth@100ms", w));
     long eMs = 1_750_000_000_000L;
     String raw =
@@ -94,7 +96,7 @@ class FrameRouterTest {
 
   @Test
   void aggTradeBucketsByTradeTimeT(@TempDir Path base) throws IOException {
-    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "aggTrade");
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "aggTrade", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@aggTrade", w));
     long tMs = 1_750_000_000_000L;
     String raw =
@@ -112,7 +114,7 @@ class FrameRouterTest {
 
   @Test
   void missingEventTimeFallsBackToReceiveTimeAndCounts(@TempDir Path base) throws IOException {
-    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade");
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@trade", w));
     String raw = "{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"t\":1}}"; // no T, no E
 
@@ -126,7 +128,7 @@ class FrameRouterTest {
 
   @Test
   void unknownStreamIsNotWritten(@TempDir Path base) {
-    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade");
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@trade", w));
 
     router.handle("{\"stream\":\"ethusdt@trade\",\"data\":{\"E\":1,\"T\":1}}", RECEIVED);

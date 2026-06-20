@@ -9,17 +9,24 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public final class Main {
+
+  // Seal-grace window before a closed minute is finalized (master spec §8.e default).
+  private static final Duration SEAL_GRACE = Duration.ofSeconds(10);
 
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
@@ -32,7 +39,8 @@ public final class Main {
     Map<String, MinuteSegmentWriter> writers = new HashMap<>();
     for (SkeletonConfig.Subscription s : cfg.subscriptions()) {
       String key = s.symbol() + "@" + s.stream();
-      writers.put(key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream()));
+      writers.put(
+          key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream(), SEAL_GRACE));
     }
     // Broadcast fan-out writers: one (symbol, forceOrder) writer per configured symbol.
     if (cfg.broadcasts().contains(FrameRouter.FORCE_ORDER_BROADCAST)) {
@@ -42,7 +50,7 @@ public final class Main {
             key,
             k ->
                 new MinuteSegmentWriter(
-                    cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM));
+                    cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM, SEAL_GRACE));
       }
     }
     // REST-poll fan-out writers: one (symbol, restPoll.stream) per configured symbol.
@@ -51,7 +59,8 @@ public final class Main {
       for (String symbol : cfg.symbols()) {
         String key = symbol + "@" + p.stream();
         writers.computeIfAbsent(
-            key, k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, p.stream()));
+            key,
+            k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, p.stream(), SEAL_GRACE));
       }
     }
 
@@ -128,6 +137,30 @@ public final class Main {
       scheduler.start();
     }
 
+    // Seal-grace ticker: drives time-based sealing of minutes past close+grace (§8.e). Quiet
+    // streams still seal promptly; active streams also seal as later minutes arrive.
+    ScheduledExecutorService sealTicker =
+        Executors.newSingleThreadScheduledExecutor(
+            r -> {
+              Thread t = new Thread(r, "seal-ticker");
+              t.setDaemon(true);
+              return t;
+            });
+    sealTicker.scheduleAtFixedRate(
+        () -> {
+          Instant now = Instant.now();
+          for (MinuteSegmentWriter w : writers.values()) {
+            try {
+              w.sealElapsed(now);
+            } catch (IOException e) {
+              System.err.println("[collector] seal failed: " + e.getMessage());
+            }
+          }
+        },
+        1,
+        1,
+        TimeUnit.SECONDS);
+
     System.out.println(
         "[collector] started; running for "
             + cfg.collectorMaxRuntimeS()
@@ -147,6 +180,7 @@ public final class Main {
                   + router.unparseableFrames()
                   + " unparseable)");
           scheduler.close();
+          sealTicker.shutdownNow();
           for (BinanceWsClient c : clients) {
             c.stop();
           }

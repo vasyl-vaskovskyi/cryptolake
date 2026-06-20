@@ -11,19 +11,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Writes capture-envelope lines into per-minute zstd files, bucketed by the caller-supplied
- * <em>server event time</em> (master spec §8.c) rather than local receive time.
+ * <em>server event time</em> (master spec §8.c).
  *
- * <p>Late frames are never discarded: a frame whose event-minute is already sealed (a straggler) is
- * appended to the current open minute and counted in {@link #lateFrames()} — its own event
- * timestamp keeps the lateness recoverable downstream (master spec §8.e). Skeleton-only: one zstd
- * frame per minute file (re-compresses at rotation); no frame-buffer / seal-grace windows yet.
+ * <p><b>Seal-grace window (§8.e).</b> Several minutes stay open at once. A minute is sealed only
+ * once the caller-driven clock has passed its close instant plus {@code sealGrace} (via {@link
+ * #sealElapsed(Instant)}); the latest minute is always kept open so it can absorb near-boundary
+ * stragglers. A frame whose minute is still open lands in its <em>correct</em> file and is not
+ * counted late. Only a frame whose minute has already been sealed is kept in the current open
+ * minute and counted in {@link #lateFrames()} — never discarded. Sealing is never triggered by
+ * {@link #accept} itself; production drives {@link #sealElapsed} on a ticker, and {@link #close}
+ * seals the remainder.
  */
 public final class MinuteSegmentWriter implements AutoCloseable {
 
@@ -33,15 +41,18 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   private final Path baseSegments;
   private final String symbol;
   private final String stream;
+  private final Duration sealGrace;
 
-  private String currentMinuteKey;
-  private ByteArrayOutputStream buffer;
+  // Open minute buffers keyed by minute key (sorted), so the latest minute is always lastKey().
+  private final TreeMap<String, ByteArrayOutputStream> open = new TreeMap<>();
+  private String lastSealedKey;
   private long lateFrames;
 
-  public MinuteSegmentWriter(Path baseSegments, String symbol, String stream) {
+  public MinuteSegmentWriter(Path baseSegments, String symbol, String stream, Duration sealGrace) {
     this.baseSegments = baseSegments;
     this.symbol = symbol;
     this.stream = stream;
+    this.sealGrace = sealGrace;
   }
 
   /**
@@ -49,21 +60,52 @@ public final class MinuteSegmentWriter implements AutoCloseable {
    * bucketInstant} (server event time, or receive time when the event time is unavailable).
    */
   public synchronized void accept(byte[] line, Instant bucketInstant) throws IOException {
-    String minuteKey = MINUTE_KEY.format(bucketInstant);
-    if (currentMinuteKey == null) {
-      currentMinuteKey = minuteKey;
-      buffer = new ByteArrayOutputStream();
-    } else if (minuteKey.compareTo(currentMinuteKey) > 0) {
-      // Later minute: seal the open one and start the new minute.
-      sealCurrent();
-      currentMinuteKey = minuteKey;
-      buffer = new ByteArrayOutputStream();
-    } else if (minuteKey.compareTo(currentMinuteKey) < 0) {
-      // Straggler: its minute is already sealed. Keep it in the current open minute, count it.
-      lateFrames++;
+    String key = MINUTE_KEY.format(bucketInstant);
+    ByteArrayOutputStream buf = open.get(key);
+    if (buf == null) {
+      if (lastSealedKey == null || key.compareTo(lastSealedKey) > 0) {
+        // Minute not yet sealed (current, future, or an out-of-order minute still within grace).
+        buf = new ByteArrayOutputStream();
+        open.put(key, buf);
+      } else {
+        // Its minute is already sealed: keep the straggler in the latest open minute, count it.
+        lateFrames++;
+        buf = open.lastEntry().getValue();
+      }
     }
-    // (equal minute: append to the open buffer)
-    buffer.write(line);
+    buf.write(line);
+  }
+
+  /**
+   * Seals every open minute whose close instant plus {@code sealGrace} is at or before {@code now},
+   * except the latest open minute (kept as a straggler target). Idempotent; safe to call on a
+   * timer.
+   */
+  public synchronized void sealElapsed(Instant now) throws IOException {
+    if (open.size() <= 1) {
+      return;
+    }
+    String maxKey = open.lastKey();
+    Iterator<Map.Entry<String, ByteArrayOutputStream>> it = open.entrySet().iterator();
+    while (it.hasNext()) {
+      Map.Entry<String, ByteArrayOutputStream> e = it.next();
+      if (e.getKey().equals(maxKey)) {
+        continue;
+      }
+      Instant deadline = minuteInstantFromKey(e.getKey()).plusSeconds(60).plus(sealGrace);
+      if (!now.isBefore(deadline)) {
+        seal(e.getKey(), e.getValue());
+        it.remove();
+      }
+    }
+  }
+
+  @Override
+  public synchronized void close() throws IOException {
+    for (Map.Entry<String, ByteArrayOutputStream> e : open.entrySet()) {
+      seal(e.getKey(), e.getValue());
+    }
+    open.clear();
   }
 
   /** Count of frames whose event-minute was already sealed on arrival (kept, never discarded). */
@@ -71,23 +113,16 @@ public final class MinuteSegmentWriter implements AutoCloseable {
     return lateFrames;
   }
 
-  @Override
-  public synchronized void close() throws IOException {
-    sealCurrent();
-  }
-
-  private void sealCurrent() throws IOException {
-    if (currentMinuteKey == null || buffer.size() == 0) {
-      currentMinuteKey = null;
-      buffer = null;
+  private void seal(String key, ByteArrayOutputStream buffer) throws IOException {
+    advanceLastSealed(key);
+    if (buffer.size() == 0) {
       return;
     }
-    Instant minuteInstant = minuteInstantFromKey(currentMinuteKey);
+    Instant minuteInstant = minuteInstantFromKey(key);
     Path dataPath = Paths.minuteSegment(baseSegments, symbol, stream, minuteInstant);
     Files.createDirectories(dataPath.getParent());
 
-    byte[] raw = buffer.toByteArray();
-    byte[] compressed = Zstd.compress(raw, 3);
+    byte[] compressed = Zstd.compress(buffer.toByteArray(), 3);
     Path tmp = dataPath.resolveSibling(dataPath.getFileName() + ".tmp");
     try (FileChannel ch =
         FileChannel.open(
@@ -102,9 +137,12 @@ public final class MinuteSegmentWriter implements AutoCloseable {
 
     Path sidecar = dataPath.resolveSibling(dataPath.getFileName() + ".sha256");
     Sha256Sidecar.computeAndWrite(dataPath, sidecar);
+  }
 
-    currentMinuteKey = null;
-    buffer = null;
+  private void advanceLastSealed(String key) {
+    if (lastSealedKey == null || key.compareTo(lastSealedKey) > 0) {
+      lastSealedKey = key;
+    }
   }
 
   private static Instant minuteInstantFromKey(String key) {
