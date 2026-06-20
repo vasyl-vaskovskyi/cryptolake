@@ -18,24 +18,28 @@ class MinuteSegmentWriterTest {
   private static final Duration GRACE = Duration.ofSeconds(10);
 
   @Test
-  void minuteIsHeldOpenUntilCloseGracePasses(@TempDir Path base) throws IOException {
+  void minuteSealsGraceMonotonicNanosAfterItsEndIsObserved(@TempDir Path base) throws IOException {
     Path minute23 = base.resolve("btcusdt/trade/2026-06-14/minute-14-23.jsonl.zst");
+    long graceNanos = GRACE.toNanos();
     try (MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE)) {
       w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));
       w.accept("b\n".getBytes(), Instant.parse("2026-06-14T14:24:01Z")); // minute 24 now the max
 
-      // Before minute 23's deadline (14:24:00 + 10s = 14:24:10) nothing is sealed.
-      w.sealElapsed(Instant.parse("2026-06-14T14:24:05Z"));
-      assertFalse(Files.exists(minute23), "minute 23 sealed too early");
+      // First tick observes minute 23 has ended (wall >= 14:24:00); grace starts at mono=0.
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), 0L);
+      assertFalse(Files.exists(minute23), "grace not yet elapsed");
 
-      // After the grace deadline, minute 23 seals; minute 24 (the max) stays open.
-      w.sealElapsed(Instant.parse("2026-06-14T14:24:11Z"));
-      assertTrue(Files.exists(minute23), "minute 23 should seal after close+grace");
+      // Less than grace of monotonic time elapsed — still open, even if wall jumped far ahead.
+      w.sealElapsed(Instant.parse("2026-06-14T14:30:00Z"), graceNanos - 1);
+      assertFalse(Files.exists(minute23), "an NTP wall jump must not seal before monotonic grace");
+
+      // Grace of monotonic time elapsed → minute 23 seals; minute 24 (the max) stays open.
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), graceNanos);
+      assertTrue(Files.exists(minute23), "minute 23 should seal after monotonic grace");
       assertFalse(
           Files.exists(base.resolve("btcusdt/trade/2026-06-14/minute-14-24.jsonl.zst")),
           "the latest minute stays open as a straggler target");
     }
-    // close() seals everything that remains.
     assertTrue(Files.exists(base.resolve("btcusdt/trade/2026-06-14/minute-14-24.jsonl.zst")));
     assertEquals("a\n", new String(decompress(Files.readAllBytes(minute23))));
   }
@@ -60,9 +64,11 @@ class MinuteSegmentWriterTest {
   @Test
   void stragglerAfterSealIsKeptInCurrentMinuteAndCounted(@TempDir Path base) throws IOException {
     try (MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE)) {
+      long graceNanos = GRACE.toNanos();
       w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));
       w.accept("b\n".getBytes(), Instant.parse("2026-06-14T14:24:01Z"));
-      w.sealElapsed(Instant.parse("2026-06-14T14:24:11Z")); // seals minute 23
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), 0L); // observe minute 23 ended
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), graceNanos); // seals minute 23
       // Now minute 23 is sealed: its straggler is kept in the current open minute (24), counted.
       w.accept("late\n".getBytes(), Instant.parse("2026-06-14T14:23:30Z"));
 

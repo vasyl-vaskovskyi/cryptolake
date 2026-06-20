@@ -149,9 +149,10 @@ public final class Main {
     sealTicker.scheduleAtFixedRate(
         () -> {
           Instant now = Instant.now();
+          long monoNanos = System.nanoTime();
           for (MinuteSegmentWriter w : writers.values()) {
             try {
-              w.sealElapsed(now);
+              w.sealElapsed(now, monoNanos);
             } catch (IOException e) {
               System.err.println("[collector] seal failed: " + e.getMessage());
             }

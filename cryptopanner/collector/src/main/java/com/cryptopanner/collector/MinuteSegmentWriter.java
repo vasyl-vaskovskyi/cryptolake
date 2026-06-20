@@ -25,11 +25,11 @@ import java.util.TreeMap;
  * <em>server event time</em> (master spec §8.c).
  *
  * <p><b>Seal-grace window (§8.e).</b> Several minutes stay open at once. A minute is sealed only
- * once the caller-driven clock has passed its close instant plus {@code sealGrace} (via {@link
- * #sealElapsed(Instant)}); the latest minute is always kept open so it can absorb near-boundary
- * stragglers. A frame whose minute is still open lands in its <em>correct</em> file and is not
- * counted late. Only a frame whose minute has already been sealed is kept in the current open
- * minute and counted in {@link #lateFrames()} — never discarded. Sealing is never triggered by
+ * once {@code sealGrace} of monotonic time has elapsed since its wall-end (via {@link
+ * #sealElapsed(Instant, long)}); the latest minute is always kept open so it can absorb
+ * near-boundary stragglers. A frame whose minute is still open lands in its <em>correct</em> file
+ * and is not counted late. Only a frame whose minute has already been sealed is kept in the current
+ * open minute and counted in {@link #lateFrames()} — never discarded. Sealing is never triggered by
  * {@link #accept} itself; production drives {@link #sealElapsed} on a ticker, and {@link #close}
  * seals the remainder.
  */
@@ -43,10 +43,16 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   private final String stream;
   private final Duration sealGrace;
 
-  // Open minute buffers keyed by minute key (sorted), so the latest minute is always lastKey().
-  private final TreeMap<String, ByteArrayOutputStream> open = new TreeMap<>();
+  // Open minute buckets keyed by minute key (sorted), so the latest minute is always lastKey().
+  private final TreeMap<String, Bucket> open = new TreeMap<>();
   private String lastSealedKey;
   private long lateFrames;
+
+  /** A minute's in-memory content plus the monotonic instant its wall-end was first observed. */
+  private static final class Bucket {
+    final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    long endObservedNanos = Long.MIN_VALUE;
+  }
 
   public MinuteSegmentWriter(Path baseSegments, String symbol, String stream, Duration sealGrace) {
     this.baseSegments = baseSegments;
@@ -61,40 +67,51 @@ public final class MinuteSegmentWriter implements AutoCloseable {
    */
   public synchronized void accept(byte[] line, Instant bucketInstant) throws IOException {
     String key = MINUTE_KEY.format(bucketInstant);
-    ByteArrayOutputStream buf = open.get(key);
-    if (buf == null) {
+    Bucket bucket = open.get(key);
+    if (bucket == null) {
       if (lastSealedKey == null || key.compareTo(lastSealedKey) > 0) {
         // Minute not yet sealed (current, future, or an out-of-order minute still within grace).
-        buf = new ByteArrayOutputStream();
-        open.put(key, buf);
+        bucket = new Bucket();
+        open.put(key, bucket);
       } else {
         // Its minute is already sealed: keep the straggler in the latest open minute, count it.
         lateFrames++;
-        buf = open.lastEntry().getValue();
+        bucket = open.lastEntry().getValue();
       }
     }
-    buf.write(line);
+    bucket.buffer.write(line);
   }
 
   /**
-   * Seals every open minute whose close instant plus {@code sealGrace} is at or before {@code now},
-   * except the latest open minute (kept as a straggler target). Idempotent; safe to call on a
-   * timer.
+   * Seals open minutes (except the latest, kept as a straggler target) whose wall-end has passed
+   * and for which at least {@code sealGrace} of <em>monotonic</em> time has elapsed since that end
+   * was first observed. {@code wallNow} only detects that a minute has ended; the grace delay
+   * itself is measured against {@code monoNanos} ({@link System#nanoTime}) so an NTP wall-clock
+   * step during the window cannot seal a minute early (master spec §8.e). Idempotent; safe to call
+   * on a timer.
    */
-  public synchronized void sealElapsed(Instant now) throws IOException {
+  public synchronized void sealElapsed(Instant wallNow, long monoNanos) throws IOException {
     if (open.size() <= 1) {
       return;
     }
+    long graceNanos = sealGrace.toNanos();
     String maxKey = open.lastKey();
-    Iterator<Map.Entry<String, ByteArrayOutputStream>> it = open.entrySet().iterator();
+    Iterator<Map.Entry<String, Bucket>> it = open.entrySet().iterator();
     while (it.hasNext()) {
-      Map.Entry<String, ByteArrayOutputStream> e = it.next();
+      Map.Entry<String, Bucket> e = it.next();
       if (e.getKey().equals(maxKey)) {
         continue;
       }
-      Instant deadline = minuteInstantFromKey(e.getKey()).plusSeconds(60).plus(sealGrace);
-      if (!now.isBefore(deadline)) {
-        seal(e.getKey(), e.getValue());
+      Instant minuteEnd = minuteInstantFromKey(e.getKey()).plusSeconds(60);
+      if (wallNow.isBefore(minuteEnd)) {
+        continue; // minute has not ended yet
+      }
+      Bucket b = e.getValue();
+      if (b.endObservedNanos == Long.MIN_VALUE) {
+        b.endObservedNanos = monoNanos; // anchor the grace timer in monotonic time
+      }
+      if (monoNanos - b.endObservedNanos >= graceNanos) {
+        seal(e.getKey(), b.buffer);
         it.remove();
       }
     }
@@ -102,8 +119,8 @@ public final class MinuteSegmentWriter implements AutoCloseable {
 
   @Override
   public synchronized void close() throws IOException {
-    for (Map.Entry<String, ByteArrayOutputStream> e : open.entrySet()) {
-      seal(e.getKey(), e.getValue());
+    for (Map.Entry<String, Bucket> e : open.entrySet()) {
+      seal(e.getKey(), e.getValue().buffer);
     }
     open.clear();
   }
