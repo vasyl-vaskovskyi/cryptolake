@@ -4,30 +4,22 @@ import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.RestPoller;
 import com.cryptopanner.common.StreamRouting;
 import com.cryptopanner.common.config.SkeletonConfig;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public final class Main {
-
-  // Stream name on disk + S3 for the !forceOrder@arr broadcast (master spec §7.a item 8).
-  private static final String FORCE_ORDER_STREAM = "forceOrder";
-  private static final String FORCE_ORDER_BROADCAST = "!forceOrder@arr";
 
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
@@ -43,11 +35,14 @@ public final class Main {
       writers.put(key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream()));
     }
     // Broadcast fan-out writers: one (symbol, forceOrder) writer per configured symbol.
-    if (cfg.broadcasts().contains(FORCE_ORDER_BROADCAST)) {
+    if (cfg.broadcasts().contains(FrameRouter.FORCE_ORDER_BROADCAST)) {
       for (String symbol : cfg.symbols()) {
-        String key = symbol + "@" + FORCE_ORDER_STREAM;
+        String key = symbol + "@" + FrameRouter.FORCE_ORDER_STREAM;
         writers.computeIfAbsent(
-            key, k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, FORCE_ORDER_STREAM));
+            key,
+            k ->
+                new MinuteSegmentWriter(
+                    cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM));
       }
     }
     // REST-poll fan-out writers: one (symbol, restPoll.stream) per configured symbol.
@@ -71,43 +66,10 @@ public final class Main {
       bySocket.computeIfAbsent(sock, k -> new ArrayList<>()).add(b);
     }
 
-    // Shared frame consumer — writers.accept() is synchronized, safe for concurrent sockets.
-    AtomicLong framesSeen = new AtomicLong();
-    BiConsumer<String, Instant> onFrame =
-        (frame, receivedAt) -> {
-          try {
-            JsonNode root = mapper.readTree(frame);
-            String streamName = root.get("stream").asText();
-            MinuteSegmentWriter w;
-            if (FORCE_ORDER_BROADCAST.equals(streamName)) {
-              // forceOrder is all-symbol; route by data.o.s (the liquidated symbol).
-              JsonNode sym = root.path("data").path("o").path("s");
-              if (sym.isMissingNode() || !sym.isTextual()) {
-                System.err.println("[collector] forceOrder frame missing data.o.s; dropped");
-                return;
-              }
-              String key = sym.asText().toLowerCase(Locale.ROOT) + "@" + FORCE_ORDER_STREAM;
-              w = writers.get(key);
-              if (w == null) {
-                // Symbol not in our config — drop silently (production: top-20 symbols only).
-                return;
-              }
-            } else {
-              w = writers.get(streamName);
-              if (w == null) {
-                System.err.println("[collector] unknown stream in wrapper: " + streamName);
-                return;
-              }
-            }
-            w.accept((frame + "\n").getBytes(StandardCharsets.UTF_8), Instant.now());
-            long n = framesSeen.incrementAndGet();
-            if (n % 100 == 0) {
-              System.out.println("[collector] frames seen: " + n);
-            }
-          } catch (Exception e) {
-            System.err.println("[collector] write error: " + e.getMessage());
-          }
-        };
+    // Shared frame router — parses, routes, wraps in a ws_frame envelope, and buckets by server
+    // event time. MinuteSegmentWriter.accept() is synchronized, safe for concurrent sockets.
+    FrameRouter router = new FrameRouter(mapper, writers);
+    BiConsumer<String, Instant> onFrame = router::handle;
 
     // Open one BinanceWsClient per non-empty socket group.
     List<BinanceWsClient> clients = new ArrayList<>();
@@ -178,7 +140,12 @@ public final class Main {
     Runnable closeAll =
         () -> {
           if (!closed.compareAndSet(false, true)) return;
-          System.out.println("[collector] stopping after " + framesSeen.get() + " frames");
+          System.out.println(
+              "[collector] stopping after "
+                  + router.framesWritten()
+                  + " frames ("
+                  + router.unparseableFrames()
+                  + " unparseable)");
           scheduler.close();
           for (BinanceWsClient c : clients) {
             c.stop();
