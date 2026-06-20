@@ -214,7 +214,7 @@ d. **REST polling.** REST endpoints are polled on independent timers (cadences p
 
     Failed polls (HTTP 429 rate-limit, 5xx, timeout, connection error) are recorded with the same envelope shape but `response` is replaced by `error: { class: "TIMEOUT", message: "...", http_status: null|<code> }` — raw-fidelity preserved for failures so downstream consumers can distinguish "no response captured" from "Binance returned an error." Retries are scheduled per-endpoint with exponential backoff (same ±25% jitter as §8.b); both the failure envelope and the eventual success envelope are kept in the minute file.
 
-e. **Minute-segment rotation.** At each minute boundary, the Collector closes the current segment file (fsync + SHA-256 sidecar) and opens a new one. A **frame-buffer window** (default 5s) buffers frames during the minute so late-arriving frames near the boundary route to the correct minute; after that the file is sealed at minute close + **seal-grace window** (default 10s). Any frame whose event-minute is already sealed is **kept** — appended to the current open minute and counted in `late_frames` (§10.d) — never discarded; its own event timestamp and `received_at` make the lateness recoverable downstream. The seal-grace window keeps `late_frames` near zero, but is not the line between kept and lost. The closed segment is immutable after sealing. Minute boundaries identify which file a frame goes to (using the frame's server event time per §8.c) and are evaluated against the node's **UTC** wall clock (`TZ=UTC` per §6.b), so all nodes seal the same Binance minute at the same wall instant regardless of region. The seal-grace timer itself uses **`CLOCK_MONOTONIC`** (design doc §3.4) — an NTP step does not prematurely seal or double-seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
+e. **Minute-segment rotation.** The Collector keeps several minutes open at once and seals a minute only after a single **seal-grace window** (`seal_grace_window`, default 10s, configurable per §15) has elapsed past that minute's close. Until a minute is sealed it stays open, so a frame near the boundary routes to its **correct** minute file rather than the next one; the latest minute is always kept open as a straggler target. A frame whose event-minute has *already been sealed* is **kept** — appended to the current open minute and counted in `late_frames` (§10.d) — never discarded; its own event timestamp and `received_at` make the lateness recoverable downstream. So `late_frames` counts only stragglers later than the grace window allows: tuning the window down toward zero is a count-vs-latency trade-off, not a kept-vs-lost one. The closed segment is immutable after sealing (fsync + SHA-256 sidecar). Which minute a frame belongs to is decided by its server event time (§8.c) against the node's **UTC** wall clock (`TZ=UTC` per §6.b), so all nodes assign the same Binance minute regardless of region; but the grace delay itself is measured with **`CLOCK_MONOTONIC`** (design doc §3.4) anchored when the minute's end is first observed, so an NTP step during the window does not prematurely seal a minute. Tolerable clock skew is pinned in §12.n (±100ms accepted, ±1s Warning, ±5s Critical).
 
 ## 9. WAL & local sealing & upload
 
@@ -251,6 +251,16 @@ e. **Minute-segment rotation.** At each minute boundary, the Collector closes th
     **`.sha256` sidecar format.** Single text line: 64 lowercase hex characters, two spaces, the bare filename of the data file, LF terminator — i.e. the canonical output of `sha256sum <file>`. This makes `sha256sum -c minute-<HH-MM>.jsonl.zst.sha256` a one-line integrity check from any shell, no custom tooling required. The hash is over the compressed bytes (what's on disk and in S3), not the uncompressed payload.
 
 - b. **Sealed hourly file.** Path: `sealed/<symbol>/<stream>/<date>/hour-<HH>.jsonl.zst`. Concatenation of all minute segments for that hour (lexicographic minute order; arrival order preserved within each minute — §9.b.2), with backfilled records inserted in sequence order for gap-fillable streams (§7.d). Compressed with zstd. Accompanied by `hour-<HH>.jsonl.zst.sha256`.
+
+    **Line format is a discriminated envelope union.** Every line is a JSON object with an `envelope` field identifying its kind; consumers dispatch on it rather than assuming a single shape. Backfilled records are *not* re-shaped into synthetic WS frames (that would fabricate data and violate raw fidelity, invariant 3.a) — they are kept as the REST records they are, with provenance:
+
+    | `envelope` | source | payload location | sequence ID |
+    |---|---|---|---|
+    | `ws_frame` | captured WS frame (§8.c) | `raw` (verbatim wire text) | `raw`→`data.<t\|a>` |
+    | `rest_response` | REST poll (§8.d) | `response` | n/a (non-ID streams) |
+    | `backfill_record` | REST gap backfill (§9.b.3) | `record` | `record.<id\|a>` |
+
+    A reader doing sequence-continuity analysis over a sealed file resolves the ID per the table above (WS trades use `t`, REST-backfilled trades use `id`; aggTrades use `a` on both); a backfilled hour therefore re-analyzes as continuous.
 
 - c. **S3 object keys.** Three objects per (symbol, stream, hour), all sharing the same prefix:
 
@@ -550,7 +560,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 ## 15. Configuration
 
-- a. **Config files.** Each node reads `/etc/cryptopanner/config.yaml`; the Monitor reads `/etc/cryptopanner-monitor/monitor.yaml`. Both are YAML. Nested groups map to the dotted key notation used elsewhere in this spec (e.g., `collector.frame_buffer_window` = `collector:\n  frame_buffer_window: ...`).
+- a. **Config files.** Each node reads `/etc/cryptopanner/config.yaml`; the Monitor reads `/etc/cryptopanner-monitor/monitor.yaml`. Both are YAML. Nested groups map to the dotted key notation used elsewhere in this spec (e.g., `collector.seal_grace_window` = `collector:\n  seal_grace_window: ...`).
 
     **Validation.** Components fail-fast at startup if the config is malformed, missing required keys, or contains contradictions (e.g., overlapping `forbidden_window` and `rotation_window`). The error message identifies the offending key and the expected shape; there is no silent acceptance of bad config.
 
@@ -610,8 +620,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
       unplanned_reconnect_backoff_max_s: 60                              # §8.b
       unplanned_reconnect_jitter_pct:    25                              # §8.b ±%
       subscribe_ack_timeout_s:           10                              # §8.a
-      frame_buffer_window:               5s                              # §8.e
-      seal_grace_window:                 10s                             # §8.e
+      seal_grace_window:                 10s                             # §8.e (single grace window)
       connection_max_age:                23h                             # §8.b.2
       rotation_window:                   "HH:10-HH:50"                   # §8.b.2
       rest:                                                              # §7.b
@@ -728,4 +737,4 @@ a. **Multi-symbol WebSocket partitioning (v2).** When the configured symbol set 
 
 b. **Sealer prolonged-merge hard timeout (v2).** The Sealer currently blocks indefinitely if an hourly merge runs long (§9.d), with the Monitor's upload-backlog-age Warning (§13.a) as the operator signal. A hard timeout (abandon merge, record hour as incomplete in the manifest) is a potential v2 addition — to be revisited only if operational data shows real-world cases of permanent merge hangs. A blind timeout risks silently abandoning a near-completion merge, which is worse than waiting.
 
-c. **Late-frame grace defaults.** `collector.frame_buffer_window` (5s) and `collector.seal_grace_window` (10s) are guesses pending observed `E`-to-local-receive delay across Binance regions (§8.e). Tune from `late_frame_after_seal` event counts in early production deployment. Target: ≤ 0.1% of frames dropped (per §14.g acceptance criterion). No resolution before operational data.
+c. **Late-frame grace default.** `collector.seal_grace_window` (10s) is a guess pending observed `E`-to-local-receive delay across Binance regions (§8.e). Tune from `late_frames` counts in early production deployment — these are kept-but-mis-minuted stragglers, not dropped data, so the window is a count-vs-sealing-latency trade-off. Target: `late_frames` ≤ 0.1% of frames (per §14.g acceptance criterion). No resolution before operational data.
