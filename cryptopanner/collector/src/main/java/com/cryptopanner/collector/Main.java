@@ -36,6 +36,18 @@ public final class Main {
     NodeConfig cfg = NodeConfig.load(configPath);
     ObjectMapper mapper = EnvelopeCodec.newMapper();
 
+    // Startup crash-recovery over segments/ (design doc §3.2/§5.6): drop incomplete .tmp writes and
+    // repair missing/mismatched sidecars before we resume writing.
+    SegmentRecovery.Result recovery = SegmentRecovery.recover(cfg.paths().segments());
+    if (recovery.tmpDeleted() > 0 || recovery.sidecarsWritten() > 0) {
+      System.out.println(
+          "[collector] recovery: deleted "
+              + recovery.tmpDeleted()
+              + " .tmp, rewrote "
+              + recovery.sidecarsWritten()
+              + " sidecar(s)");
+    }
+
     // Seal-grace window before a closed minute is finalized (master spec §8.e; config-overridable).
     Duration sealGrace = Duration.ofSeconds(cfg.sealGraceSeconds());
 

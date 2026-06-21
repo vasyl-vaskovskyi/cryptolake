@@ -37,7 +37,8 @@ public final class Sha256Sidecar {
     return content.substring(0, sp);
   }
 
-  private static String sha256Hex(Path data) throws IOException {
+  /** Lowercase 64-hex SHA-256 of the file's bytes (the value stored in the sidecar). */
+  public static String sha256Hex(Path data) throws IOException {
     MessageDigest md;
     try {
       md = MessageDigest.getInstance("SHA-256");
