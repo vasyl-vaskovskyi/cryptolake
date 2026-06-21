@@ -31,6 +31,27 @@ public final class DurableSegment {
     writeBytes(target, buf.toByteArray());
   }
 
+  /** Reads a zstd segment back into its newline-terminated lines (each retains its trailing LF). */
+  public static List<String> readLines(Path source) throws IOException {
+    byte[] zstd = Files.readAllBytes(source);
+    long size = Zstd.decompressedSize(zstd);
+    byte[] out = new byte[(int) size];
+    Zstd.decompress(out, zstd);
+    String text = new String(out, java.nio.charset.StandardCharsets.UTF_8);
+    java.util.List<String> lines = new java.util.ArrayList<>();
+    int start = 0;
+    for (int i = 0; i < text.length(); i++) {
+      if (text.charAt(i) == '\n') {
+        lines.add(text.substring(start, i + 1));
+        start = i + 1;
+      }
+    }
+    if (start < text.length()) {
+      lines.add(text.substring(start) + "\n"); // tolerate a missing final LF
+    }
+    return lines;
+  }
+
   /** Compresses {@code uncompressed} with zstd and writes target + sidecar durably. */
   public static void writeBytes(Path target, byte[] uncompressed) throws IOException {
     Path parent = target.getParent();

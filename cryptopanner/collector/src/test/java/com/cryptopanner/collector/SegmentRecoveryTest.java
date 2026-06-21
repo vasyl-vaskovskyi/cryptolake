@@ -4,9 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.cryptopanner.common.CaptureEnvelope;
+import com.cryptopanner.common.DurableSegment;
 import com.cryptopanner.common.Sha256Sidecar;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
+import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -57,5 +64,62 @@ class SegmentRecoveryTest {
 
     SegmentRecovery.Result r = SegmentRecovery.recover(root);
     assertEquals(0, r.sidecarsWritten(), "a correct sidecar is not rewritten");
+  }
+
+  // ── §5.6 step 3: leftover shadow handling ──────────────────────────────────
+
+  private final ObjectMapper mapper = new ObjectMapper();
+
+  private String tradeLine(long id) {
+    // Each on-disk line carries its trailing LF, exactly as MinuteSegmentWriter writes them.
+    return CaptureEnvelope.wsFrame(
+            mapper,
+            "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":" + id + ",\"T\":" + id + "}}",
+            Instant.EPOCH)
+        + "\n";
+  }
+
+  private Path tradeDir(Path root) {
+    return root.resolve("btcusdt/trade/2026-06-21");
+  }
+
+  private TreeSet<Long> idsIn(Path zst) throws Exception {
+    TreeSet<Long> ids = new TreeSet<>();
+    for (String line : DurableSegment.readLines(zst)) {
+      JsonNode data = CaptureEnvelope.unwrap(mapper, mapper.readTree(line)).get("data");
+      ids.add(data.get("t").asLong());
+    }
+    return ids;
+  }
+
+  @Test
+  void mergesShadowAlongsidePrimary(@TempDir Path root) throws Exception {
+    Path primary = tradeDir(root).resolve("minute-14-23.jsonl.zst");
+    Path shadow = tradeDir(root).resolve("minute-14-23.shadow.jsonl.zst");
+    DurableSegment.writeLines(primary, List.of(tradeLine(1), tradeLine(2)));
+    DurableSegment.writeLines(shadow, List.of(tradeLine(2), tradeLine(3)));
+
+    SegmentRecovery.Result r = SegmentRecovery.recover(root, mapper);
+
+    assertEquals(1, r.shadowsMerged());
+    assertEquals(new TreeSet<>(List.of(1L, 2L, 3L)), idsIn(primary), "primary holds the union");
+    assertFalse(Files.exists(shadow), "shadow consumed by the merge");
+  }
+
+  @Test
+  void promotesOrphanShadowWhenNoPrimary(@TempDir Path root) throws Exception {
+    Path primary = tradeDir(root).resolve("minute-14-23.jsonl.zst");
+    Path shadow = tradeDir(root).resolve("minute-14-23.shadow.jsonl.zst");
+    DurableSegment.writeLines(shadow, List.of(tradeLine(5)));
+
+    SegmentRecovery.Result r = SegmentRecovery.recover(root, mapper);
+
+    assertEquals(1, r.shadowsPromoted());
+    assertTrue(Files.exists(primary), "orphan shadow promoted to primary");
+    assertFalse(Files.exists(shadow));
+    assertEquals(new TreeSet<>(List.of(5L)), idsIn(primary));
+    Path sidecar = primary.resolveSibling(primary.getFileName() + ".sha256");
+    assertEquals(
+        Sha256Sidecar.sha256Hex(primary), Sha256Sidecar.readHash(sidecar), "valid sidecar");
   }
 }

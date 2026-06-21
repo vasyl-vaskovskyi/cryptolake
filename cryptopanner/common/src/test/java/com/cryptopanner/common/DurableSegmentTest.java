@@ -43,4 +43,11 @@ class DurableSegmentTest {
     DurableSegment.writeLines(target, List.of("new1\n", "new2\n"));
     assertEquals("new1\nnew2\n", decompress(Files.readAllBytes(target)));
   }
+
+  @Test
+  void readLinesRoundTripsWrittenLines(@TempDir Path dir) throws Exception {
+    Path target = dir.resolve("minute-14-23.jsonl.zst");
+    DurableSegment.writeLines(target, List.of("{\"a\":1}\n", "{\"b\":2}\n"));
+    assertEquals(List.of("{\"a\":1}\n", "{\"b\":2}\n"), DurableSegment.readLines(target));
+  }
 }
