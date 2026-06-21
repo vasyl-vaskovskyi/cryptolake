@@ -193,6 +193,21 @@ public final class Main {
     // socket emits sub-second traffic (depth@100ms, ticker, markPrice@1s), so a long idle gap means
     // the connection is silently dead.
     long halfOpenIdleNanos = TimeUnit.SECONDS.toNanos(30);
+
+    // Daily WS-rotation decision inputs (§5.1). The cutover execution (open shadow, verify, merge)
+    // is driven by WsConnectionManager/RotationExecutor under the soak; here we evaluate the
+    // decision once per minute against the oldest live connection's age so it is observable and the
+    // EMERGENCY/SCHEDULED path fires ahead of Binance's 24h cliff.
+    final String rotNodeId = cfg.nodeId();
+    final Duration connMaxAge =
+        (cfg.collector() != null && cfg.collector().connectionMaxAge() != null)
+            ? cfg.collector().connectionMaxAgeDuration()
+            : Duration.ofHours(23);
+    final com.cryptopanner.common.config.ConfigParse.HourWindow rotWindow =
+        (cfg.collector() != null && cfg.collector().rotationWindow() != null)
+            ? cfg.collector().rotationWindowParsed()
+            : com.cryptopanner.common.config.ConfigParse.hourWindow("HH:10-HH:50");
+
     ScheduledExecutorService ticker =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -218,6 +233,30 @@ public final class Main {
                       + (c.idleNanos() / 1_000_000_000L)
                       + "s); forcing reconnect");
               c.forceReconnect();
+            }
+          }
+          // Once per minute, evaluate the WS-rotation decision against the oldest connection
+          // (§5.1).
+          if (now.atOffset(java.time.ZoneOffset.UTC).getSecond() == 0) {
+            java.util.Optional<Duration> oldest =
+                clients.stream()
+                    .map(BinanceWsClient::currentConnectionAge)
+                    .filter(java.util.Optional::isPresent)
+                    .map(java.util.Optional::get)
+                    .max(java.util.Comparator.naturalOrder());
+            if (oldest.isPresent()) {
+              int minuteOfHour = now.atOffset(java.time.ZoneOffset.UTC).getMinute();
+              RotationScheduler.Decision d =
+                  RotationScheduler.decide(
+                      rotNodeId, oldest.get(), minuteOfHour, connMaxAge, rotWindow);
+              if (d != RotationScheduler.Decision.NONE) {
+                System.out.println(
+                    "[collector] WS rotation "
+                        + d
+                        + " due (connection age "
+                        + oldest.get().toHours()
+                        + "h); cutover via WsConnectionManager");
+              }
             }
           }
         },
