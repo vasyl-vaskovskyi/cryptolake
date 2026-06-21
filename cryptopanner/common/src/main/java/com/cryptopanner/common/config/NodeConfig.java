@@ -319,9 +319,73 @@ public record NodeConfig(
     return dev == null ? 0 : dev.collectorMaxRuntimeS();
   }
 
+  /**
+   * Fail-fast structural validation (§15.a): required keys present, scalar formats parse, and no
+   * contradictions. Each failure throws {@link IllegalArgumentException} naming the offending key.
+   * Called by {@link #load}, so a malformed config never reaches the running components.
+   */
+  public void validate() {
+    if (nodeId == null || nodeId.isBlank()) {
+      throw new IllegalArgumentException("config: node_id is required");
+    }
+    if (symbols.isEmpty()) {
+      throw new IllegalArgumentException("config: symbols must not be empty");
+    }
+    if (paths == null || paths.segments() == null) {
+      throw new IllegalArgumentException("config: paths.segments is required");
+    }
+    if (paths.sealed() == null) {
+      throw new IllegalArgumentException("config: paths.sealed is required");
+    }
+    if (storage == null || storage.endpoint() == null) {
+      throw new IllegalArgumentException("config: storage.endpoint is required");
+    }
+    if (storage.bucket() == null) {
+      throw new IllegalArgumentException("config: storage.bucket is required");
+    }
+    // Scalar formats parse, re-throwing with the owning key name (ConfigParse names only the
+    // value).
+    if (collector != null) {
+      parseKeyed("collector.seal_grace_window", collector.sealGraceWindow(), ConfigParse::duration);
+      parseKeyed(
+          "collector.connection_max_age", collector.connectionMaxAge(), ConfigParse::duration);
+      parseKeyed("collector.rotation_window", collector.rotationWindow(), ConfigParse::hourWindow);
+    }
+    if (sealer != null && sealer.hourGraceWindow() != null) {
+      parseKeyed("sealer.hour_grace_window", sealer.hourGraceWindow(), ConfigParse::duration);
+    }
+    // Contradiction (§15.a): a recommended deploy window must not overlap the forbidden window.
+    if (deploy != null && deploy.forbiddenWindow() != null && deploy.recommendedWindow() != null) {
+      ConfigParse.HourWindow forbidden =
+          parseKeyed("deploy.forbidden_window", deploy.forbiddenWindow(), ConfigParse::hourWindow);
+      ConfigParse.HourWindow recommended =
+          parseKeyed(
+              "deploy.recommended_window", deploy.recommendedWindow(), ConfigParse::hourWindow);
+      if (recommended.overlaps(forbidden)) {
+        throw new IllegalArgumentException(
+            "config: deploy.recommended_window overlaps deploy.forbidden_window — a deploy cannot be"
+                + " recommended during the forbidden window");
+      }
+    }
+  }
+
+  /**
+   * Applies {@code parser} to {@code value}, re-throwing parse failures tagged with {@code key}.
+   */
+  private static <T> T parseKeyed(
+      String key, String value, java.util.function.Function<String, T> parser) {
+    try {
+      return parser.apply(value);
+    } catch (RuntimeException e) {
+      throw new IllegalArgumentException("config: " + key + ": " + e.getMessage(), e);
+    }
+  }
+
   public static NodeConfig load(Path yaml) throws IOException {
     ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
     mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
-    return mapper.readValue(yaml.toFile(), NodeConfig.class);
+    NodeConfig cfg = mapper.readValue(yaml.toFile(), NodeConfig.class);
+    cfg.validate();
+    return cfg;
   }
 }

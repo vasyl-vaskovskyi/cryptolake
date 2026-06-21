@@ -563,7 +563,7 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
 
 - a. **Config files.** Each node reads `/etc/cryptopanner/config.yaml`; the Monitor reads `/etc/cryptopanner-monitor/monitor.yaml`. Both are YAML. Nested groups map to the dotted key notation used elsewhere in this spec (e.g., `collector.seal_grace_window` = `collector:\n  seal_grace_window: ...`).
 
-    **Validation.** Components fail-fast at startup if the config is malformed, missing required keys, or contains contradictions (e.g., overlapping `forbidden_window` and `rotation_window`). The error message identifies the offending key and the expected shape; there is no silent acceptance of bad config.
+    **Validation.** Components fail-fast at startup if the config is malformed, missing required keys, or contains contradictions (e.g., `deploy.recommended_window` overlapping `deploy.forbidden_window` — you cannot recommend deploying during the window when deploys are forbidden; note the default `rotation_window` HH:10-HH:50 *does* legitimately overlap the deploy `forbidden_window` HH:50-HH:15 at minutes 10–14, since rotation is not a deploy). The error message identifies the offending key and the expected shape; there is no silent acceptance of bad config.
 
     **Hot-reload.** Keys marked `# HOT-RELOADABLE` in the examples below can be changed without restarting the process (signal-based reload via `SIGHUP`). All other keys require a process restart to take effect. The hot-reload set is intentionally narrow (currently: log level) to keep operational behavior predictable.
 
