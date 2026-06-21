@@ -92,6 +92,44 @@ class PollerSchedulerTest {
     assertTrue(bHits.get() >= 2, "endpoint /b expected >= 2 hits, got " + bHits.get());
   }
 
+  @Test
+  void retriesOnFailureFasterThanCadence() throws InterruptedException {
+    AtomicInteger hits = new AtomicInteger();
+    server.createContext("/fail", ex -> failCount(ex, hits));
+    RestPoller poller =
+        new RestPoller(RestPoller.newHttpClient(), mapper, baseUrl, "/fail", Map.of(), b -> {});
+
+    try (PollerScheduler sched = new PollerScheduler()) {
+      sched.add(poller, 30, "fail"); // 30s cadence: without retry only the initial hit fires
+      sched.start();
+      Thread.sleep(3500);
+    }
+
+    assertTrue(
+        hits.get() >= 2,
+        "expected retries (>=2 hits) within 3.5s despite a 30s cadence, got " + hits.get());
+  }
+
+  @Test
+  void retryDelayIsExponentialCappedAtCadenceWithJitter() {
+    assertEquals(1, PollerScheduler.retryDelaySeconds(0, 30));
+    assertInRange(PollerScheduler.retryDelaySeconds(3, 30), 6, 10); // base 8 ±25%
+    assertInRange(PollerScheduler.retryDelaySeconds(10, 30), 22, 38); // capped at cadence 30 ±25%
+    assertInRange(PollerScheduler.retryDelaySeconds(6, 5), 4, 6); // capped at cadence 5 ±25%
+  }
+
+  private static void assertInRange(long actual, long lo, long hi) {
+    assertTrue(actual >= lo && actual <= hi, "expected [" + lo + "," + hi + "] but was " + actual);
+  }
+
+  private static void failCount(HttpExchange ex, AtomicInteger counter) throws IOException {
+    counter.incrementAndGet();
+    byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+    ex.sendResponseHeaders(500, body.length);
+    ex.getResponseBody().write(body);
+    ex.close();
+  }
+
   private static void count(HttpExchange ex, AtomicInteger counter) throws IOException {
     counter.incrementAndGet();
     byte[] body = "{}".getBytes(StandardCharsets.UTF_8);

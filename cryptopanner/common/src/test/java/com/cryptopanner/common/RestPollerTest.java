@@ -155,6 +155,19 @@ class RestPollerTest {
     assertNull(seenQuery.get());
   }
 
+  @Test
+  void pollOnceReturnsTrueOnSuccessAndFalseOnError() throws IOException {
+    nextHandler = ex -> respond(ex, 200, "{}");
+    RestPoller ok =
+        new RestPoller(RestPoller.newHttpClient(), mapper, baseUrl, "/ok", Map.of(), b -> {});
+    org.junit.jupiter.api.Assertions.assertTrue(ok.pollOnce(), "200 should report success");
+
+    nextHandler = ex -> respond(ex, 500, "{}");
+    RestPoller bad =
+        new RestPoller(RestPoller.newHttpClient(), mapper, baseUrl, "/bad", Map.of(), b -> {});
+    assertFalse(bad.pollOnce(), "500 should report failure");
+  }
+
   private Consumer<byte[]> captureSink() {
     return bytes -> {
       try {

@@ -58,8 +58,12 @@ public final class RestPoller {
         .build();
   }
 
-  /** Issues one HTTP GET, then writes either a success or failure envelope to the sink. */
-  public void pollOnce() {
+  /**
+   * Issues one HTTP GET, then writes either a success or failure envelope to the sink. Returns
+   * {@code true} on HTTP 200 (success), {@code false} on any error (non-200, timeout, connection)
+   * so the caller can schedule a retry (§8.d).
+   */
+  public boolean pollOnce() {
     Instant issuedAt = Instant.now();
     HttpRequest req = HttpRequest.newBuilder(uri).GET().timeout(REQUEST_TIMEOUT).build();
     try {
@@ -68,12 +72,13 @@ public final class RestPoller {
       if (resp.statusCode() == 200) {
         JsonNode body = mapper.readTree(resp.body());
         writeSuccess(issuedAt, receivedAt, resp.statusCode(), body);
-      } else {
-        writeError(
-            issuedAt, receivedAt, "HTTP_" + resp.statusCode(), resp.body(), resp.statusCode());
+        return true;
       }
+      writeError(issuedAt, receivedAt, "HTTP_" + resp.statusCode(), resp.body(), resp.statusCode());
+      return false;
     } catch (HttpTimeoutException e) {
       writeError(issuedAt, Instant.now(), "TIMEOUT", String.valueOf(e.getMessage()), null);
+      return false;
     } catch (Exception e) {
       writeError(
           issuedAt,
@@ -81,6 +86,7 @@ public final class RestPoller {
           "CONNECTION",
           e.getClass().getSimpleName() + ": " + e.getMessage(),
           null);
+      return false;
     }
   }
 
