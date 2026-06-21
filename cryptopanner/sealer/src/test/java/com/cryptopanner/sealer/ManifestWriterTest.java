@@ -112,6 +112,57 @@ class ManifestWriterTest {
   }
 
   @Test
+  void attachesDeployAndRotationEventsWhenPresentAndOmitsWhenEmpty(@TempDir Path tmp)
+      throws IOException {
+    ObjectMapper m = new ObjectMapper();
+    HourMerger.Result merge =
+        new HourMerger.Result(
+            tmp.resolve("hour-14.jsonl.zst"),
+            "ab".repeat(32),
+            1L,
+            1L,
+            List.of(0),
+            null,
+            List.of(),
+            List.of());
+
+    // With events → arrays present.
+    Path withEvents = tmp.resolve("hour-14.manifest.json");
+    JsonNode rot = m.readTree("{\"rotation_id\":\"rot-1\",\"reason\":\"SCHEDULED\"}");
+    JsonNode dep = m.readTree("{\"deploy_id\":\"d-1\",\"verify_result\":\"PASS\"}");
+    ManifestWriter.write(
+        withEvents,
+        "dev-node",
+        "btcusdt",
+        "ticker",
+        Instant.parse("2026-06-14T14:00:00Z"),
+        merge,
+        Instant.parse("2026-06-14T15:02:08Z"),
+        List.of(dep),
+        List.of(rot));
+    JsonNode root = m.readTree(Files.readString(withEvents));
+    assertEquals("d-1", root.get("deploy_events").get(0).get("deploy_id").asText());
+    assertEquals(
+        "rot-1", root.get("connection_rotation_events").get(0).get("rotation_id").asText());
+
+    // Without events (empty lists) → arrays absent, not empty (§6).
+    Path noEvents = tmp.resolve("hour-15.manifest.json");
+    ManifestWriter.write(
+        noEvents,
+        "dev-node",
+        "btcusdt",
+        "ticker",
+        Instant.parse("2026-06-14T14:00:00Z"),
+        merge,
+        Instant.parse("2026-06-14T15:02:08Z"),
+        List.of(),
+        List.of());
+    JsonNode root2 = m.readTree(Files.readString(noEvents));
+    assertFalse(root2.has("deploy_events"));
+    assertFalse(root2.has("connection_rotation_events"));
+  }
+
+  @Test
   void omitsSequenceFieldsForNonIdBearingStream(@TempDir Path tmp) throws IOException {
     Path target = tmp.resolve("hour-14.manifest.json");
     HourMerger.Result merge =

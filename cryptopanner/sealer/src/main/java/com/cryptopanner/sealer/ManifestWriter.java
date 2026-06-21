@@ -1,6 +1,7 @@
 package com.cryptopanner.sealer;
 
 import com.cryptopanner.common.EnvelopeCodec;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -10,6 +11,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 /** Skeleton manifest writer. Full §10.d fields are post-skeleton work. */
 public final class ManifestWriter {
@@ -29,6 +31,25 @@ public final class ManifestWriter {
       Instant hourStart,
       HourMerger.Result merge,
       Instant sealedAt)
+      throws IOException {
+    write(target, node, symbol, stream, hourStart, merge, sealedAt, List.of(), List.of());
+  }
+
+  /**
+   * Writes the manifest, additionally attaching {@code deploy_events[]} and {@code
+   * connection_rotation_events[]} (design doc §6) when the corresponding hour contained them. Both
+   * arrays are <em>absent</em> (not empty) when their list is empty.
+   */
+  public static void write(
+      Path target,
+      String node,
+      String symbol,
+      String stream,
+      Instant hourStart,
+      HourMerger.Result merge,
+      Instant sealedAt,
+      List<JsonNode> deployEvents,
+      List<JsonNode> rotationEvents)
       throws IOException {
     ObjectNode root = MAPPER.createObjectNode();
     root.put("manifest_schema_version", 1);
@@ -79,6 +100,16 @@ public final class ManifestWriter {
         an.put("outcome", a.outcome().name());
         if (a.error() != null) an.put("error", a.error());
       }
+    }
+
+    // Deploy / rotation events that fell in this hour (design doc §6) — absent when none.
+    if (!deployEvents.isEmpty()) {
+      ArrayNode arr = root.putArray("deploy_events");
+      deployEvents.forEach(arr::add);
+    }
+    if (!rotationEvents.isEmpty()) {
+      ArrayNode arr = root.putArray("connection_rotation_events");
+      rotationEvents.forEach(arr::add);
     }
 
     // Pretty-printed, LF line endings (master spec §10.d).

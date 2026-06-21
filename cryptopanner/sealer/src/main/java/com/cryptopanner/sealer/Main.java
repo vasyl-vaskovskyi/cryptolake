@@ -35,6 +35,18 @@ public final class Main {
     }
     HourMerger merger =
         new HourMerger(cfg.paths().segments(), cfg.paths().sealed(), mapper, backfiller);
+
+    // Deploy / rotation events that fell in this hour, folded into every manifest (§9.b.6, §6).
+    java.util.List<com.fasterxml.jackson.databind.JsonNode> deployEvents = java.util.List.of();
+    java.util.List<com.fasterxml.jackson.databind.JsonNode> rotationEvents = java.util.List.of();
+    if (cfg.paths().deploy() != null) {
+      deployEvents =
+          HourEventReader.readWithinHour(
+              cfg.paths().deploy().resolve("history.jsonl"), hourStart, mapper);
+      rotationEvents =
+          HourEventReader.readWithinHour(
+              cfg.paths().deploy().resolve("rotations.jsonl"), hourStart, mapper);
+    }
     System.out.println(
         "[sealer] sealing hour "
             + hour
@@ -63,7 +75,15 @@ public final class Main {
         Path manifestPath =
             result.file().resolveSibling("hour-" + String.format("%02d", hour) + ".manifest.json");
         ManifestWriter.write(
-            manifestPath, cfg.nodeId(), symbol, stream, hourStart, result, Instant.now());
+            manifestPath,
+            cfg.nodeId(),
+            symbol,
+            stream,
+            hourStart,
+            result,
+            Instant.now(),
+            deployEvents,
+            rotationEvents);
         System.out.println("[sealer] " + symbol + "@" + stream + ": manifest " + manifestPath);
       } catch (Exception e) {
         System.err.println("[sealer] " + symbol + "@" + stream + ": FAILED — " + e.getMessage());
