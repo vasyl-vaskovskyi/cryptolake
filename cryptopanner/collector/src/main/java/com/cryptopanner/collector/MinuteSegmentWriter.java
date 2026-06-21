@@ -47,6 +47,7 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   private final TreeMap<String, Bucket> open = new TreeMap<>();
   private String lastSealedKey;
   private long lateFrames;
+  private boolean closed;
 
   /** A minute's in-memory content plus the monotonic instant its wall-end was first observed. */
   private static final class Bucket {
@@ -66,6 +67,9 @@ public final class MinuteSegmentWriter implements AutoCloseable {
    * bucketInstant} (server event time, or receive time when the event time is unavailable).
    */
   public synchronized void accept(byte[] line, Instant bucketInstant) throws IOException {
+    if (closed) {
+      return; // racing frame after shutdown seal — unavoidably late, drop it
+    }
     String key = MINUTE_KEY.format(bucketInstant);
     Bucket bucket = open.get(key);
     if (bucket == null) {
@@ -119,6 +123,7 @@ public final class MinuteSegmentWriter implements AutoCloseable {
 
   @Override
   public synchronized void close() throws IOException {
+    closed = true;
     for (Map.Entry<String, Bucket> e : open.entrySet()) {
       seal(e.getKey(), e.getValue().buffer);
     }

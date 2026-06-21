@@ -92,6 +92,17 @@ class MinuteSegmentWriterTest {
     assertEquals("x\ny\n", new String(decompress(Files.readAllBytes(minute23))));
   }
 
+  @Test
+  void acceptAfterCloseIsANoOpNotAnError(@TempDir Path base) throws IOException {
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
+    w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));
+    w.close(); // seals everything and clears the open buffers
+
+    // A frame racing in after close() (the shutdown window) must not throw — regression for the
+    // TreeMap.lastEntry() NPE seen when a post-close straggler hit the empty open map.
+    w.accept("late\n".getBytes(), Instant.parse("2026-06-14T14:23:30Z"));
+  }
+
   private static byte[] decompress(byte[] zstd) {
     long size = Zstd.decompressedSize(zstd);
     byte[] out = new byte[(int) size];
