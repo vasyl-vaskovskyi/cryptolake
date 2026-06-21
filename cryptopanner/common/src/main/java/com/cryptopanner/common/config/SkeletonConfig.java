@@ -27,6 +27,7 @@ public record SkeletonConfig(
     Paths paths,
     int collectorMaxRuntimeS,
     int sealGraceSeconds,
+    int healthPort,
     Storage storage) {
 
   /**

@@ -52,6 +52,7 @@ paths:
   sealed:   /tmp/cryptopanner-real/sealed
 
 collector_max_runtime_s: 120
+health_port: 8088
 
 storage:
   endpoint:           http://localhost:9000

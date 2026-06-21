@@ -1,6 +1,7 @@
 package com.cryptopanner.collector;
 
 import com.cryptopanner.common.EnvelopeCodec;
+import com.cryptopanner.common.HealthServer;
 import com.cryptopanner.common.RestPoller;
 import com.cryptopanner.common.StreamRouting;
 import com.cryptopanner.common.config.SkeletonConfig;
@@ -205,6 +206,36 @@ public final class Main {
         1,
         TimeUnit.SECONDS);
 
+    // Liveness + metrics endpoint (§13), if a port is configured.
+    HealthServer health = null;
+    if (cfg.healthPort() > 0) {
+      health =
+          new HealthServer(
+              cfg.healthPort(),
+              () -> {
+                long late = 0;
+                for (MinuteSegmentWriter w : writers.values()) {
+                  late += w.lateFrames();
+                }
+                long resyncs = depthResync != null ? depthResync.resyncs() : 0;
+                return "# TYPE cryptopanner_frames_written_total counter\n"
+                    + "cryptopanner_frames_written_total "
+                    + router.framesWritten()
+                    + "\n# TYPE cryptopanner_unparseable_frames_total counter\n"
+                    + "cryptopanner_unparseable_frames_total "
+                    + router.unparseableFrames()
+                    + "\n# TYPE cryptopanner_late_frames_total counter\n"
+                    + "cryptopanner_late_frames_total "
+                    + late
+                    + "\n# TYPE cryptopanner_depth_resyncs_total counter\n"
+                    + "cryptopanner_depth_resyncs_total "
+                    + resyncs
+                    + "\n";
+              });
+      System.out.println("[collector] health endpoint on :" + cfg.healthPort());
+    }
+    final HealthServer healthRef = health;
+
     System.out.println(
         "[collector] started; running for "
             + cfg.collectorMaxRuntimeS()
@@ -227,6 +258,9 @@ public final class Main {
           ticker.shutdownNow();
           if (resyncExec != null) {
             resyncExec.shutdownNow();
+          }
+          if (healthRef != null) {
+            healthRef.close();
           }
           for (BinanceWsClient c : clients) {
             c.stop();
