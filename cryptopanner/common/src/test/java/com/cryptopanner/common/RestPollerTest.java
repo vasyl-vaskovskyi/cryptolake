@@ -68,14 +68,38 @@ class RestPollerTest {
     assertEquals("/fapi/v1/openInterest", env.get("endpoint").asText());
     assertEquals("BTCUSDT", env.get("params").get("symbol").asText());
     assertEquals(200, env.get("http_status").asInt());
-    assertEquals("12345", env.get("response").get("openInterest").asText());
+    // Body stored verbatim in `raw` (never parsed-and-re-serialized) + provable hash — same
+    // raw-fidelity guarantee as ws_frame (master spec invariant 3.a). No parsed `response`.
+    assertEquals("{\"openInterest\":\"12345\"}", env.get("raw").asText());
     assertNotNull(env.get("poll_issued_at"));
     assertNotNull(env.get("received_at"));
+    assertFalse(env.has("response"));
     assertFalse(env.has("error"));
   }
 
   @Test
-  void errorEnvelopeOnHttp500() throws IOException {
+  void successResponseStoredByteFaithfulWithMatchingHash() throws IOException {
+    // Odd whitespace + non-alphabetical key order: a parse-then-re-serialize would normalize this,
+    // so surviving verbatim proves true byte-fidelity. The hash must be over those exact bytes.
+    String body = "{ \"b\" : 2,\n  \"a\":1 }";
+    nextHandler = ex -> respond(ex, 200, body);
+
+    new RestPoller(
+            RestPoller.newHttpClient(),
+            mapper,
+            baseUrl,
+            "/fapi/v1/exchangeInfo",
+            Map.of(),
+            captureSink())
+        .pollOnce();
+
+    JsonNode env = sink.get(0);
+    assertEquals(body, env.get("raw").asText());
+    assertEquals(CaptureEnvelope.sha256Hex(body), env.get("raw_sha256").asText());
+  }
+
+  @Test
+  void errorEnvelopeOnHttp500KeepsBodyVerbatim() throws IOException {
     nextHandler = ex -> respond(ex, 500, "{\"code\":-1000,\"msg\":\"internal\"}");
 
     new RestPoller(
@@ -85,9 +109,14 @@ class RestPollerTest {
     JsonNode env = sink.get(0);
     assertEquals("rest_response", env.get("envelope").asText());
     assertEquals(500, env.get("http_status").asInt());
+    // A non-200 still carries bytes from Binance: keep them verbatim + hashed (3.a) ...
+    assertEquals("{\"code\":-1000,\"msg\":\"internal\"}", env.get("raw").asText());
+    assertEquals(
+        CaptureEnvelope.sha256Hex("{\"code\":-1000,\"msg\":\"internal\"}"),
+        env.get("raw_sha256").asText());
+    // ... plus an error object for classification (no `message`: `raw` already holds the body).
     JsonNode err = env.get("error");
     assertEquals("HTTP_500", err.get("class").asText());
-    assertEquals("{\"code\":-1000,\"msg\":\"internal\"}", err.get("message").asText());
     assertEquals(500, err.get("http_status").asInt());
     assertFalse(env.has("response"));
   }
@@ -107,8 +136,14 @@ class RestPollerTest {
     JsonNode env = sink.get(0);
     assertEquals("rest_response", env.get("envelope").asText());
     assertTrue(env.get("http_status").isNull());
+    // Nothing was received from Binance, so there is no `raw`/`raw_sha256` to attach: absence of
+    // `raw` is exactly how a consumer tells "no response captured" from "Binance returned an
+    // error".
+    assertFalse(env.has("raw"));
+    assertFalse(env.has("raw_sha256"));
     JsonNode err = env.get("error");
     assertEquals("CONNECTION", err.get("class").asText());
+    assertNotNull(err.get("message"));
     assertTrue(err.get("http_status").isNull());
   }
 

@@ -1,6 +1,5 @@
 package com.cryptopanner.common;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
@@ -70,44 +69,70 @@ public final class RestPoller {
       HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
       Instant receivedAt = Instant.now();
       if (resp.statusCode() == 200) {
-        JsonNode body = mapper.readTree(resp.body());
-        writeSuccess(issuedAt, receivedAt, resp.statusCode(), body);
+        writeSuccess(issuedAt, receivedAt, resp.statusCode(), resp.body());
         return true;
       }
-      writeError(issuedAt, receivedAt, "HTTP_" + resp.statusCode(), resp.body(), resp.statusCode());
+      writeHttpError(issuedAt, receivedAt, resp.statusCode(), resp.body());
       return false;
     } catch (HttpTimeoutException e) {
-      writeError(issuedAt, Instant.now(), "TIMEOUT", String.valueOf(e.getMessage()), null);
+      writeTransportError(issuedAt, Instant.now(), "TIMEOUT", String.valueOf(e.getMessage()));
       return false;
     } catch (Exception e) {
-      writeError(
+      writeTransportError(
           issuedAt,
           Instant.now(),
           "CONNECTION",
-          e.getClass().getSimpleName() + ": " + e.getMessage(),
-          null);
+          e.getClass().getSimpleName() + ": " + e.getMessage());
       return false;
     }
   }
 
-  private void writeSuccess(Instant issuedAt, Instant receivedAt, int status, JsonNode body) {
+  /**
+   * HTTP 200: store the response body verbatim in {@code raw} (never parse-then-re-serialize) with
+   * a {@code raw_sha256} over those exact bytes — the same raw-fidelity guarantee as {@code
+   * ws_frame} (master spec invariant 3.a).
+   */
+  private void writeSuccess(Instant issuedAt, Instant receivedAt, int status, String body) {
     ObjectNode env = envelope(issuedAt, receivedAt);
     env.put("http_status", status);
-    env.set("response", body);
+    putRaw(env, body);
     emit(env);
   }
 
-  private void writeError(
-      Instant issuedAt, Instant receivedAt, String klass, String message, Integer status) {
+  /**
+   * Non-200 HTTP response: bytes were still received from Binance, so keep them verbatim + hashed
+   * ({@code raw}/{@code raw_sha256}), plus an {@code error} object for classification. No {@code
+   * message} — {@code raw} already holds the body byte-for-byte.
+   */
+  private void writeHttpError(Instant issuedAt, Instant receivedAt, int status, String body) {
     ObjectNode env = envelope(issuedAt, receivedAt);
-    if (status != null) env.put("http_status", status);
-    else env.putNull("http_status");
+    env.put("http_status", status);
+    putRaw(env, body);
+    ObjectNode err = env.putObject("error");
+    err.put("class", "HTTP_" + status);
+    err.put("http_status", status);
+    emit(env);
+  }
+
+  /**
+   * Timeout / connection failure: nothing was received from Binance, so there is no {@code raw} to
+   * attach. The absence of {@code raw} is how a consumer distinguishes "no response captured" from
+   * "Binance returned an error" (master spec §8.d).
+   */
+  private void writeTransportError(
+      Instant issuedAt, Instant receivedAt, String klass, String message) {
+    ObjectNode env = envelope(issuedAt, receivedAt);
+    env.putNull("http_status");
     ObjectNode err = env.putObject("error");
     err.put("class", klass);
     err.put("message", message);
-    if (status != null) err.put("http_status", status);
-    else err.putNull("http_status");
+    err.putNull("http_status");
     emit(env);
+  }
+
+  private static void putRaw(ObjectNode env, String body) {
+    env.put("raw_sha256", CaptureEnvelope.sha256Hex(body));
+    env.put("raw", body);
   }
 
   private ObjectNode envelope(Instant issuedAt, Instant receivedAt) {
