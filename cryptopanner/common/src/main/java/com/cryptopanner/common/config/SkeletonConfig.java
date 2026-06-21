@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -28,6 +29,12 @@ public record SkeletonConfig(
     int sealGraceSeconds,
     Storage storage) {
 
+  /**
+   * Reserved pseudo-symbol for non-per-symbol REST polls (e.g. {@code exchangeInfo}), which have no
+   * natural symbol. Underscore-prefixed so it never collides with a real lowercase Binance symbol.
+   */
+  public static final String GLOBAL_SYMBOL = "_global";
+
   public SkeletonConfig {
     if (broadcasts == null) broadcasts = List.of();
     if (restPolls == null) restPolls = List.of();
@@ -38,9 +45,19 @@ public record SkeletonConfig(
 
   /**
    * One REST endpoint to poll. {@code perSymbol=true} fans out across configured symbols; {@code
-   * false} polls a single global instance (e.g. {@code /fapi/v1/exchangeInfo}).
+   * false} polls a single global instance (e.g. {@code /fapi/v1/exchangeInfo}). {@code params} are
+   * extra query parameters merged into every request (e.g. {@code limit=1000} for depth snapshots).
    */
-  public record RestPoll(String stream, String endpoint, int cadenceSeconds, boolean perSymbol) {}
+  public record RestPoll(
+      String stream,
+      String endpoint,
+      int cadenceSeconds,
+      boolean perSymbol,
+      Map<String, String> params) {
+    public RestPoll {
+      if (params == null) params = Map.of();
+    }
+  }
 
   public record Paths(Path segments, Path sealed) {}
 
@@ -79,8 +96,10 @@ public record SkeletonConfig(
         for (String symbol : symbols()) {
           out.add(new Subscription(symbol, p.stream()));
         }
+      } else {
+        // Non-per-symbol polls (e.g. exchangeInfo) live under the reserved global symbol.
+        out.add(new Subscription(GLOBAL_SYMBOL, p.stream()));
       }
-      // Non-per-symbol REST polls (exchangeInfo) need a global path scheme — TODO.
     }
     return out;
   }

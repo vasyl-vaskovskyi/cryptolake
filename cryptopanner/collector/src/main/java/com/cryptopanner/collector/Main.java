@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -53,14 +54,13 @@ public final class Main {
                     cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM, sealGrace));
       }
     }
-    // REST-poll fan-out writers: one (symbol, restPoll.stream) per configured symbol.
+    // REST-poll fan-out writers: per-symbol polls → one per configured symbol; non-per-symbol
+    // polls (e.g. exchangeInfo) → a single writer under the reserved global symbol.
     for (SkeletonConfig.RestPoll p : cfg.restPolls()) {
-      if (!p.perSymbol()) continue; // non-per-symbol REST polls need a global path scheme — TODO.
-      for (String symbol : cfg.symbols()) {
-        String key = symbol + "@" + p.stream();
+      for (String sym : restSymbolScope(cfg, p)) {
         writers.computeIfAbsent(
-            key,
-            k -> new MinuteSegmentWriter(cfg.paths().segments(), symbol, p.stream(), sealGrace));
+            sym + "@" + p.stream(),
+            k -> new MinuteSegmentWriter(cfg.paths().segments(), sym, p.stream(), sealGrace));
       }
     }
 
@@ -111,9 +111,14 @@ public final class Main {
       HttpClient httpClient = RestPoller.newHttpClient();
       URI baseUrl = URI.create(cfg.restBaseUrl());
       for (SkeletonConfig.RestPoll p : cfg.restPolls()) {
-        if (!p.perSymbol()) continue;
-        for (String symbol : cfg.symbols()) {
-          MinuteSegmentWriter writer = writers.get(symbol + "@" + p.stream());
+        for (String sym : restSymbolScope(cfg, p)) {
+          String writerKey = sym + "@" + p.stream();
+          MinuteSegmentWriter writer = writers.get(writerKey);
+          // Merge the poll's static params with the per-symbol query param (omitted for globals).
+          Map<String, String> params = new LinkedHashMap<>(p.params());
+          if (p.perSymbol()) {
+            params.put("symbol", sym);
+          }
           Consumer<byte[]> sink =
               b -> {
                 try {
@@ -121,17 +126,14 @@ public final class Main {
                 } catch (Exception e) {
                   System.err.println(
                       "[collector] rest sink write failed for "
-                          + symbol
-                          + "@"
-                          + p.stream()
+                          + writerKey
                           + ": "
                           + e.getMessage());
                 }
               };
           RestPoller poller =
-              new RestPoller(
-                  httpClient, mapper, baseUrl, p.endpoint(), Map.of("symbol", symbol), sink);
-          scheduler.add(poller, p.cadenceSeconds(), symbol + "@" + p.stream());
+              new RestPoller(httpClient, mapper, baseUrl, p.endpoint(), params, sink);
+          scheduler.add(poller, p.cadenceSeconds(), writerKey);
         }
       }
       scheduler.start();
@@ -199,5 +201,12 @@ public final class Main {
 
     Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
     closeAll.run();
+  }
+
+  /**
+   * Per-symbol polls fan out across configured symbols; non-per-symbol polls run once as global.
+   */
+  private static List<String> restSymbolScope(SkeletonConfig cfg, SkeletonConfig.RestPoll p) {
+    return p.perSymbol() ? new ArrayList<>(cfg.symbols()) : List.of(SkeletonConfig.GLOBAL_SYMBOL);
   }
 }

@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -59,6 +60,59 @@ class SkeletonConfigTest {
     assertEquals("http://minio:9000", cfg.storage().endpoint());
     assertEquals("cryptopanner-prod", cfg.storage().bucket());
     assertEquals(true, cfg.storage().pathStyleAccess());
+  }
+
+  @Test
+  void nonPerSymbolPollAppearsUnderGlobalSymbolWithParsedParams(@TempDir Path tmp)
+      throws IOException {
+    Path yaml = tmp.resolve("skeleton.yaml");
+    Files.writeString(
+        yaml,
+        """
+        node_id: vps-fra-1
+        subscriptions:
+          - symbol: btcusdt
+            stream: trade
+        rest_base_url: https://fapi.binance.com
+        rest_polls:
+          - stream: depth
+            endpoint: /fapi/v1/depth
+            cadence_seconds: 300
+            per_symbol: true
+            params:
+              limit: "1000"
+          - stream: exchangeInfo
+            endpoint: /fapi/v1/exchangeInfo
+            cadence_seconds: 86400
+            per_symbol: false
+        ws_public_endpoint_url: ws://x/public
+        ws_market_endpoint_url: ws://x/market
+        paths:
+          segments: /seg
+          sealed:   /sealed
+        collector_max_runtime_s: 60
+        storage:
+          endpoint:          http://minio:9000
+          bucket:            b
+          access_key:        AK
+          secret_key:        SK
+          region:            us-east-1
+          path_style_access: true
+        """);
+
+    SkeletonConfig cfg = SkeletonConfig.load(yaml);
+
+    // depth poll carries its extra query params.
+    assertEquals("1000", cfg.restPolls().get(0).params().get("limit"));
+    // exchangeInfo (non-per-symbol) is bucketed under the reserved global symbol.
+    assertTrue(
+        cfg.effectiveSubscriptions()
+            .contains(
+                new SkeletonConfig.Subscription(SkeletonConfig.GLOBAL_SYMBOL, "exchangeInfo")),
+        "non-per-symbol poll should appear under the global symbol");
+    // per-symbol depth poll still fans out per symbol.
+    assertTrue(
+        cfg.effectiveSubscriptions().contains(new SkeletonConfig.Subscription("btcusdt", "depth")));
   }
 
   @Test
@@ -229,7 +283,7 @@ class SkeletonConfigTest {
                 new SkeletonConfig.Subscription("btcusdt", "trade"),
                 new SkeletonConfig.Subscription("ethusdt", "trade")),
             List.of(),
-            List.of(new SkeletonConfig.RestPoll("openInterest", "/oi", 60, true)));
+            List.of(new SkeletonConfig.RestPoll("openInterest", "/oi", 60, true, Map.of())));
 
     List<SkeletonConfig.Subscription> eff = cfg.effectiveSubscriptions();
     assertEquals(4, eff.size());
@@ -238,15 +292,18 @@ class SkeletonConfigTest {
   }
 
   @Test
-  void effectiveSubscriptionsSkipsNonPerSymbolRestPolls() {
+  void effectiveSubscriptionsPlacesNonPerSymbolRestPollsUnderGlobalSymbol() {
     SkeletonConfig cfg =
         configWith(
             List.of(new SkeletonConfig.Subscription("btcusdt", "trade")),
             List.of(),
-            List.of(new SkeletonConfig.RestPoll("exchangeInfo", "/ei", 3600, false)));
+            List.of(new SkeletonConfig.RestPoll("exchangeInfo", "/ei", 3600, false, Map.of())));
 
     List<SkeletonConfig.Subscription> eff = cfg.effectiveSubscriptions();
-    assertEquals(1, eff.size());
+    assertEquals(2, eff.size());
+    assertTrue(
+        eff.contains(
+            new SkeletonConfig.Subscription(SkeletonConfig.GLOBAL_SYMBOL, "exchangeInfo")));
   }
 
   @Test
