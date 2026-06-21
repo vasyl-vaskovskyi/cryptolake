@@ -1,9 +1,6 @@
 package com.cryptopanner.common.config;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -401,45 +398,8 @@ public record NodeConfig(
    * injected for testability; the public {@link #load(Path)} passes {@link System#getenv()}.
    */
   static NodeConfig load(Path yaml, Map<String, String> env) throws IOException {
-    ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
-    mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
-    com.fasterxml.jackson.databind.JsonNode tree = mapper.readTree(yaml.toFile());
-    if (tree instanceof com.fasterxml.jackson.databind.node.ObjectNode root) {
-      applyEnvOverrides(root, new ArrayList<>(), env);
-    }
-    NodeConfig cfg = mapper.treeToValue(tree, NodeConfig.class);
+    NodeConfig cfg = ConfigLoader.load(yaml, NodeConfig.class, env);
     cfg.validate();
     return cfg;
-  }
-
-  /**
-   * Walks the YAML tree and replaces any scalar leaf whose derived {@code CRYPTOPANNER_<PATH>} name
-   * is present in {@code env}. Object nodes recurse; array/container nodes are not overridable.
-   */
-  private static void applyEnvOverrides(
-      com.fasterxml.jackson.databind.node.ObjectNode node,
-      List<String> path,
-      Map<String, String> env) {
-    for (String field : new ArrayList<>(iterable(node.fieldNames()))) {
-      com.fasterxml.jackson.databind.JsonNode child = node.get(field);
-      List<String> childPath = new ArrayList<>(path);
-      childPath.add(field);
-      if (child instanceof com.fasterxml.jackson.databind.node.ObjectNode obj) {
-        applyEnvOverrides(obj, childPath, env);
-      } else if (child != null && child.isValueNode()) {
-        String envName =
-            "CRYPTOPANNER_" + String.join("_", childPath).toUpperCase(java.util.Locale.ROOT);
-        String override = env.get(envName);
-        if (override != null) {
-          node.put(field, override);
-        }
-      }
-    }
-  }
-
-  private static List<String> iterable(java.util.Iterator<String> it) {
-    List<String> out = new ArrayList<>();
-    it.forEachRemaining(out::add);
-    return out;
   }
 }
