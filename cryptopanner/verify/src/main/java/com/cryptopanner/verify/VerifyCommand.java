@@ -1,7 +1,7 @@
 package com.cryptopanner.verify;
 
 import com.cryptopanner.common.EnvelopeCodec;
-import com.cryptopanner.common.config.SkeletonConfig;
+import com.cryptopanner.common.config.NodeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.nio.file.Path;
@@ -68,9 +68,9 @@ public final class VerifyCommand implements Callable<Integer> {
 
   @Override
   public Integer call() throws Exception {
-    SkeletonConfig cfg = null;
+    NodeConfig cfg = null;
     if (configPath != null) {
-      cfg = SkeletonConfig.load(Path.of(configPath));
+      cfg = NodeConfig.load(Path.of(configPath));
       if (endpoint == null) endpoint = cfg.storage().endpoint();
       if (bucket == null) bucket = cfg.storage().bucket();
       if (nodeId == null) nodeId = cfg.nodeId();
@@ -88,9 +88,9 @@ public final class VerifyCommand implements Callable<Integer> {
       return 2;
     }
 
-    List<SkeletonConfig.Subscription> targets = new ArrayList<>();
+    List<NodeConfig.Subscription> targets = new ArrayList<>();
     if (symbol != null && stream != null) {
-      targets.add(new SkeletonConfig.Subscription(symbol, stream));
+      targets.add(new NodeConfig.Subscription(symbol, stream));
     } else if (cfg != null) {
       targets.addAll(cfg.effectiveSubscriptions());
     } else {
@@ -108,7 +108,7 @@ public final class VerifyCommand implements Callable<Integer> {
             .build();
 
     int errors = 0;
-    for (SkeletonConfig.Subscription sub : targets) {
+    for (NodeConfig.Subscription sub : targets) {
       errors += verifyOne(s3, sub.symbol(), sub.stream());
     }
 

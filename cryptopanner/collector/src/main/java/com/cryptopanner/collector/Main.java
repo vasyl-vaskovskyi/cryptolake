@@ -4,7 +4,7 @@ import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.HealthServer;
 import com.cryptopanner.common.RestPoller;
 import com.cryptopanner.common.StreamRouting;
-import com.cryptopanner.common.config.SkeletonConfig;
+import com.cryptopanner.common.config.NodeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.URI;
@@ -33,7 +33,7 @@ public final class Main {
 
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
-    SkeletonConfig cfg = SkeletonConfig.load(configPath);
+    NodeConfig cfg = NodeConfig.load(configPath);
     ObjectMapper mapper = EnvelopeCodec.newMapper();
 
     // Seal-grace window before a closed minute is finalized (master spec §8.e; config-overridable).
@@ -43,7 +43,7 @@ public final class Main {
     // wrapper.stream
     // and from broadcast-fanout writers (e.g. "btcusdt@forceOrder").
     Map<String, MinuteSegmentWriter> writers = new HashMap<>();
-    for (SkeletonConfig.Subscription s : cfg.subscriptions()) {
+    for (NodeConfig.Subscription s : cfg.subscriptions()) {
       String key = s.symbol() + "@" + s.stream();
       writers.put(
           key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream(), sealGrace));
@@ -61,7 +61,7 @@ public final class Main {
     }
     // REST-poll fan-out writers: per-symbol polls → one per configured symbol; non-per-symbol
     // polls (e.g. exchangeInfo) → a single writer under the reserved global symbol.
-    for (SkeletonConfig.RestPoll p : cfg.restPolls()) {
+    for (NodeConfig.RestPoll p : cfg.restPolls()) {
       for (String sym : restSymbolScope(cfg, p)) {
         writers.computeIfAbsent(
             sym + "@" + p.stream(),
@@ -71,7 +71,7 @@ public final class Main {
 
     // Partition subscriptions + broadcasts by routed socket (§8.a).
     Map<StreamRouting.Socket, List<String>> bySocket = new EnumMap<>(StreamRouting.Socket.class);
-    for (SkeletonConfig.Subscription s : cfg.subscriptions()) {
+    for (NodeConfig.Subscription s : cfg.subscriptions()) {
       StreamRouting.Socket sock = StreamRouting.forStreamType(s.stream());
       bySocket.computeIfAbsent(sock, k -> new ArrayList<>()).add(s.symbol() + "@" + s.stream());
     }
@@ -137,7 +137,7 @@ public final class Main {
       }
       HttpClient httpClient = RestPoller.newHttpClient();
       URI baseUrl = URI.create(cfg.restBaseUrl());
-      for (SkeletonConfig.RestPoll p : cfg.restPolls()) {
+      for (NodeConfig.RestPoll p : cfg.restPolls()) {
         for (String sym : restSymbolScope(cfg, p)) {
           String writerKey = sym + "@" + p.stream();
           MinuteSegmentWriter writer = writers.get(writerKey);
@@ -291,7 +291,7 @@ public final class Main {
   /**
    * Per-symbol polls fan out across configured symbols; non-per-symbol polls run once as global.
    */
-  private static List<String> restSymbolScope(SkeletonConfig cfg, SkeletonConfig.RestPoll p) {
-    return p.perSymbol() ? new ArrayList<>(cfg.symbols()) : List.of(SkeletonConfig.GLOBAL_SYMBOL);
+  private static List<String> restSymbolScope(NodeConfig cfg, NodeConfig.RestPoll p) {
+    return p.perSymbol() ? new ArrayList<>(cfg.symbols()) : List.of(NodeConfig.GLOBAL_SYMBOL);
   }
 }

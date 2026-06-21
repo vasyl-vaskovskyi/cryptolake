@@ -1,7 +1,7 @@
 package com.cryptopanner.uploader;
 
 import com.cryptopanner.common.Paths;
-import com.cryptopanner.common.config.SkeletonConfig;
+import com.cryptopanner.common.config.NodeConfig;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,7 +21,7 @@ public final class Main {
 
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
-    SkeletonConfig cfg = SkeletonConfig.load(configPath);
+    NodeConfig cfg = NodeConfig.load(configPath);
     String dateStr = required(args, "--date");
     int hour = Integer.parseInt(required(args, "--hour"));
     Instant hourStart =
@@ -61,7 +61,7 @@ public final class Main {
             + cfg.storage().bucket());
 
     int failures = 0;
-    for (SkeletonConfig.Subscription sub : cfg.effectiveSubscriptions()) {
+    for (NodeConfig.Subscription sub : cfg.effectiveSubscriptions()) {
       String symbol = sub.symbol();
       String stream = sub.stream();
       try {

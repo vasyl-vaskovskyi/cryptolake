@@ -1,63 +1,54 @@
 # config/dev/real-binance.yaml
-# Walking-skeleton config pointed at the real Binance USD-M Futures WS.
-# Used by tests/skeleton/run-real-binance.sh — keep collector_max_runtime_s
-# small (a few minutes) for first runs.
+# Full §15.b shape pointed at the real Binance USD-M Futures WS/REST.
+# Keep dev.collector_max_runtime_s small (a few minutes) for first runs.
 
 node_id: dev-real
-subscriptions:
-  - symbol: btcusdt
-    stream: trade
-  - symbol: btcusdt
-    stream: aggTrade
-  - symbol: btcusdt
-    stream: depth@100ms
-  - symbol: btcusdt
-    stream: kline_1m
-  - symbol: btcusdt
-    stream: ticker
-  - symbol: btcusdt
-    stream: bookTicker
-  - symbol: btcusdt
-    stream: markPrice@1s
 
-# All-symbol broadcast; the Collector partitions by data.o.s (master spec §7.a item 8).
-broadcasts:
-  - "!forceOrder@arr"
+symbols:
+  - btcusdt
 
-ws_public_endpoint_url: wss://fstream.binance.com/public/stream
-ws_market_endpoint_url: wss://fstream.binance.com/market/stream
-
-# REST polling — §7.b. Spec cadence is 60s for openInterest.
-rest_base_url: https://fapi.binance.com
-rest_polls:
-  - stream: openInterest
-    endpoint: /fapi/v1/openInterest
-    cadence_seconds: 60
-    per_symbol: true
-  # Depth snapshot baseline (§7.b.1) — also re-fired on demand by depth pu-chain resync.
-  - stream: depthSnapshot
-    endpoint: /fapi/v1/depth
-    cadence_seconds: 300
-    per_symbol: true
-    params:
-      limit: "1000"
-  # Symbol metadata for all symbols (non-per-symbol → global). Daily in prod; trimmed here.
-  - stream: exchangeInfo
-    endpoint: /fapi/v1/exchangeInfo
-    cadence_seconds: 600
-    per_symbol: false
+streams:                 # §7.a
+  per_symbol:
+    - trade
+    - aggTrade
+    - depth@100ms
+    - kline_1m
+    - ticker
+    - bookTicker
+    - markPrice@1s
+  all_symbol:
+    # All-symbol broadcast; the Collector partitions by data.o.s (§7.a item 8).
+    - "!forceOrder@arr"
 
 paths:
   segments: /tmp/cryptopanner-real/segments
   sealed:   /tmp/cryptopanner-real/sealed
 
-collector_max_runtime_s: 120
-health_port: 8088
-
 storage:
-  endpoint:           http://localhost:9000
-  bucket:             cryptopanner-real
-  access_key:         cryptopanner
-  secret_key:         changeme-dev
-  region:             us-east-1
-  path_style_access:  true
+  endpoint:          http://localhost:9000
+  bucket:            cryptopanner-real
+  access_key:        cryptopanner
+  secret_key:        changeme-dev
+  region:            us-east-1
+  path_style_access: true
+
+collector:
+  ws_public_endpoint_url: wss://fstream.binance.com/public/stream
+  ws_market_endpoint_url: wss://fstream.binance.com/market/stream
+  rest_base_url:          https://fapi.binance.com
+  seal_grace_window:      10s
+  rest:                   # §7.b
+    depth:                # depth snapshot baseline + on-demand pu-chain resync (§7.b.1)
+      url_template:           "/fapi/v1/depth?symbol={symbol}&limit=1000"
+      baseline_poll_interval: 5m
+      on_demand_resync:       true
+    open_interest:
+      url_template:  "/fapi/v1/openInterest?symbol={symbol}"
+      poll_interval: 60s
+    exchange_info:  # exchange-wide metadata (non-per-symbol → _global)
+      url_template:  "/fapi/v1/exchangeInfo"
+      poll_time_utc: "00:05"
+
+dev:                      # non-§15 overlay: standalone-runner knobs
+  health_port:             8088
+  collector_max_runtime_s: 120

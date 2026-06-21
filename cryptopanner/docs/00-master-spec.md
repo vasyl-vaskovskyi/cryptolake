@@ -614,7 +614,8 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
       credentials_file: /etc/cryptopanner/s3.credentials
 
     collector:
-      ws_endpoint_url:                   wss://fstream.binance.com/ws    # mock points elsewhere in test (§14.b)
+      ws_public_endpoint_url:            wss://fstream.binance.com/public/stream   # §8.a dual-socket
+      ws_market_endpoint_url:            wss://fstream.binance.com/market/stream   # mock points elsewhere in test (§14.b)
       rest_base_url:                     https://fapi.binance.com        # §7.b
       rest_connect_timeout_s:            5                               # §8.d
       rest_request_timeout_s:            30                              # §8.d
@@ -663,7 +664,13 @@ n. **Clock skew detected.** Broken NTP causes frames to be mis-bucketed by serve
       heartbeat:
         degraded_threshold_s: 15                                         # §11.b
         stuck_threshold_s:    60                                         # §11.b
+
+    dev:                     # NON-§15 overlay — present only in dev/standalone configs, never prod
+      health_port:             8088   # collector self-hosts /status+/metrics when run standalone
+      collector_max_runtime_s: 120    # collector exits after N seconds (smoke runs)
     ```
+
+    The `dev:` block is **not** part of the production schema: in production the Node Agent owns the HTTP surface (§11.c) and systemd owns process lifetime. It exists so the collector can be run standalone (no Agent, no systemd) for capture inspection — `health_port` self-hosts `/status`+`/metrics`, and `collector_max_runtime_s` bounds a smoke run. Production configs omit it.
 
 - c. **Monitor config** (`/etc/cryptopanner-monitor/monitor.yaml`):
 
