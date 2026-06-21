@@ -1,0 +1,27 @@
+# Slot-templated Collector unit (master spec §6.b, design doc §3.3).
+# Two instances run as slots: cryptopanner-collector@a / cryptopanner-collector@b.
+# Exactly one is the active production slot (deploy/active-slot); the other is empty
+# or running a candidate during a make-before-break deploy. Slots alternate per deploy.
+[Unit]
+Description=CryptoPanner Collector (slot %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryptopanner
+Group=cryptopanner
+# TZ=UTC so all wall-clock decisions (minute/hour boundaries, rotation windows) are UTC (§6.b, §15.a).
+Environment=TZ=UTC
+Environment=JAVA_OPTS=-Dconfig=/etc/cryptopanner/config.yaml
+# Per-slot role (primary|candidate) written by the deploy tool before start, re-read on SIGUSR1 (§4.4).
+EnvironmentFile=-/data/cryptopanner/deploy/role-%i.conf
+Environment=CRYPTOPANNER_SLOT=%i
+ExecStart=/opt/cryptopanner/current/collector/bin/collector
+Restart=always
+RestartSec=2
+# Liveness watchdog — the collector touches its per-slot heartbeat well within this window (§11.b).
+WatchdogSec=30
+
+[Install]
+WantedBy=multi-user.target
