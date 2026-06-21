@@ -343,13 +343,21 @@ public record NodeConfig(
     if (storage.bucket() == null) {
       throw new IllegalArgumentException("config: storage.bucket is required");
     }
-    // Scalar formats parse, re-throwing with the owning key name (ConfigParse names only the
-    // value).
+    // Scalar formats parse (when present), re-throwing tagged with the owning key. These collector
+    // timing keys are optional — only validate the ones the config actually sets.
     if (collector != null) {
-      parseKeyed("collector.seal_grace_window", collector.sealGraceWindow(), ConfigParse::duration);
-      parseKeyed(
-          "collector.connection_max_age", collector.connectionMaxAge(), ConfigParse::duration);
-      parseKeyed("collector.rotation_window", collector.rotationWindow(), ConfigParse::hourWindow);
+      if (collector.sealGraceWindow() != null) {
+        parseKeyed(
+            "collector.seal_grace_window", collector.sealGraceWindow(), ConfigParse::duration);
+      }
+      if (collector.connectionMaxAge() != null) {
+        parseKeyed(
+            "collector.connection_max_age", collector.connectionMaxAge(), ConfigParse::duration);
+      }
+      if (collector.rotationWindow() != null) {
+        parseKeyed(
+            "collector.rotation_window", collector.rotationWindow(), ConfigParse::hourWindow);
+      }
     }
     if (sealer != null && sealer.hourGraceWindow() != null) {
       parseKeyed("sealer.hour_grace_window", sealer.hourGraceWindow(), ConfigParse::duration);
@@ -382,10 +390,56 @@ public record NodeConfig(
   }
 
   public static NodeConfig load(Path yaml) throws IOException {
+    return load(yaml, System.getenv());
+  }
+
+  /**
+   * Loads the config, then applies {@code CRYPTOPANNER_<KEY_PATH>} environment overrides (§15.d) —
+   * any scalar key in the YAML can be overridden by an env var named with the uppercased dotted
+   * path and dots/separators as underscores (e.g. {@code storage.secret_key} ← {@code
+   * CRYPTOPANNER_STORAGE_SECRET_KEY}). Keeps secrets out of the config file. The {@code env} map is
+   * injected for testability; the public {@link #load(Path)} passes {@link System#getenv()}.
+   */
+  static NodeConfig load(Path yaml, Map<String, String> env) throws IOException {
     ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
     mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
-    NodeConfig cfg = mapper.readValue(yaml.toFile(), NodeConfig.class);
+    com.fasterxml.jackson.databind.JsonNode tree = mapper.readTree(yaml.toFile());
+    if (tree instanceof com.fasterxml.jackson.databind.node.ObjectNode root) {
+      applyEnvOverrides(root, new ArrayList<>(), env);
+    }
+    NodeConfig cfg = mapper.treeToValue(tree, NodeConfig.class);
     cfg.validate();
     return cfg;
+  }
+
+  /**
+   * Walks the YAML tree and replaces any scalar leaf whose derived {@code CRYPTOPANNER_<PATH>} name
+   * is present in {@code env}. Object nodes recurse; array/container nodes are not overridable.
+   */
+  private static void applyEnvOverrides(
+      com.fasterxml.jackson.databind.node.ObjectNode node,
+      List<String> path,
+      Map<String, String> env) {
+    for (String field : new ArrayList<>(iterable(node.fieldNames()))) {
+      com.fasterxml.jackson.databind.JsonNode child = node.get(field);
+      List<String> childPath = new ArrayList<>(path);
+      childPath.add(field);
+      if (child instanceof com.fasterxml.jackson.databind.node.ObjectNode obj) {
+        applyEnvOverrides(obj, childPath, env);
+      } else if (child != null && child.isValueNode()) {
+        String envName =
+            "CRYPTOPANNER_" + String.join("_", childPath).toUpperCase(java.util.Locale.ROOT);
+        String override = env.get(envName);
+        if (override != null) {
+          node.put(field, override);
+        }
+      }
+    }
+  }
+
+  private static List<String> iterable(java.util.Iterator<String> it) {
+    List<String> out = new ArrayList<>();
+    it.forEachRemaining(out::add);
+    return out;
   }
 }
