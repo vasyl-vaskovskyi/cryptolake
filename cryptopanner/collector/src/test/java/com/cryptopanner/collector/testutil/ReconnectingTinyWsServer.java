@@ -28,23 +28,36 @@ public final class ReconnectingTinyWsServer implements AutoCloseable {
 
   private final ServerSocket serverSocket;
   private final List<String> script;
+  private final boolean keepOpen;
   private final ExecutorService exec;
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final AtomicInteger sessions = new AtomicInteger(0);
 
-  private ReconnectingTinyWsServer(ServerSocket serverSocket, List<String> script) {
+  private ReconnectingTinyWsServer(
+      ServerSocket serverSocket, List<String> script, boolean keepOpen) {
     this.serverSocket = serverSocket;
     this.script = script;
+    this.keepOpen = keepOpen;
     this.exec = Executors.newSingleThreadExecutor(r -> new Thread(r, "reconnecting-ws-accept"));
     exec.submit(this::acceptLoop);
   }
 
   public static ReconnectingTinyWsServer start(InetSocketAddress addr, List<String> script)
       throws IOException {
+    return start(addr, script, false);
+  }
+
+  /**
+   * {@code keepOpen=true}: after sending the script the server does NOT close the socket — it reads
+   * until the client disconnects. A second session then only occurs if the client itself reconnects
+   * (e.g. via a forced half-open recovery), which lets tests attribute the reconnect to the client.
+   */
+  public static ReconnectingTinyWsServer start(
+      InetSocketAddress addr, List<String> script, boolean keepOpen) throws IOException {
     ServerSocket s = new ServerSocket();
     s.setReuseAddress(true);
     s.bind(addr);
-    return new ReconnectingTinyWsServer(s, script);
+    return new ReconnectingTinyWsServer(s, script, keepOpen);
   }
 
   public int port() {
@@ -122,9 +135,16 @@ public final class ReconnectingTinyWsServer implements AutoCloseable {
         sendText(out, msg);
       }
 
-      // 5. Count this as a completed session, then let the try-with-resources close the socket,
-      //    which signals EOF to the client and triggers its onClose callback.
+      // 5. Count this as a completed session.
       sessions.incrementAndGet();
+
+      // 6. keepOpen: hold the socket until the client disconnects, so only a client-initiated
+      //    reconnect produces a new session. Otherwise fall through and close server-side.
+      if (keepOpen) {
+        while (!closed.get() && in.read() != -1) {
+          // drain client frames (incl. its eventual close) until EOF
+        }
+      }
 
     } catch (Exception e) {
       if (!closed.get()) {

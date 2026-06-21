@@ -57,6 +57,27 @@ class BinanceWsClientTest {
   }
 
   @Test
+  void tracksActivityWhileReceivingFrames() throws Exception {
+    URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
+    CopyOnWriteArrayList<String> seen = new CopyOnWriteArrayList<>();
+    BinanceWsClient client =
+        new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, receivedAt) -> seen.add(raw));
+
+    client.start();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (seen.size() < 3 && System.nanoTime() < deadline) {
+      Thread.sleep(50);
+    }
+    long idle = client.idleNanos();
+    client.stop();
+
+    assertEquals(3, seen.size());
+    assertTrue(
+        idle < TimeUnit.SECONDS.toNanos(2),
+        "idle time should be small right after receiving frames, was " + idle + "ns");
+  }
+
+  @Test
   void deliversReceiveTimestampWithEachFrame() throws Exception {
     URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
     CopyOnWriteArrayList<Instant> stamps = new CopyOnWriteArrayList<>();

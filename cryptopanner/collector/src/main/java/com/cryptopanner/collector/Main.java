@@ -139,16 +139,19 @@ public final class Main {
       scheduler.start();
     }
 
-    // Seal-grace ticker: drives time-based sealing of minutes past close+grace (§8.e). Quiet
-    // streams still seal promptly; active streams also seal as later minutes arrive.
-    ScheduledExecutorService sealTicker =
+    // 1s ticker: (a) seals minutes past close+grace (§8.e); (b) half-open watchdog — a /public or
+    // /market socket that goes silent past the idle window is forced to reconnect (§8.a). A healthy
+    // socket emits sub-second traffic (depth@100ms, ticker, markPrice@1s), so a long idle gap means
+    // the connection is silently dead.
+    long halfOpenIdleNanos = TimeUnit.SECONDS.toNanos(30);
+    ScheduledExecutorService ticker =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
-              Thread t = new Thread(r, "seal-ticker");
+              Thread t = new Thread(r, "collector-ticker");
               t.setDaemon(true);
               return t;
             });
-    sealTicker.scheduleAtFixedRate(
+    ticker.scheduleAtFixedRate(
         () -> {
           Instant now = Instant.now();
           long monoNanos = System.nanoTime();
@@ -157,6 +160,15 @@ public final class Main {
               w.sealElapsed(now, monoNanos);
             } catch (IOException e) {
               System.err.println("[collector] seal failed: " + e.getMessage());
+            }
+          }
+          for (BinanceWsClient c : clients) {
+            if (c.idleNanos() > halfOpenIdleNanos) {
+              System.err.println(
+                  "[collector] half-open suspected (idle "
+                      + (c.idleNanos() / 1_000_000_000L)
+                      + "s); forcing reconnect");
+              c.forceReconnect();
             }
           }
         },
@@ -183,7 +195,7 @@ public final class Main {
                   + router.unparseableFrames()
                   + " unparseable)");
           scheduler.close();
-          sealTicker.shutdownNow();
+          ticker.shutdownNow();
           for (BinanceWsClient c : clients) {
             c.stop();
           }

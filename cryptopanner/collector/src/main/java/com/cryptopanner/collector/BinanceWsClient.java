@@ -42,6 +42,10 @@ public final class BinanceWsClient {
 
   private volatile WebSocket ws;
   private volatile boolean stopped = false;
+  // Monotonic timestamp of the last inbound text message (ACK or data). Feeds the half-open
+  // watchdog: a healthy socket on /public or /market produces sub-second traffic, so a long idle
+  // gap means the connection is silently dead (the fstream half-open bug, §8.a).
+  private volatile long lastActivityNanos = System.nanoTime();
 
   private final ScheduledExecutorService reconnectExec =
       Executors.newSingleThreadScheduledExecutor(
@@ -65,6 +69,28 @@ public final class BinanceWsClient {
   public void start() throws Exception {
     attempt.set(0);
     connectAndSubscribe();
+  }
+
+  /** Nanos since the last inbound message — the half-open watchdog's liveness signal. */
+  public long idleNanos() {
+    return System.nanoTime() - lastActivityNanos;
+  }
+
+  /**
+   * Forces recovery from a (suspected half-open) connection: aborts the current socket and
+   * schedules an immediate reconnect + re-subscribe. {@link WebSocket#abort()} does not notify the
+   * listener, so the reconnect is driven here directly. No-op once {@link #stop()} has been called.
+   */
+  public void forceReconnect() {
+    if (stopped) {
+      return;
+    }
+    WebSocket w = ws;
+    if (w != null) {
+      w.abort();
+    }
+    lastActivityNanos = System.nanoTime(); // avoid an immediate re-trigger before the new socket
+    scheduleReconnect();
   }
 
   /** Stops reconnect scheduling and closes the current WebSocket connection. Idempotent. */
@@ -104,6 +130,7 @@ public final class BinanceWsClient {
           public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             buf.append(data);
             if (last) {
+              lastActivityNanos = System.nanoTime();
               String full = buf.toString();
               buf.setLength(0);
               if (!ackSeen.isDone() && full.contains("\"result\"")) {

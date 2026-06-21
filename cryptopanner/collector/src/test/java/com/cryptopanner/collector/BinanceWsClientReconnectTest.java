@@ -137,6 +137,40 @@ class BinanceWsClientReconnectTest {
   }
 
   @Test
+  void forceReconnectEstablishesNewSession() throws Exception {
+    // keepOpen server: it never closes server-side, so a 2nd session can only come from the
+    // client reconnecting — which here is driven solely by forceReconnect() (half-open recovery).
+    try (ReconnectingTinyWsServer keepOpen =
+        ReconnectingTinyWsServer.start(
+            new InetSocketAddress("127.0.0.1", 0),
+            List.of(
+                "{\"result\":null,\"id\":1}", "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":1}}"),
+            true)) {
+      URI uri = URI.create("ws://127.0.0.1:" + keepOpen.port() + "/ws");
+      BinanceWsClient client = new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, ts) -> {});
+      client.start();
+
+      long d1 = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (keepOpen.sessionCount() < 1 && System.nanoTime() < d1) {
+        Thread.sleep(50);
+      }
+      assertTrue(keepOpen.sessionCount() >= 1, "first session never established");
+
+      client.forceReconnect();
+
+      long d2 = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      while (keepOpen.sessionCount() < 2 && System.nanoTime() < d2) {
+        Thread.sleep(50);
+      }
+      client.stop();
+
+      assertTrue(
+          keepOpen.sessionCount() >= 2,
+          "forceReconnect should establish a new session, got " + keepOpen.sessionCount());
+    }
+  }
+
+  @Test
   void computeBackoffMillisFollowsSchedule() {
     // Attempt 0 → base 1 000 ms, attempt 5 → base 32 000 ms, attempt 6+ → base 60 000 ms.
     long base0 = BinanceWsClient.computeBackoffMillis(0);
