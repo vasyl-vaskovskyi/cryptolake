@@ -34,6 +34,18 @@ rest_polls:
     endpoint: /fapi/v1/openInterest
     cadence_seconds: 60
     per_symbol: true
+  # Depth snapshot baseline (§7.b.1) — also re-fired on demand by depth pu-chain resync.
+  - stream: depthSnapshot
+    endpoint: /fapi/v1/depth
+    cadence_seconds: 300
+    per_symbol: true
+    params:
+      limit: "1000"
+  # Symbol metadata for all symbols (non-per-symbol → global). Daily in prod; trimmed here.
+  - stream: exchangeInfo
+    endpoint: /fapi/v1/exchangeInfo
+    cadence_seconds: 600
+    per_symbol: false
 
 paths:
   segments: /tmp/cryptopanner-real/segments

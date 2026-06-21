@@ -127,6 +127,23 @@ class FrameRouterTest {
   }
 
   @Test
+  void feedsDepthFramesToResync(@TempDir Path base) throws IOException {
+    MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "depth@100ms", GRACE);
+    java.util.concurrent.atomic.AtomicInteger triggers =
+        new java.util.concurrent.atomic.AtomicInteger();
+    DepthResync resync = new DepthResync(sym -> triggers.incrementAndGet(), Runnable::run);
+    FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@depth@100ms", w), resync);
+    String raw =
+        "{\"stream\":\"btcusdt@depth@100ms\",\"data\":{\"e\":\"depthUpdate\",\"E\":1750000000000,"
+            + "\"U\":1,\"u\":5,\"pu\":0}}";
+
+    router.handle(raw, RECEIVED);
+    w.close();
+
+    assertEquals(1, resync.resyncs(), "first depth frame should trigger an initial snapshot");
+  }
+
+  @Test
   void unknownStreamIsNotWritten(@TempDir Path base) {
     MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     FrameRouter router = new FrameRouter(MAPPER, Map.of("btcusdt@trade", w));

@@ -28,12 +28,19 @@ public final class FrameRouter {
 
   private final ObjectMapper mapper;
   private final Map<String, MinuteSegmentWriter> writers;
+  private final DepthResync depthResync; // nullable — depth pu-chain resync, off when null
   private final AtomicLong framesWritten = new AtomicLong();
   private final AtomicLong unparseableFrames = new AtomicLong();
 
   public FrameRouter(ObjectMapper mapper, Map<String, MinuteSegmentWriter> writers) {
+    this(mapper, writers, null);
+  }
+
+  public FrameRouter(
+      ObjectMapper mapper, Map<String, MinuteSegmentWriter> writers, DepthResync depthResync) {
     this.mapper = mapper;
     this.writers = writers;
+    this.depthResync = depthResync;
   }
 
   /** Handle one raw frame delivered by a WS client, with its receive instant. */
@@ -75,6 +82,13 @@ public final class FrameRouter {
       String line = CaptureEnvelope.wsFrame(mapper, rawText, receivedAt);
       w.accept((line + "\n").getBytes(StandardCharsets.UTF_8), bucket);
       framesWritten.incrementAndGet();
+
+      // Depth diffs feed the pu-chain watcher (initial + on-break snapshot resync, §7.b.1).
+      if (depthResync != null
+          && !FORCE_ORDER_BROADCAST.equals(streamName)
+          && streamType.startsWith("depth")) {
+        depthResync.onDepthFrame(streamName.substring(0, streamName.indexOf('@')), data);
+      }
     } catch (Exception e) {
       System.err.println("[collector] frame handling error: " + e.getMessage());
     }

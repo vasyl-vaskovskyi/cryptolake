@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -25,6 +26,9 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public final class Main {
+
+  // On-disk stream for depth snapshots (periodic baseline poll + on-demand resync, §7.b.1).
+  private static final String DEPTH_SNAPSHOT_STREAM = "depthSnapshot";
 
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
@@ -75,9 +79,31 @@ public final class Main {
       bySocket.computeIfAbsent(sock, k -> new ArrayList<>()).add(b);
     }
 
+    // Depth pu-chain resync (§7.b.1): on a chain break, re-fire that symbol's depthSnapshot poller
+    // to fetch a fresh /fapi/v1/depth snapshot. The trigger runs off the WS thread on a virtual
+    // thread. depthSnapshotPollers is captured by reference and populated in the poller loop below
+    // (before any break can fire at runtime).
+    Map<String, RestPoller> depthSnapshotPollers = new HashMap<>();
+    boolean depthResyncEnabled =
+        cfg.restPolls().stream()
+            .anyMatch(p -> p.perSymbol() && DEPTH_SNAPSHOT_STREAM.equals(p.stream()));
+    ExecutorService resyncExec =
+        depthResyncEnabled ? Executors.newVirtualThreadPerTaskExecutor() : null;
+    DepthResync depthResync =
+        depthResyncEnabled
+            ? new DepthResync(
+                sym -> {
+                  RestPoller rp = depthSnapshotPollers.get(sym);
+                  if (rp != null) {
+                    rp.pollOnce();
+                  }
+                },
+                resyncExec)
+            : null;
+
     // Shared frame router — parses, routes, wraps in a ws_frame envelope, and buckets by server
     // event time. MinuteSegmentWriter.accept() is synchronized, safe for concurrent sockets.
-    FrameRouter router = new FrameRouter(mapper, writers);
+    FrameRouter router = new FrameRouter(mapper, writers, depthResync);
     BiConsumer<String, Instant> onFrame = router::handle;
 
     // Open one BinanceWsClient per non-empty socket group.
@@ -134,6 +160,9 @@ public final class Main {
           RestPoller poller =
               new RestPoller(httpClient, mapper, baseUrl, p.endpoint(), params, sink);
           scheduler.add(poller, p.cadenceSeconds(), writerKey);
+          if (p.perSymbol() && DEPTH_SNAPSHOT_STREAM.equals(p.stream())) {
+            depthSnapshotPollers.put(sym, poller); // on-demand resync re-fires this poller
+          }
         }
       }
       scheduler.start();
@@ -196,6 +225,9 @@ public final class Main {
                   + " unparseable)");
           scheduler.close();
           ticker.shutdownNow();
+          if (resyncExec != null) {
+            resyncExec.shutdownNow();
+          }
           for (BinanceWsClient c : clients) {
             c.stop();
           }
