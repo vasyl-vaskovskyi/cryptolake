@@ -101,4 +101,35 @@ class BinanceWsClientTest {
       assertFalse(ts.isAfter(after), "receive time after stop");
     }
   }
+
+  @Test
+  void countsUnexpectedBinaryFrameAndKeepsStreamFlowing() throws Exception {
+    // Binance fstream is text-only; a binary frame is anomalous. It must be counted (for §13
+    // metrics) and NOT silently stall the socket — the text frame after it must still arrive.
+    server.close();
+    server =
+        TinyWsServer.startFrames(
+            new InetSocketAddress("127.0.0.1", 0),
+            List.of(
+                TinyWsServer.Frame.text("{\"result\":null,\"id\":1}"),
+                TinyWsServer.Frame.binary(new byte[] {0x00, 0x01, 0x02, 0x03}),
+                TinyWsServer.Frame.text("{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":7}}")));
+
+    URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
+    CopyOnWriteArrayList<String> seen = new CopyOnWriteArrayList<>();
+    BinanceWsClient client =
+        new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, receivedAt) -> seen.add(raw));
+
+    client.start();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (seen.isEmpty() && System.nanoTime() < deadline) {
+      Thread.sleep(50);
+    }
+    long binaryCount = client.binaryFramesUnexpected();
+    client.stop();
+
+    assertEquals(1, binaryCount, "the binary frame must be counted");
+    assertEquals(1, seen.size(), "the text frame after the binary frame must still be delivered");
+    assertTrue(seen.get(0).contains("\"t\":7"));
+  }
 }

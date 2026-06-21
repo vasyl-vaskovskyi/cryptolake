@@ -3,6 +3,7 @@ package com.cryptopanner.collector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -13,6 +14,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 
 /**
@@ -46,6 +48,9 @@ public final class BinanceWsClient {
   // watchdog: a healthy socket on /public or /market produces sub-second traffic, so a long idle
   // gap means the connection is silently dead (the fstream half-open bug, §8.a).
   private volatile long lastActivityNanos = System.nanoTime();
+  // Count of binary WS frames received. Binance fstream is text-only, so any binary frame is
+  // anomalous (§12 / §13): we count it for metrics and log a WARN rather than silently dropping it.
+  private final AtomicLong binaryFramesUnexpected = new AtomicLong();
 
   private final ScheduledExecutorService reconnectExec =
       Executors.newSingleThreadScheduledExecutor(
@@ -74,6 +79,11 @@ public final class BinanceWsClient {
   /** Nanos since the last inbound message — the half-open watchdog's liveness signal. */
   public long idleNanos() {
     return System.nanoTime() - lastActivityNanos;
+  }
+
+  /** Count of unexpected binary WS frames received (Binance fstream should be text-only). */
+  public long binaryFramesUnexpected() {
+    return binaryFramesUnexpected.get();
   }
 
   /**
@@ -139,6 +149,21 @@ public final class BinanceWsClient {
               } else if (ackSeen.isDone()) {
                 onFrame.accept(full, Instant.now());
               }
+            }
+            webSocket.request(1);
+            return null;
+          }
+
+          @Override
+          public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
+            // Binance fstream is text-only. A binary frame is anomalous: count it, WARN, and keep
+            // the read loop flowing (request the next message) so one stray frame can't stall the
+            // socket. The payload is not captured — there is no defined schema for it.
+            lastActivityNanos = System.nanoTime();
+            if (last) {
+              long n = binaryFramesUnexpected.incrementAndGet();
+              System.err.println(
+                  "[ws] WARN ws_binary_frame_unexpected endpoint=" + endpoint + " count=" + n);
             }
             webSocket.request(1);
             return null;

@@ -218,6 +218,10 @@ public final class Main {
                   late += w.lateFrames();
                 }
                 long resyncs = depthResync != null ? depthResync.resyncs() : 0;
+                long binaryUnexpected = 0;
+                for (BinanceWsClient c : clients) {
+                  binaryUnexpected += c.binaryFramesUnexpected();
+                }
                 return "# TYPE cryptopanner_frames_written_total counter\n"
                     + "cryptopanner_frames_written_total "
                     + router.framesWritten()
@@ -230,6 +234,9 @@ public final class Main {
                     + "\n# TYPE cryptopanner_depth_resyncs_total counter\n"
                     + "cryptopanner_depth_resyncs_total "
                     + resyncs
+                    + "\n# TYPE cryptopanner_ws_binary_frame_unexpected_total counter\n"
+                    + "cryptopanner_ws_binary_frame_unexpected_total "
+                    + binaryUnexpected
                     + "\n";
               });
       System.out.println("[collector] health endpoint on :" + cfg.healthPort());

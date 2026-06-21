@@ -15,24 +15,42 @@ import java.util.concurrent.Executors;
 
 /**
  * Bare-bones single-client WebSocket server for tests. Performs the RFC 6455 handshake, then sends
- * each line of {@code script} as a text frame, then waits for client close. Not for production.
+ * each scripted frame (text or binary), then waits for client close. Not for production.
  */
 public final class TinyWsServer implements AutoCloseable {
 
   private static final String GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+  /** One scripted WebSocket frame: a payload plus the RFC 6455 opcode to send it under. */
+  public record Frame(int opcode, byte[] payload) {
+    public static Frame text(String s) {
+      return new Frame(0x1, s.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static Frame binary(byte[] payload) {
+      return new Frame(0x2, payload);
+    }
+  }
+
   private final ServerSocket server;
   private final ExecutorService exec;
-  private final List<String> script;
+  private final List<Frame> script;
 
-  private TinyWsServer(ServerSocket server, List<String> script) {
+  private TinyWsServer(ServerSocket server, List<Frame> script) {
     this.server = server;
     this.script = script;
     this.exec = Executors.newSingleThreadExecutor();
     exec.submit(this::accept);
   }
 
+  /** Scripts text frames (the common case). */
   public static TinyWsServer start(InetSocketAddress addr, List<String> script) throws IOException {
+    return startFrames(addr, script.stream().map(Frame::text).toList());
+  }
+
+  /** Scripts a mix of text and binary frames. */
+  public static TinyWsServer startFrames(InetSocketAddress addr, List<Frame> script)
+      throws IOException {
     ServerSocket s = new ServerSocket();
     s.bind(addr);
     return new TinyWsServer(s, script);
@@ -78,8 +96,8 @@ public final class TinyWsServer implements AutoCloseable {
       out.flush();
       // Skip the client's SUBSCRIBE (the test doesn't validate it).
       // Push the script.
-      for (String msg : script) {
-        sendText(out, msg);
+      for (Frame f : script) {
+        sendFrame(out, f);
       }
       // Block until close.
       while (in.read() != -1) {}
@@ -88,9 +106,9 @@ public final class TinyWsServer implements AutoCloseable {
     }
   }
 
-  private static void sendText(OutputStream out, String s) throws IOException {
-    byte[] payload = s.getBytes(StandardCharsets.UTF_8);
-    out.write(0x81); // FIN + opcode text
+  private static void sendFrame(OutputStream out, Frame f) throws IOException {
+    byte[] payload = f.payload();
+    out.write(0x80 | f.opcode()); // FIN + opcode
     if (payload.length < 126) {
       out.write(payload.length);
     } else if (payload.length < 65536) {
