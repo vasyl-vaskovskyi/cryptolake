@@ -103,6 +103,23 @@ class BinanceWsClientTest {
   }
 
   @Test
+  void tracksConnectionAgeFromAck() throws Exception {
+    URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
+    BinanceWsClient client =
+        new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, receivedAt) -> {});
+    assertTrue(client.currentConnectionAge().isEmpty(), "no age before connect");
+
+    client.start(); // blocks until ACK
+    java.util.Optional<java.time.Duration> age = client.currentConnectionAge();
+    client.stop();
+
+    assertTrue(age.isPresent(), "age available once subscribed");
+    assertTrue(
+        age.get().compareTo(java.time.Duration.ofSeconds(5)) < 0,
+        "a freshly-acked connection is young: " + age.get());
+  }
+
+  @Test
   void countsUnexpectedBinaryFrameAndKeepsStreamFlowing() throws Exception {
     // Binance fstream is text-only; a binary frame is anomalous. It must be counted (for §13
     // metrics) and NOT silently stall the socket — the text frame after it must still arrive.

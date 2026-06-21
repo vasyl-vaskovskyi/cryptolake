@@ -51,6 +51,10 @@ public final class BinanceWsClient {
   // Count of binary WS frames received. Binance fstream is text-only, so any binary frame is
   // anomalous (§12 / §13): we count it for metrics and log a WARN rather than silently dropping it.
   private final AtomicLong binaryFramesUnexpected = new AtomicLong();
+  // Monotonic instant the current connection's SUBSCRIBE was ACKed (Long.MIN_VALUE = not yet
+  // connected). Reset on every successful (re)subscribe — feeds the rotation scheduler (§5.1) and
+  // /status current_connection_age_s (§11.c).
+  private volatile long connectionAckedNanos = Long.MIN_VALUE;
 
   private final ScheduledExecutorService reconnectExec =
       Executors.newSingleThreadScheduledExecutor(
@@ -86,6 +90,15 @@ public final class BinanceWsClient {
     return binaryFramesUnexpected.get();
   }
 
+  /** Age of the current connection since its SUBSCRIBE ACK, or empty if not yet subscribed. */
+  public java.util.Optional<java.time.Duration> currentConnectionAge() {
+    long acked = connectionAckedNanos;
+    if (acked == Long.MIN_VALUE) {
+      return java.util.Optional.empty();
+    }
+    return java.util.Optional.of(java.time.Duration.ofNanos(System.nanoTime() - acked));
+  }
+
   /**
    * Forces recovery from a (suspected half-open) connection: aborts the current socket and
    * schedules an immediate reconnect + re-subscribe. {@link WebSocket#abort()} does not notify the
@@ -116,6 +129,7 @@ public final class BinanceWsClient {
   // ── internals ────────────────────────────────────────────────────────────────
 
   private void connectAndSubscribe() throws Exception {
+    connectionAckedNanos = Long.MIN_VALUE; // age is undefined until this connection's ACK
     int id = nextId.getAndIncrement();
     CompletableFuture<Void> ackSeen = new CompletableFuture<>();
 
@@ -145,6 +159,7 @@ public final class BinanceWsClient {
               buf.setLength(0);
               if (!ackSeen.isDone() && full.contains("\"result\"")) {
                 attempt.set(0); // reset backoff after successful handshake
+                connectionAckedNanos = System.nanoTime(); // connection age starts at ACK
                 ackSeen.complete(null);
               } else if (ackSeen.isDone()) {
                 onFrame.accept(full, Instant.now());
