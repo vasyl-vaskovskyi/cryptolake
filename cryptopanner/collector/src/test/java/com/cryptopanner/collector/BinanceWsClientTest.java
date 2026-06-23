@@ -120,6 +120,24 @@ class BinanceWsClientTest {
   }
 
   @Test
+  void shadowClientSendsDistinctUserAgentHeader() throws Exception {
+    // The rotation shadow connection must identify itself with a distinct User-Agent (§5.2 step 1)
+    // so Binance-side and our own audit can tell the two overlapping connections apart.
+    URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
+    BinanceWsClient client =
+        new BinanceWsClient(
+            uri, List.of("btcusdt@trade"), (raw, receivedAt) -> {}, "cryptopanner/test+shadow");
+
+    client.start();
+    String request = server.awaitHandshakeRequest(java.time.Duration.ofSeconds(5));
+    client.stop();
+
+    assertTrue(
+        request.toLowerCase().contains("user-agent: cryptopanner/test+shadow"),
+        "handshake should carry the shadow User-Agent, was:\n" + request);
+  }
+
+  @Test
   void countsUnexpectedBinaryFrameAndKeepsStreamFlowing() throws Exception {
     // Binance fstream is text-only; a binary frame is anomalous. It must be counted (for §13
     // metrics) and NOT silently stall the socket — the text frame after it must still arrive.

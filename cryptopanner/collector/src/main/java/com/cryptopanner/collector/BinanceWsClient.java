@@ -35,6 +35,10 @@ public final class BinanceWsClient {
   // Delivers (raw frame text, receive instant). Receive time is captured in the read loop so a
   // downstream backtest knows when each record was actually in hand (master spec §8.c).
   private final BiConsumer<String, Instant> onFrame;
+  // Optional handshake User-Agent. The rotation shadow connection sets a distinct one
+  // (`cryptopanner/<ver>+shadow`, §5.2 step 1) so the two overlapping connections are
+  // distinguishable; null leaves the JDK default.
+  private final String userAgent;
   private final AtomicInteger nextId = new AtomicInteger(1);
   // Reused across reconnects — JDK HttpClient owns its own executor and is meant to be shared.
   private final HttpClient http = HttpClient.newHttpClient();
@@ -65,9 +69,15 @@ public final class BinanceWsClient {
           });
 
   public BinanceWsClient(URI endpoint, List<String> streams, BiConsumer<String, Instant> onFrame) {
+    this(endpoint, streams, onFrame, null);
+  }
+
+  public BinanceWsClient(
+      URI endpoint, List<String> streams, BiConsumer<String, Instant> onFrame, String userAgent) {
     this.endpoint = endpoint;
     this.streams = streams;
     this.onFrame = onFrame;
+    this.userAgent = userAgent;
   }
 
   /**
@@ -200,11 +210,11 @@ public final class BinanceWsClient {
           }
         };
 
-    ws =
-        http.newWebSocketBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .buildAsync(endpoint, listener)
-            .get();
+    WebSocket.Builder builder = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5));
+    if (userAgent != null) {
+      builder.header("User-Agent", userAgent);
+    }
+    ws = builder.buildAsync(endpoint, listener).get();
 
     // Block until ACK (or timeout/close). On initial start() this is the caller's sync point.
     try {

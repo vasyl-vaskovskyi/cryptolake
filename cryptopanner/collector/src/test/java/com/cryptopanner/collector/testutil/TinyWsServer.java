@@ -35,12 +35,21 @@ public final class TinyWsServer implements AutoCloseable {
   private final ServerSocket server;
   private final ExecutorService exec;
   private final List<Frame> script;
+  private final java.util.concurrent.CompletableFuture<String> handshakeRequest =
+      new java.util.concurrent.CompletableFuture<>();
 
   private TinyWsServer(ServerSocket server, List<Frame> script) {
     this.server = server;
     this.script = script;
     this.exec = Executors.newSingleThreadExecutor();
     exec.submit(this::accept);
+  }
+
+  /**
+   * The raw HTTP upgrade request the client sent (headers included), once a client has connected.
+   */
+  public String awaitHandshakeRequest(java.time.Duration timeout) throws Exception {
+    return handshakeRequest.get(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
   /** Scripts text frames (the common case). */
@@ -74,6 +83,7 @@ public final class TinyWsServer implements AutoCloseable {
       byte[] buf = new byte[4096];
       int n = in.read(buf);
       String req = new String(buf, 0, n, StandardCharsets.US_ASCII);
+      handshakeRequest.complete(req);
       String key =
           req.lines()
               .filter(l -> l.toLowerCase().startsWith("sec-websocket-key:"))
