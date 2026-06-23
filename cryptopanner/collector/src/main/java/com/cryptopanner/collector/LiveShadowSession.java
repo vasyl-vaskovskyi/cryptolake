@@ -36,6 +36,19 @@ public final class LiveShadowSession implements ShadowSession {
   /** One tracked capture target so the shadow writers mirror the primary keys exactly. */
   public record WriterSpec(String symbol, String stream) {}
 
+  /**
+   * Hand-off callback fired at the end of {@link #promote()} (design doc §5.2 step 5): the shadow
+   * has become the new primary. The composition root swaps its half-open watchdog / connection-age
+   * / next-rotation references to {@code newPrimaryClients} and retires {@code session} on the next
+   * rotation, so sequential rotations never read the stale old-primary state.
+   */
+  @FunctionalInterface
+  public interface PromotionSink {
+    void promoted(ShadowSession session, List<BinanceWsClient> newPrimaryClients);
+  }
+
+  private final PromotionSink onPromoted;
+
   private static final String SHADOW_SUFFIX = ".shadow.jsonl.zst";
 
   private final Path segments;
@@ -60,13 +73,15 @@ public final class LiveShadowSession implements ShadowSession {
       Duration probeWindow,
       BooleanSupplier primaryDropped,
       BooleanSupplier bothDropped,
-      Runnable closePrimary)
+      Runnable closePrimary,
+      PromotionSink onPromoted)
       throws Exception {
     this.segments = segments;
     this.probeWindow = probeWindow;
     this.primaryDropped = primaryDropped;
     this.bothDropped = bothDropped;
     this.closePrimary = closePrimary;
+    this.onPromoted = onPromoted;
 
     this.shadowWriters = new HashMap<>();
     for (WriterSpec w : writers) {
@@ -151,10 +166,11 @@ public final class LiveShadowSession implements ShadowSession {
 
   @Override
   public void promote() {
-    closePrimary.run();
+    closePrimary.run(); // retire the old primary first (make-before-break is already past)
     for (MinuteSegmentWriter w : shadowWriters.values()) {
       w.promote();
     }
+    onPromoted.promoted(this, shadowClients); // hand this session off as the new primary
   }
 
   @Override

@@ -242,12 +242,37 @@ public final class Main {
         shadowSpecs.add(new LiveShadowSession.WriterSpec(symbol, FrameRouter.FORCE_ORDER_STREAM));
       }
     }
+    // The currently-running primary. Starts as the Main-built clients; after each rotation's
+    // promote it becomes the just-promoted LiveShadowSession (which self-seals via its own ticker).
+    // The watchdog, connection-age, drop signals and next rotation's primary-close all read these
+    // refs so sequential rotations never act on the retired old-primary state (§5.2 step 5).
+    java.util.concurrent.atomic.AtomicReference<List<BinanceWsClient>> activeClients =
+        new java.util.concurrent.atomic.AtomicReference<>(clients);
+    java.util.concurrent.atomic.AtomicReference<ShadowSession> activePrimarySession =
+        new java.util.concurrent.atomic.AtomicReference<>();
     java.util.function.BooleanSupplier primaryDropped =
-        () -> clients.stream().anyMatch(c -> c.currentConnectionAge().isEmpty());
+        () -> activeClients.get().stream().anyMatch(c -> c.currentConnectionAge().isEmpty());
     java.util.function.BooleanSupplier bothDropped =
-        () ->
-            !clients.isEmpty()
-                && clients.stream().allMatch(c -> c.currentConnectionAge().isEmpty());
+        () -> {
+          List<BinanceWsClient> a = activeClients.get();
+          return !a.isEmpty() && a.stream().allMatch(c -> c.currentConnectionAge().isEmpty());
+        };
+    // Retire whatever is primary now: a previously-promoted shadow session is fully closed; the
+    // original Main-built primary just has its clients stopped (its writers seal via the ticker).
+    Runnable retireActivePrimary =
+        () -> {
+          ShadowSession prev = activePrimarySession.get();
+          if (prev != null) {
+            prev.close();
+          } else {
+            clients.forEach(BinanceWsClient::stop);
+          }
+        };
+    LiveShadowSession.PromotionSink onPromoted =
+        (session, newClients) -> {
+          activePrimarySession.set(session);
+          activeClients.set(newClients);
+        };
     java.util.function.Supplier<ShadowSession> shadowOpener =
         () -> {
           try {
@@ -261,7 +286,8 @@ public final class Main {
                 Duration.ofSeconds(30),
                 primaryDropped,
                 bothDropped,
-                () -> clients.forEach(BinanceWsClient::stop));
+                retireActivePrimary,
+                onPromoted);
           } catch (Exception e) {
             System.err.println("[collector] shadow open failed: " + e.getMessage());
             return null;
@@ -279,7 +305,7 @@ public final class Main {
     Path rotationTriggerFile = deployDir.resolve("rotation-trigger");
     java.util.function.Supplier<java.util.Optional<Duration>> connectionAge =
         () ->
-            clients.stream()
+            activeClients.get().stream()
                 .map(BinanceWsClient::currentConnectionAge)
                 .filter(java.util.Optional::isPresent)
                 .map(java.util.Optional::get)
@@ -320,7 +346,7 @@ public final class Main {
               System.err.println("[collector] seal failed: " + e.getMessage());
             }
           }
-          for (BinanceWsClient c : clients) {
+          for (BinanceWsClient c : activeClients.get()) {
             if (c.idleNanos() > halfOpenIdleNanos) {
               System.err.println(
                   "[collector] half-open suspected (idle "
@@ -426,6 +452,12 @@ public final class Main {
           }
           if (healthRef != null) {
             healthRef.close();
+          }
+          // Tear down whichever shadow session is the current primary (if a rotation promoted one),
+          // plus the original Main-built primary clients + writers.
+          ShadowSession activeSession = activePrimarySession.get();
+          if (activeSession != null) {
+            activeSession.close();
           }
           for (BinanceWsClient c : clients) {
             c.stop();

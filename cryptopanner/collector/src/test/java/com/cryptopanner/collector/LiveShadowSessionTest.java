@@ -89,7 +89,8 @@ class LiveShadowSessionTest {
               Duration.ofSeconds(5),
               () -> false,
               () -> false,
-              () -> {});
+              () -> {},
+              (s, clients) -> {});
 
       assertTrue(session.probeLiveness(), "shadow saw a frame → live");
       session.close(); // seals the open minute as a .shadow segment
@@ -99,6 +100,50 @@ class LiveShadowSessionTest {
             walk.anyMatch(p -> p.getFileName().toString().endsWith(".shadow.jsonl.zst")),
             "the shadow connection's frame is sealed into a .shadow segment");
       }
+    }
+  }
+
+  @Test
+  void promoteRetiresOldPrimaryThenHandsOffTheNewPrimary(@TempDir Path segments) throws Exception {
+    try (TinyWsServer server =
+        TinyWsServer.start(
+            new InetSocketAddress("127.0.0.1", 0),
+            List.of(
+                "{\"result\":null,\"id\":1}",
+                "{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":1,\"T\":1749902600000}}"))) {
+
+      URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
+      boolean[] closePrimaryRan = {false};
+      ShadowSession[] handedOff = {null};
+      @SuppressWarnings("unchecked")
+      List<?>[] handedClients = new List<?>[1];
+
+      LiveShadowSession session =
+          new LiveShadowSession(
+              List.of(new LiveShadowSession.SocketSpec(uri, List.of("btcusdt@trade"))),
+              List.of(new LiveShadowSession.WriterSpec("btcusdt", "trade")),
+              segments,
+              Duration.ofMillis(10),
+              new ObjectMapper(),
+              "cryptopanner/test+shadow",
+              Duration.ofSeconds(5),
+              () -> false,
+              () -> false,
+              () -> closePrimaryRan[0] = true,
+              (s, clients) -> {
+                // The old primary must already be retired by the time the new one is handed off.
+                assertTrue(closePrimaryRan[0], "closePrimary runs before the hand-off");
+                handedOff[0] = s;
+                handedClients[0] = clients;
+              });
+
+      assertTrue(session.probeLiveness());
+      session.promote();
+
+      assertTrue(closePrimaryRan[0], "promote retires the old primary");
+      assertEquals(session, handedOff[0], "the session hands itself off as the new primary");
+      assertEquals(1, handedClients[0].size(), "the new primary's live clients are handed off");
+      session.close();
     }
   }
 }
