@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class MainTest {
@@ -34,6 +35,34 @@ class MainTest {
     assertEquals("a", Main.resolveSlot(null));
     assertEquals("a", Main.resolveSlot("  "));
     assertEquals("b", Main.resolveSlot("b"));
+  }
+
+  @Test
+  void shadowSpecsCoverSubscriptionsPlusPerSymbolForceOrder() {
+    // §15.f: the shadow's subscription set is derived from config at open time, so a symbol-set
+    // edit applies on the next rotation. This pure builder is what the opener re-reads config into.
+    var subs =
+        List.of(
+            new com.cryptopanner.common.config.NodeConfig.Subscription("btcusdt", "trade"),
+            new com.cryptopanner.common.config.NodeConfig.Subscription("ethusdt", "aggTrade"));
+    var specs =
+        Main.shadowSpecsFrom(subs, List.of("!forceOrder@arr"), List.of("btcusdt", "ethusdt"));
+
+    assertTrue(specs.contains(new LiveShadowSession.WriterSpec("btcusdt", "trade")));
+    assertTrue(specs.contains(new LiveShadowSession.WriterSpec("ethusdt", "aggTrade")));
+    assertTrue(
+        specs.contains(new LiveShadowSession.WriterSpec("btcusdt", "forceOrder")),
+        "forceOrder broadcast fans out per configured symbol");
+    assertTrue(specs.contains(new LiveShadowSession.WriterSpec("ethusdt", "forceOrder")));
+  }
+
+  @Test
+  void shadowSpecsOmitForceOrderWhenNotBroadcast() {
+    var subs =
+        List.of(new com.cryptopanner.common.config.NodeConfig.Subscription("btcusdt", "trade"));
+    var specs = Main.shadowSpecsFrom(subs, List.of(), List.of("btcusdt"));
+    assertEquals(1, specs.size());
+    assertEquals(new LiveShadowSession.WriterSpec("btcusdt", "trade"), specs.get(0));
   }
 
   @Test

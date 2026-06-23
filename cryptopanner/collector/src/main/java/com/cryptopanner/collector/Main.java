@@ -61,6 +61,49 @@ public final class Main {
   }
 
   /**
+   * The shadow connection's captured {@code (symbol, stream)} set, derived from config (§15.f): the
+   * subscriptions plus one {@code forceOrder} writer per symbol when the broadcast is configured.
+   * The rotation opener rebuilds this from a fresh config load each time, so an operator symbol-set
+   * edit applies on the next rotation.
+   */
+  static List<LiveShadowSession.WriterSpec> shadowSpecsFrom(
+      List<NodeConfig.Subscription> subscriptions, List<String> broadcasts, List<String> symbols) {
+    List<LiveShadowSession.WriterSpec> specs = new ArrayList<>();
+    for (NodeConfig.Subscription s : subscriptions) {
+      specs.add(new LiveShadowSession.WriterSpec(s.symbol(), s.stream()));
+    }
+    if (broadcasts.contains(FrameRouter.FORCE_ORDER_BROADCAST)) {
+      for (String symbol : symbols) {
+        specs.add(new LiveShadowSession.WriterSpec(symbol, FrameRouter.FORCE_ORDER_STREAM));
+      }
+    }
+    return specs;
+  }
+
+  /** The shadow's routed sockets, derived from config (§15.f) — rebuilt on each rotation open. */
+  static List<LiveShadowSession.SocketSpec> shadowSocketsFrom(NodeConfig cfg) {
+    Map<StreamRouting.Socket, List<String>> bySocket = new EnumMap<>(StreamRouting.Socket.class);
+    for (NodeConfig.Subscription s : cfg.subscriptions()) {
+      bySocket
+          .computeIfAbsent(StreamRouting.forStreamType(s.stream()), k -> new ArrayList<>())
+          .add(s.symbol() + "@" + s.stream());
+    }
+    for (String b : cfg.broadcasts()) {
+      bySocket.computeIfAbsent(StreamRouting.forBroadcast(b), k -> new ArrayList<>()).add(b);
+    }
+    List<LiveShadowSession.SocketSpec> sockets = new ArrayList<>();
+    List<String> pub = bySocket.get(StreamRouting.Socket.PUBLIC);
+    if (pub != null) {
+      sockets.add(new LiveShadowSession.SocketSpec(URI.create(cfg.wsPublicEndpointUrl()), pub));
+    }
+    List<String> mkt = bySocket.get(StreamRouting.Socket.MARKET);
+    if (mkt != null) {
+      sockets.add(new LiveShadowSession.SocketSpec(URI.create(cfg.wsMarketEndpointUrl()), mkt));
+    }
+    return sockets;
+  }
+
+  /**
    * OpenMetrics text for {@code /metrics} (§11.c), including the spec-named rotation + age series.
    */
   static String metricsText(
@@ -359,9 +402,22 @@ public final class Main {
     java.util.function.Supplier<ShadowSession> shadowOpener =
         () -> {
           try {
+            // §15.f: re-read config at open time so an operator symbol-set edit is picked up by the
+            // shadow's SUBSCRIBE; fall back to the startup set if the reload fails.
+            List<LiveShadowSession.SocketSpec> sockets = shadowSockets;
+            List<LiveShadowSession.WriterSpec> specs = shadowSpecs;
+            try {
+              NodeConfig fresh = NodeConfig.load(configPath);
+              sockets = shadowSocketsFrom(fresh);
+              specs = shadowSpecsFrom(fresh.subscriptions(), fresh.broadcasts(), fresh.symbols());
+            } catch (Exception reload) {
+              System.err.println(
+                  "[collector] shadow config reload failed, using startup set: "
+                      + reload.getMessage());
+            }
             return new LiveShadowSession(
-                    shadowSockets,
-                    shadowSpecs,
+                    sockets,
+                    specs,
                     cfg.paths().segments(),
                     sealGrace,
                     mapper,
