@@ -42,6 +42,10 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   private final String symbol;
   private final String stream;
   private final Duration sealGrace;
+  // When true, sealed minutes carry the `.shadow` infix (design doc §5.3): an overlap-minute
+  // segment written by a rotation/deploy shadow connection, kept separate from the primary until
+  // the cutover merge.
+  private final boolean shadow;
 
   // Open minute buckets keyed by minute key (sorted), so the latest minute is always lastKey().
   private final TreeMap<String, Bucket> open = new TreeMap<>();
@@ -56,10 +60,16 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   }
 
   public MinuteSegmentWriter(Path baseSegments, String symbol, String stream, Duration sealGrace) {
+    this(baseSegments, symbol, stream, sealGrace, false);
+  }
+
+  public MinuteSegmentWriter(
+      Path baseSegments, String symbol, String stream, Duration sealGrace, boolean shadow) {
     this.baseSegments = baseSegments;
     this.symbol = symbol;
     this.stream = stream;
     this.sealGrace = sealGrace;
+    this.shadow = shadow;
   }
 
   /**
@@ -141,7 +151,7 @@ public final class MinuteSegmentWriter implements AutoCloseable {
       return;
     }
     Instant minuteInstant = minuteInstantFromKey(key);
-    Path dataPath = Paths.minuteSegment(baseSegments, symbol, stream, minuteInstant);
+    Path dataPath = Paths.minuteSegment(baseSegments, symbol, stream, minuteInstant, shadow);
     Files.createDirectories(dataPath.getParent());
 
     byte[] compressed = Zstd.compress(buffer.toByteArray(), 3);

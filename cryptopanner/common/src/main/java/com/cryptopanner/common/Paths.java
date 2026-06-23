@@ -23,10 +23,21 @@ public final class Paths {
 
   /** segments/&lt;symbol&gt;/&lt;stream&gt;/&lt;date&gt;/minute-&lt;HH-MM&gt;.jsonl.zst */
   public static Path minuteSegment(Path base, String symbol, String stream, Instant t) {
+    return minuteSegment(base, symbol, stream, t, false);
+  }
+
+  /**
+   * Minute-segment path. When {@code shadow} is true the {@code .shadow} infix is inserted before
+   * {@code .jsonl.zst} (overlap-minute segment written by a rotation/deploy shadow connection,
+   * design doc §5.3) — e.g. {@code minute-14-23.shadow.jsonl.zst}.
+   */
+  public static Path minuteSegment(
+      Path base, String symbol, String stream, Instant t, boolean shadow) {
+    String infix = shadow ? ".shadow.jsonl.zst" : ".jsonl.zst";
     return base.resolve(symbol)
         .resolve(stream)
         .resolve(DATE.format(t))
-        .resolve("minute-" + HOUR_MINUTE.format(t) + ".jsonl.zst");
+        .resolve("minute-" + HOUR_MINUTE.format(t) + infix);
   }
 
   /** sealed/&lt;symbol&gt;/&lt;stream&gt;/&lt;date&gt;/hour-&lt;HH&gt;.jsonl.zst */

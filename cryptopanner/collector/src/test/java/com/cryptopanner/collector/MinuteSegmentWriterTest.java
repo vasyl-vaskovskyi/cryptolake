@@ -93,6 +93,22 @@ class MinuteSegmentWriterTest {
   }
 
   @Test
+  void shadowWriterSealsToShadowInfixedFile(@TempDir Path base) throws IOException {
+    try (MinuteSegmentWriter w =
+        new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE, /* shadow= */ true)) {
+      w.accept("s\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));
+    }
+    Path shadow = base.resolve("btcusdt/trade/2026-06-14/minute-14-23.shadow.jsonl.zst");
+    Path primary = base.resolve("btcusdt/trade/2026-06-14/minute-14-23.jsonl.zst");
+    assertTrue(Files.exists(shadow), "shadow segment must carry the .shadow infix");
+    assertFalse(Files.exists(primary), "no primary-named file is written in shadow mode");
+    assertTrue(
+        Files.exists(shadow.resolveSibling(shadow.getFileName() + ".sha256")),
+        "shadow segment gets its own sidecar");
+    assertEquals("s\n", new String(decompress(Files.readAllBytes(shadow))));
+  }
+
+  @Test
   void acceptAfterCloseIsANoOpNotAnError(@TempDir Path base) throws IOException {
     MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));

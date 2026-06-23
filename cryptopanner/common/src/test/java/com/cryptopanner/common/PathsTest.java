@@ -19,6 +19,26 @@ class PathsTest {
   }
 
   @Test
+  void minuteSegment_shadowVariantInsertsShadowInfix() {
+    Path base = Path.of("/data/cryptopanner/segments");
+    Instant t = Instant.parse("2026-06-14T14:23:47.512Z");
+    Path actual = Paths.minuteSegment(base, "btcusdt", "trade", t, true);
+    assertEquals(
+        Path.of(
+            "/data/cryptopanner/segments/btcusdt/trade/2026-06-14/minute-14-23.shadow.jsonl.zst"),
+        actual);
+  }
+
+  @Test
+  void minuteSegment_shadowFalseMatchesPrimaryPath() {
+    Path base = Path.of("/data/cryptopanner/segments");
+    Instant t = Instant.parse("2026-06-14T14:23:47.512Z");
+    assertEquals(
+        Paths.minuteSegment(base, "btcusdt", "trade", t),
+        Paths.minuteSegment(base, "btcusdt", "trade", t, false));
+  }
+
+  @Test
   void hourSealed_buildsCanonicalUtcPath() {
     Path base = Path.of("/data/cryptopanner/sealed");
     Instant t = Instant.parse("2026-06-14T14:23:47.512Z");
