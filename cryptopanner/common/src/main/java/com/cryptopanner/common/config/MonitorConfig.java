@@ -63,10 +63,41 @@ public record MonitorConfig(
   }
 
   @JsonIgnoreProperties(ignoreUnknown = true)
-  public record Warning(String degradedPersisting, int diskDataPct, int clockSkewS) {}
+  public record Warning(
+      String degradedPersisting,
+      String uploadBacklogAge,
+      String deployStuck,
+      int restFailedPollRatePct,
+      String restFailedPollWindow,
+      int diskDataPct,
+      int clockSkewS) {
+    public Duration degradedPersistingDuration() {
+      return ConfigParse.duration(degradedPersisting);
+    }
+
+    public Duration uploadBacklogAgeDuration() {
+      return ConfigParse.duration(uploadBacklogAge);
+    }
+
+    public Duration deployStuckDuration() {
+      return ConfigParse.duration(deployStuck);
+    }
+
+    public Duration restFailedPollWindowDuration() {
+      return ConfigParse.duration(restFailedPollWindow);
+    }
+  }
 
   @JsonIgnoreProperties(ignoreUnknown = true)
-  public record Critical(String extendedWsDisconnect, int diskDataPct, int clockSkewS) {}
+  public record Critical(
+      String extendedWsDisconnect,
+      int restRateLimitPersistenceHours,
+      int diskDataPct,
+      int clockSkewS) {
+    public Duration extendedWsDisconnectDuration() {
+      return ConfigParse.duration(extendedWsDisconnect);
+    }
+  }
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record Alerting(Telegram telegram, Whatsapp whatsapp, String healthchecksUrl) {}

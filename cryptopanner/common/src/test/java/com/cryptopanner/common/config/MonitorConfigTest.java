@@ -38,13 +38,18 @@ class MonitorConfigTest {
           threshold_nodes: 3
           window:          1m
         warning:
-          degraded_persisting: 2m
-          disk_data_pct:       80
-          clock_skew_s:        1
+          degraded_persisting:       2m
+          upload_backlog_age:        30m
+          deploy_stuck:              1h
+          rest_failed_poll_rate_pct: 10
+          rest_failed_poll_window:   10m
+          disk_data_pct:             80
+          clock_skew_s:              1
         critical:
-          extended_ws_disconnect: 5m
-          disk_data_pct:          95
-          clock_skew_s:           5
+          extended_ws_disconnect:            5m
+          rest_rate_limit_persistence_hours: 2
+          disk_data_pct:                     95
+          clock_skew_s:                      5
 
       alerting:
         telegram:
@@ -90,5 +95,18 @@ class MonitorConfigTest {
     assertEquals(80, cfg.alert().warning().diskDataPct());
     assertEquals(95, cfg.alert().critical().diskDataPct());
     assertEquals("02:00", cfg.deadMan().selfTestTimeUtc());
+  }
+
+  @Test
+  void loadsExtendedWarningCriticalThresholds(@TempDir Path dir) throws Exception {
+    MonitorConfig cfg = load(dir);
+    MonitorConfig.Warning w = cfg.alert().warning();
+    assertEquals(java.time.Duration.ofMinutes(30), w.uploadBacklogAgeDuration());
+    assertEquals(java.time.Duration.ofHours(1), w.deployStuckDuration());
+    assertEquals(10, w.restFailedPollRatePct());
+    assertEquals(java.time.Duration.ofMinutes(10), w.restFailedPollWindowDuration());
+
+    MonitorConfig.Critical c = cfg.alert().critical();
+    assertEquals(2, c.restRateLimitPersistenceHours());
   }
 }
