@@ -102,6 +102,7 @@ public record NodeConfig(
       String sealGraceWindow,
       String connectionMaxAge,
       String rotationWindow,
+      String frameBufferWindow,
       Rest rest) {
 
     public Duration sealGraceWindowDuration() {
@@ -308,6 +309,11 @@ public record NodeConfig(
     return (int) collector.sealGraceWindowDuration().toSeconds();
   }
 
+  public int frameBufferSeconds() {
+    if (collector == null || collector.frameBufferWindow() == null) return 5; // default 5s
+    return (int) ConfigParse.duration(collector.frameBufferWindow()).toSeconds();
+  }
+
   public int healthPort() {
     return dev == null ? 0 : dev.healthPort();
   }
@@ -354,6 +360,10 @@ public record NodeConfig(
       if (collector.rotationWindow() != null) {
         parseKeyed(
             "collector.rotation_window", collector.rotationWindow(), ConfigParse::hourWindow);
+      }
+      if (collector.frameBufferWindow() != null) {
+        parseKeyed(
+            "collector.frame_buffer_window", collector.frameBufferWindow(), ConfigParse::duration);
       }
     }
     if (sealer != null && sealer.hourGraceWindow() != null) {
