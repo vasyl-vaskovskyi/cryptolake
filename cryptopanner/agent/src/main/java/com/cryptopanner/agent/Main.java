@@ -1,6 +1,7 @@
 package com.cryptopanner.agent;
 
 import com.cryptopanner.common.Heartbeat;
+import com.cryptopanner.common.RotationTrigger;
 import com.cryptopanner.common.SlotManager;
 import com.cryptopanner.common.config.NodeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +45,7 @@ public final class Main {
 
     SlotManager slots = new SlotManager(cfg.paths().deploy().resolve("active-slot"));
     StatusBuilder statusBuilder = new StatusBuilder(mapper, cfg.nodeId(), degraded, stuck);
+    Path rotationTriggerFile = cfg.paths().deploy().resolve("rotation-trigger");
 
     Path agentHeartbeat = Path.of("/tmp/cryptopanner-agent.heartbeat");
 
@@ -55,10 +57,15 @@ public final class Main {
             () -> metrics(agentHeartbeat),
             component -> Systemctl.restart(Systemctl.unit(component)),
             () -> {
-              // Operator-triggered rotation (§5.4) signals the active collector; wired once the
-              // WsConnectionManager exposes a trigger channel. For now report not-yet-available.
-              System.err.println("[agent] /rotation/trigger not yet wired to the collector");
-              return false;
+              // Operator-triggered rotation (§5.4): drop a trigger file the active collector
+              // consumes on its next per-minute tick and runs rotate(OPERATOR_TRIGGERED).
+              try {
+                RotationTrigger.request(rotationTriggerFile, "OPERATOR_TRIGGERED");
+                return true;
+              } catch (Exception e) {
+                System.err.println("[agent] /rotation/trigger write failed: " + e.getMessage());
+                return false;
+              }
             });
 
     ScheduledExecutorService ticker = Executors.newSingleThreadScheduledExecutor();

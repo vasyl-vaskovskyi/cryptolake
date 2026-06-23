@@ -3,6 +3,7 @@ package com.cryptopanner.collector;
 import com.cryptopanner.common.EnvelopeCodec;
 import com.cryptopanner.common.HealthServer;
 import com.cryptopanner.common.RestPoller;
+import com.cryptopanner.common.RotationTrigger;
 import com.cryptopanner.common.StreamRouting;
 import com.cryptopanner.common.config.NodeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,6 +31,16 @@ public final class Main {
 
   // On-disk stream for depth snapshots (periodic baseline poll + on-demand resync, §7.b.1).
   private static final String DEPTH_SNAPSHOT_STREAM = "depthSnapshot";
+
+  // Distinct User-Agent for the rotation shadow connection (§5.2 step 1).
+  private static final String SHADOW_USER_AGENT = "cryptopanner/0.1.0+shadow";
+
+  /**
+   * Production runs until SIGTERM (no dev overlay → maxRuntime 0); a positive value smoke-tests.
+   */
+  static boolean runsUntilSignal(long maxRuntimeSeconds) {
+    return maxRuntimeSeconds <= 0;
+  }
 
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
@@ -208,6 +219,89 @@ public final class Main {
             ? cfg.collector().rotationWindowParsed()
             : com.cryptopanner.common.config.ConfigParse.hourWindow("HH:10-HH:50");
 
+    // ── WS-rotation conductor (§5.2). The shadow opener mirrors the primary's routed sockets and
+    // captured (symbol,stream) set; the primary-drop signals and primary-close are derived from the
+    // live primary clients. rotate() blocks for minutes, so it runs on its own single-thread
+    // executor and the manager's in-progress guard rejects overlapping attempts. The live two-
+    // connection overlap itself is soak-validated (§14.e).
+    List<LiveShadowSession.SocketSpec> shadowSockets = new ArrayList<>();
+    if (publicSubs != null) {
+      shadowSockets.add(
+          new LiveShadowSession.SocketSpec(URI.create(cfg.wsPublicEndpointUrl()), publicSubs));
+    }
+    if (marketSubs != null) {
+      shadowSockets.add(
+          new LiveShadowSession.SocketSpec(URI.create(cfg.wsMarketEndpointUrl()), marketSubs));
+    }
+    List<LiveShadowSession.WriterSpec> shadowSpecs = new ArrayList<>();
+    for (NodeConfig.Subscription s : cfg.subscriptions()) {
+      shadowSpecs.add(new LiveShadowSession.WriterSpec(s.symbol(), s.stream()));
+    }
+    if (cfg.broadcasts().contains(FrameRouter.FORCE_ORDER_BROADCAST)) {
+      for (String symbol : cfg.symbols()) {
+        shadowSpecs.add(new LiveShadowSession.WriterSpec(symbol, FrameRouter.FORCE_ORDER_STREAM));
+      }
+    }
+    java.util.function.BooleanSupplier primaryDropped =
+        () -> clients.stream().anyMatch(c -> c.currentConnectionAge().isEmpty());
+    java.util.function.BooleanSupplier bothDropped =
+        () ->
+            !clients.isEmpty()
+                && clients.stream().allMatch(c -> c.currentConnectionAge().isEmpty());
+    java.util.function.Supplier<ShadowSession> shadowOpener =
+        () -> {
+          try {
+            return new LiveShadowSession(
+                shadowSockets,
+                shadowSpecs,
+                cfg.paths().segments(),
+                sealGrace,
+                mapper,
+                SHADOW_USER_AGENT,
+                Duration.ofSeconds(30),
+                primaryDropped,
+                bothDropped,
+                () -> clients.forEach(BinanceWsClient::stop));
+          } catch (Exception e) {
+            System.err.println("[collector] shadow open failed: " + e.getMessage());
+            return null;
+          }
+        };
+    Path fsHeavyLock =
+        cfg.paths().fsHeavyLock() != null
+            ? cfg.paths().fsHeavyLock()
+            : cfg.paths().segments().resolveSibling(".fs-heavy.lock");
+    Path deployDir =
+        cfg.paths().deploy() != null
+            ? cfg.paths().deploy()
+            : cfg.paths().segments().resolveSibling("deploy");
+    Path rotationsLog = deployDir.resolve("rotations.jsonl");
+    Path rotationTriggerFile = deployDir.resolve("rotation-trigger");
+    java.util.function.Supplier<java.util.Optional<Duration>> connectionAge =
+        () ->
+            clients.stream()
+                .map(BinanceWsClient::currentConnectionAge)
+                .filter(java.util.Optional::isPresent)
+                .map(java.util.Optional::get)
+                .max(java.util.Comparator.naturalOrder());
+    WsConnectionManager rotationManager =
+        new WsConnectionManager(
+            shadowOpener,
+            mapper,
+            fsHeavyLock,
+            rotationsLog,
+            connectionAge,
+            () -> "rot-" + java.util.UUID.randomUUID(),
+            Instant::now,
+            WsConnectionManager.Config.defaults("collector:" + cfg.nodeId()));
+    ExecutorService rotationExec =
+        Executors.newSingleThreadExecutor(
+            r -> {
+              Thread t = new Thread(r, "collector-rotation");
+              t.setDaemon(true);
+              return t;
+            });
+
     ScheduledExecutorService ticker =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -235,15 +329,19 @@ public final class Main {
               c.forceReconnect();
             }
           }
-          // Once per minute, evaluate the WS-rotation decision against the oldest connection
-          // (§5.1).
+          // Once per minute: (a) honor any operator-forced rotation trigger from the Node Agent
+          // (§5.4); (b) evaluate the scheduled/emergency rotation decision against the oldest live
+          // connection (§5.1). Both dispatch the (blocking) cutover onto the rotation executor; the
+          // manager's in-progress guard makes a second dispatch a no-op.
           if (now.atOffset(java.time.ZoneOffset.UTC).getSecond() == 0) {
-            java.util.Optional<Duration> oldest =
-                clients.stream()
-                    .map(BinanceWsClient::currentConnectionAge)
-                    .filter(java.util.Optional::isPresent)
-                    .map(java.util.Optional::get)
-                    .max(java.util.Comparator.naturalOrder());
+            try {
+              RotationTrigger.consume(rotationTriggerFile)
+                  .ifPresent(
+                      reason -> rotationExec.submit(() -> safeRotate(rotationManager, reason)));
+            } catch (IOException e) {
+              System.err.println("[collector] rotation-trigger read failed: " + e.getMessage());
+            }
+            java.util.Optional<Duration> oldest = connectionAge.get();
             if (oldest.isPresent()) {
               int minuteOfHour = now.atOffset(java.time.ZoneOffset.UTC).getMinute();
               RotationScheduler.Decision d =
@@ -255,7 +353,8 @@ public final class Main {
                         + d
                         + " due (connection age "
                         + oldest.get().toHours()
-                        + "h); cutover via WsConnectionManager");
+                        + "h); dispatching cutover");
+                rotationExec.submit(() -> safeRotate(rotationManager, d.name()));
               }
             }
           }
@@ -321,6 +420,7 @@ public final class Main {
                   + " unparseable)");
           scheduler.close();
           ticker.shutdownNow();
+          rotationExec.shutdownNow();
           if (resyncExec != null) {
             resyncExec.shutdownNow();
           }
@@ -342,8 +442,28 @@ public final class Main {
 
     Runtime.getRuntime().addShutdownHook(new Thread(closeAll, "collector-shutdown"));
 
-    Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
-    closeAll.run();
+    if (runsUntilSignal(cfg.collectorMaxRuntimeS())) {
+      System.out.println("[collector] running until SIGTERM");
+      new java.util.concurrent.CountDownLatch(1).await(); // released by JVM exit; hook seals
+    } else {
+      Thread.sleep(cfg.collectorMaxRuntimeS() * 1000L);
+      closeAll.run();
+    }
+  }
+
+  /** Runs one rotation attempt off the ticker thread and logs the outcome. */
+  private static void safeRotate(WsConnectionManager manager, String reason) {
+    try {
+      WsConnectionManager.RotateOutcome out = manager.rotate(reason);
+      System.out.println(
+          "[collector] rotation "
+              + reason
+              + " → "
+              + out.status()
+              + (out.verifyResult() != null ? " (" + out.verifyResult() + ")" : ""));
+    } catch (Exception e) {
+      System.err.println("[collector] rotation " + reason + " failed: " + e.getMessage());
+    }
   }
 
   /**
