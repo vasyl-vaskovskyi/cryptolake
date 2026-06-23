@@ -54,4 +54,21 @@ public final class Snapshots {
       throw new RuntimeException(ex);
     }
   }
+
+  /** A snapshot with a rotation in progress (rotation.state = {@code rotationState}). */
+  public static StatusSnapshot statusWithDeployRotation(String node, String rotationState) {
+    String json =
+        "{\"node\":\""
+            + node
+            + "\",\"components\":{\"cryptopanner-collector@a\":{\"state\":\"running\",\"pid\":5,\"heartbeat_age_s\":1.0,\"uptime_s\":10}},"
+            + "\"active_slot\":\"a\",\"fs_heavy_lock\":{\"held_by\":null},\"deploy\":{\"state\":\"IDLE\"},"
+            + "\"rotation\":{\"state\":\""
+            + rotationState
+            + "\",\"current_connection_age_s\":100},\"vps\":{\"disk\":{\"/data\":{\"percent\":50.0,\"free_bytes\":1}}}}";
+    try {
+      return StatusSnapshot.parse(json, MAPPER);
+    } catch (Exception ex) {
+      throw new RuntimeException(ex);
+    }
+  }
 }
