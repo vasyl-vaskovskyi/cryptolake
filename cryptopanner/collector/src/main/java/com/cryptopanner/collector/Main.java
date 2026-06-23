@@ -55,6 +55,11 @@ public final class Main {
     return Path.of("/tmp/cryptopanner-collector@" + slot + ".heartbeat");
   }
 
+  /** Per-slot rotation-status path (§11.c) — published here, read by the Node Agent for /status. */
+  static Path rotationStatusFile(String slot) {
+    return Path.of("/tmp/cryptopanner-collector@" + slot + ".rotation.json");
+  }
+
   /**
    * OpenMetrics text for {@code /metrics} (§11.c), including the spec-named rotation + age series.
    */
@@ -410,8 +415,9 @@ public final class Main {
               return t;
             });
 
-    // Per-slot heartbeat the Node Agent reads to derive component liveness (§11.b).
-    Path heartbeatFile = heartbeatFile(resolveSlot(System.getenv("CRYPTOPANNER_SLOT")));
+    // Per-slot heartbeat + rotation-status the Node Agent reads (§11.b / §11.c).
+    Path heartbeatFile = heartbeatFile(slot);
+    Path rotationStatusFile = rotationStatusFile(slot);
 
     ScheduledExecutorService ticker =
         Executors.newSingleThreadScheduledExecutor(
@@ -428,6 +434,22 @@ public final class Main {
             com.cryptopanner.common.Heartbeat.touch(heartbeatFile); // §11.b liveness, every tick
           } catch (IOException e) {
             System.err.println("[collector] heartbeat touch failed: " + e.getMessage());
+          }
+          try {
+            // Publish rotation state + connection age for the Node Agent's /status (§11.c).
+            long ageS = connectionAge.get().map(Duration::toSeconds).orElse(0L);
+            String ph = rotationManager.currentPhase();
+            boolean idle = "IDLE".equals(ph);
+            com.cryptopanner.common.RotationStatus.write(
+                rotationStatusFile,
+                mapper,
+                new com.cryptopanner.common.RotationStatus(
+                    ph,
+                    ageS,
+                    idle ? null : rotationManager.activeRotationId(),
+                    idle ? null : ageS));
+          } catch (IOException e) {
+            System.err.println("[collector] rotation-status write failed: " + e.getMessage());
           }
           for (MinuteSegmentWriter w : writers.values()) {
             try {

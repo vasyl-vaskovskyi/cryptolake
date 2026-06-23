@@ -37,6 +37,13 @@ class MainTest {
   }
 
   @Test
+  void rotationStatusFileMatchesThePerSlotPathTheAgentReads() {
+    assertEquals(
+        java.nio.file.Path.of("/tmp/cryptopanner-collector@a.rotation.json"),
+        Main.rotationStatusFile("a"));
+  }
+
+  @Test
   void metricsTextIncludesTheSpecNamedRotationAndConnectionAgeMetrics() {
     String m = Main.metricsText(100, 0, 2, 1, 0, 5, 76800);
     // §11.c requires these two by name, in addition to the existing capture counters.

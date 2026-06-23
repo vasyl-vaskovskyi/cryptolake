@@ -48,4 +48,37 @@ class StatusBuilderTest {
         comps.get("cryptopanner-uploader").get("heartbeat_age_s").isNull(),
         "a down/no-heartbeat component reports null age");
   }
+
+  @Test
+  void includesRotationObjectFromTheActiveSlotsPublishedStatus(@TempDir Path dir) throws Exception {
+    Path hb = dir.resolve("c.heartbeat");
+    Heartbeat.touch(hb);
+
+    String json =
+        builder.build(
+            List.of(new StatusBuilder.Component("cryptopanner-collector@a", hb, true)),
+            SlotManager.Slot.A,
+            Instant.now(),
+            java.util.Optional.of(
+                new com.cryptopanner.common.RotationStatus(
+                    "OVERLAP_VERIFYING", 82800, "rot-7", 82800L)));
+
+    JsonNode rotation = mapper.readTree(json).get("rotation");
+    assertEquals("OVERLAP_VERIFYING", rotation.get("state").asText(), "§11.c rotation.state");
+    assertEquals(82800, rotation.get("current_connection_age_s").asLong());
+    assertEquals("rot-7", rotation.get("rotation_id").asText());
+  }
+
+  @Test
+  void rotationDefaultsToIdleWhenNoStatusPublished(@TempDir Path dir) throws Exception {
+    Path hb = dir.resolve("c.heartbeat");
+    Heartbeat.touch(hb);
+    String json =
+        builder.build(
+            List.of(new StatusBuilder.Component("cryptopanner-collector@a", hb, true)),
+            SlotManager.Slot.A,
+            Instant.now(),
+            java.util.Optional.empty());
+    assertEquals("IDLE", mapper.readTree(json).get("rotation").get("state").asText());
+  }
 }

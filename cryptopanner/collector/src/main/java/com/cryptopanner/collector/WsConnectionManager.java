@@ -72,6 +72,10 @@ public final class WsConnectionManager {
   private final AtomicBoolean inProgress = new AtomicBoolean(false);
   // Optional structured logger for §11.e rotation events. Null in unit tests that don't observe it.
   private com.cryptopanner.common.StructuredLog log;
+  // Published rotation phase for /status.rotation (§11.c): IDLE | OVERLAP_VERIFYING |
+  // CUTOVER_PENDING.
+  private volatile String phase = "IDLE";
+  private volatile String activeRotationId;
 
   public WsConnectionManager(
       Supplier<ShadowSession> shadowOpener,
@@ -98,6 +102,16 @@ public final class WsConnectionManager {
   public WsConnectionManager withLog(com.cryptopanner.common.StructuredLog log) {
     this.log = log;
     return this;
+  }
+
+  /** Current rotation phase for {@code /status.rotation} (§11.c). */
+  public String currentPhase() {
+    return phase;
+  }
+
+  /** The in-flight rotation id, or null when idle. */
+  public String activeRotationId() {
+    return activeRotationId;
   }
 
   private void event(String level, String evt, java.util.Map<String, ?> fields) {
@@ -128,11 +142,14 @@ public final class WsConnectionManager {
       }
       return runOverlap(reason, session);
     } finally {
+      phase = "IDLE";
+      activeRotationId = null;
       inProgress.set(false);
     }
   }
 
   private RotateOutcome runOverlap(String reason, ShadowSession session) throws IOException {
+    phase = "OVERLAP_VERIFYING";
     event("INFO", "rotation_started", java.util.Map.of("reason", reason));
     int fails = 0;
     while (true) {
@@ -180,6 +197,8 @@ public final class WsConnectionManager {
       String reason, String verifyResult, ShadowSession session, OverlapMinute minute)
       throws IOException {
     String rotationId = rotationIdGen.get();
+    activeRotationId = rotationId;
+    phase = "CUTOVER_PENDING";
     try (FsHeavyLock ignored =
         FsHeavyLock.acquire(fsHeavyLock, config.lockHolder(), config.lockTimeout())) {
       for (SegmentPair pair : minute.pairs()) {

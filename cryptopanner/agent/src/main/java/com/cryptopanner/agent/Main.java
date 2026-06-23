@@ -53,7 +53,7 @@ public final class Main {
         new AgentServer(
             port,
             new BearerAuth(token),
-            () -> status(statusBuilder, slots),
+            () -> status(statusBuilder, slots, mapper),
             () -> metrics(agentHeartbeat),
             component -> Systemctl.restart(Systemctl.unit(component)),
             () -> {
@@ -92,7 +92,7 @@ public final class Main {
                 "agent-shutdown"));
   }
 
-  private static String status(StatusBuilder builder, SlotManager slots) {
+  private static String status(StatusBuilder builder, SlotManager slots, ObjectMapper mapper) {
     try {
       SlotManager.Slot active = slots.active();
       List<StatusBuilder.Component> components =
@@ -102,7 +102,11 @@ public final class Main {
               component("cryptopanner-sealer"),
               component("cryptopanner-uploader"),
               component("cryptopanner-agent"));
-      return builder.build(components, active, Instant.now());
+      // Rotation state comes from the active Collector slot's published status file (§11.c).
+      var rotation =
+          com.cryptopanner.common.RotationStatus.read(
+              Path.of("/tmp/cryptopanner-collector@" + active.token() + ".rotation.json"), mapper);
+      return builder.build(components, active, Instant.now(), rotation);
     } catch (Exception e) {
       return "{\"error\":\"" + e.getMessage() + "\"}";
     }
