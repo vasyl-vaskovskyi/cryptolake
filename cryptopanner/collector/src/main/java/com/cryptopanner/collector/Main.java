@@ -42,6 +42,53 @@ public final class Main {
     return maxRuntimeSeconds <= 0;
   }
 
+  /**
+   * This collector's deploy slot from {@code CRYPTOPANNER_SLOT} (systemd {@code @a}/{@code @b}).
+   */
+  static String resolveSlot(String envSlot) {
+    return envSlot == null || envSlot.isBlank() ? "a" : envSlot.trim();
+  }
+
+  /** Per-slot heartbeat path (§11.b) — the exact path the Node Agent's StatusBuilder reads. */
+  static Path heartbeatFile(String slot) {
+    return Path.of("/tmp/cryptopanner-collector@" + slot + ".heartbeat");
+  }
+
+  /**
+   * OpenMetrics text for {@code /metrics} (§11.c), including the spec-named rotation + age series.
+   */
+  static String metricsText(
+      long framesWritten,
+      long unparseable,
+      long late,
+      long depthResyncs,
+      long binaryUnexpected,
+      long rotationEvents,
+      long connectionAgeSeconds) {
+    return "# TYPE cryptopanner_frames_written_total counter\n"
+        + "cryptopanner_frames_written_total "
+        + framesWritten
+        + "\n# TYPE cryptopanner_unparseable_frames_total counter\n"
+        + "cryptopanner_unparseable_frames_total "
+        + unparseable
+        + "\n# TYPE cryptopanner_late_frames_total counter\n"
+        + "cryptopanner_late_frames_total "
+        + late
+        + "\n# TYPE cryptopanner_depth_resyncs_total counter\n"
+        + "cryptopanner_depth_resyncs_total "
+        + depthResyncs
+        + "\n# TYPE cryptopanner_ws_binary_frame_unexpected_total counter\n"
+        + "cryptopanner_ws_binary_frame_unexpected_total "
+        + binaryUnexpected
+        + "\n# TYPE cryptopanner_rotation_events_total counter\n"
+        + "cryptopanner_rotation_events_total "
+        + rotationEvents
+        + "\n# TYPE cryptopanner_current_connection_age_seconds gauge\n"
+        + "cryptopanner_current_connection_age_seconds "
+        + connectionAgeSeconds
+        + "\n";
+  }
+
   public static void main(String[] args) throws Exception {
     Path configPath = Path.of(System.getProperty("config", "/etc/cryptopanner/config.yaml"));
     NodeConfig cfg = NodeConfig.load(configPath);
@@ -320,6 +367,8 @@ public final class Main {
             () -> "rot-" + java.util.UUID.randomUUID(),
             Instant::now,
             WsConnectionManager.Config.defaults("collector:" + cfg.nodeId()));
+    java.util.concurrent.atomic.AtomicLong rotationEventsTotal =
+        new java.util.concurrent.atomic.AtomicLong();
     ExecutorService rotationExec =
         Executors.newSingleThreadExecutor(
             r -> {
@@ -327,6 +376,9 @@ public final class Main {
               t.setDaemon(true);
               return t;
             });
+
+    // Per-slot heartbeat the Node Agent reads to derive component liveness (§11.b).
+    Path heartbeatFile = heartbeatFile(resolveSlot(System.getenv("CRYPTOPANNER_SLOT")));
 
     ScheduledExecutorService ticker =
         Executors.newSingleThreadScheduledExecutor(
@@ -339,6 +391,11 @@ public final class Main {
         () -> {
           Instant now = Instant.now();
           long monoNanos = System.nanoTime();
+          try {
+            com.cryptopanner.common.Heartbeat.touch(heartbeatFile); // §11.b liveness, every tick
+          } catch (IOException e) {
+            System.err.println("[collector] heartbeat touch failed: " + e.getMessage());
+          }
           for (MinuteSegmentWriter w : writers.values()) {
             try {
               w.sealElapsed(now, monoNanos);
@@ -363,7 +420,9 @@ public final class Main {
             try {
               RotationTrigger.consume(rotationTriggerFile)
                   .ifPresent(
-                      reason -> rotationExec.submit(() -> safeRotate(rotationManager, reason)));
+                      reason ->
+                          rotationExec.submit(
+                              () -> safeRotate(rotationManager, reason, rotationEventsTotal)));
             } catch (IOException e) {
               System.err.println("[collector] rotation-trigger read failed: " + e.getMessage());
             }
@@ -380,7 +439,8 @@ public final class Main {
                         + " due (connection age "
                         + oldest.get().toHours()
                         + "h); dispatching cutover");
-                rotationExec.submit(() -> safeRotate(rotationManager, d.name()));
+                rotationExec.submit(
+                    () -> safeRotate(rotationManager, d.name(), rotationEventsTotal));
               }
             }
           }
@@ -402,25 +462,18 @@ public final class Main {
                 }
                 long resyncs = depthResync != null ? depthResync.resyncs() : 0;
                 long binaryUnexpected = 0;
-                for (BinanceWsClient c : clients) {
+                for (BinanceWsClient c : activeClients.get()) {
                   binaryUnexpected += c.binaryFramesUnexpected();
                 }
-                return "# TYPE cryptopanner_frames_written_total counter\n"
-                    + "cryptopanner_frames_written_total "
-                    + router.framesWritten()
-                    + "\n# TYPE cryptopanner_unparseable_frames_total counter\n"
-                    + "cryptopanner_unparseable_frames_total "
-                    + router.unparseableFrames()
-                    + "\n# TYPE cryptopanner_late_frames_total counter\n"
-                    + "cryptopanner_late_frames_total "
-                    + late
-                    + "\n# TYPE cryptopanner_depth_resyncs_total counter\n"
-                    + "cryptopanner_depth_resyncs_total "
-                    + resyncs
-                    + "\n# TYPE cryptopanner_ws_binary_frame_unexpected_total counter\n"
-                    + "cryptopanner_ws_binary_frame_unexpected_total "
-                    + binaryUnexpected
-                    + "\n";
+                long ageSeconds = connectionAge.get().map(Duration::toSeconds).orElse(0L);
+                return metricsText(
+                    router.framesWritten(),
+                    router.unparseableFrames(),
+                    late,
+                    resyncs,
+                    binaryUnexpected,
+                    rotationEventsTotal.get(),
+                    ageSeconds);
               });
       System.out.println("[collector] health endpoint on :" + cfg.healthPort());
     }
@@ -483,10 +536,16 @@ public final class Main {
     }
   }
 
-  /** Runs one rotation attempt off the ticker thread and logs the outcome. */
-  private static void safeRotate(WsConnectionManager manager, String reason) {
+  /**
+   * Runs one rotation attempt off the ticker thread, counts completed rotations, logs the outcome.
+   */
+  private static void safeRotate(
+      WsConnectionManager manager, String reason, java.util.concurrent.atomic.AtomicLong events) {
     try {
       WsConnectionManager.RotateOutcome out = manager.rotate(reason);
+      if (out.status() == WsConnectionManager.Status.COMPLETED) {
+        events.incrementAndGet(); // §11.c cryptopanner_rotation_events_total
+      }
       System.out.println(
           "[collector] rotation "
               + reason
