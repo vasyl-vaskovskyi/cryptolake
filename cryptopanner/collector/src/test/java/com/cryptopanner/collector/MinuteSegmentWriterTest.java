@@ -109,6 +109,36 @@ class MinuteSegmentWriterTest {
   }
 
   @Test
+  void promoteFlipsFutureMinutesFromShadowToPrimaryNaming(@TempDir Path base) throws IOException {
+    long graceNanos = GRACE.toNanos();
+    try (MinuteSegmentWriter w =
+        new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE, /* shadow= */ true)) {
+      // Overlap minute 23 seals as a .shadow segment (the cutover merges it).
+      w.accept("o\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));
+      w.accept("n\n".getBytes(), Instant.parse("2026-06-14T14:24:01Z")); // minute 24 now the max
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), 0L);
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), graceNanos);
+
+      // After cutover the shadow becomes primary: subsequent minutes write primary-named files.
+      w.promote();
+      w.accept(
+          "p\n".getBytes(), Instant.parse("2026-06-14T14:25:01Z")); // minute 25 → make 24 max-1
+      w.sealElapsed(Instant.parse("2026-06-14T14:25:01Z"), 0L);
+      w.sealElapsed(Instant.parse("2026-06-14T14:25:01Z"), graceNanos);
+    }
+    String day = "btcusdt/trade/2026-06-14/";
+    assertTrue(
+        Files.exists(base.resolve(day + "minute-14-23.shadow.jsonl.zst")),
+        "the overlap minute stays a shadow segment");
+    assertTrue(
+        Files.exists(base.resolve(day + "minute-14-24.jsonl.zst")),
+        "post-promote minutes are primary-named");
+    assertFalse(
+        Files.exists(base.resolve(day + "minute-14-24.shadow.jsonl.zst")),
+        "post-promote minutes carry no .shadow infix");
+  }
+
+  @Test
   void acceptAfterCloseIsANoOpNotAnError(@TempDir Path base) throws IOException {
     MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));

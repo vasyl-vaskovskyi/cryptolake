@@ -44,8 +44,8 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   private final Duration sealGrace;
   // When true, sealed minutes carry the `.shadow` infix (design doc §5.3): an overlap-minute
   // segment written by a rotation/deploy shadow connection, kept separate from the primary until
-  // the cutover merge.
-  private final boolean shadow;
+  // the cutover merge. Flipped to false by {@link #promote()} once the shadow becomes the primary.
+  private boolean shadow;
 
   // Open minute buckets keyed by minute key (sorted), so the latest minute is always lastKey().
   private final TreeMap<String, Bucket> open = new TreeMap<>();
@@ -138,6 +138,15 @@ public final class MinuteSegmentWriter implements AutoCloseable {
       seal(e.getKey(), e.getValue().buffer);
     }
     open.clear();
+  }
+
+  /**
+   * Promotes this writer from shadow to primary naming (design doc §5.2 step 5): minutes sealed
+   * after this call write primary-named {@code .jsonl.zst} files. Already-sealed {@code .shadow}
+   * segments are untouched (the cutover merges them). No-op on a non-shadow writer.
+   */
+  public synchronized void promote() {
+    shadow = false;
   }
 
   /** Count of frames whose event-minute was already sealed on arrival (kept, never discarded). */
