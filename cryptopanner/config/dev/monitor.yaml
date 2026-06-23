@@ -1,0 +1,49 @@
+# Dev Monitor config (master spec §15.c). Used by the docker-compose `cryptopanner-monitor`
+# service; mounted at /etc/cryptopanner-monitor/monitor.yaml. Production omits dev endpoints and
+# populates the webhook/healthcheck URLs via CRYPTOPANNER_* env overrides (§15.d).
+nodes:
+  - id:         dev-node
+    endpoint:   cryptopanner-agent:9100
+    token_file: /etc/cryptopanner-monitor/tokens/dev-node
+
+scrape_interval_s: 5                                                  # §11.c
+
+dashboard:
+  listen_address:     0.0.0.0:9200
+  refresh_interval_s: 5                                               # §11.d
+
+restart:                                                             # §13.b
+  backoff: [5s, 15s, 60s, 300s]
+  circuit_breaker:
+    failure_count: 3
+    window:        5m
+
+alert:                                                              # §13.a, §13.e
+  dedup_ttl: 1h
+  correlation:
+    threshold_nodes: 3
+    window:          1m
+  warning:
+    degraded_persisting:       2m
+    upload_backlog_age:        30m
+    deploy_stuck:              1h
+    rest_failed_poll_rate_pct: 10
+    rest_failed_poll_window:   10m
+    disk_data_pct:             80
+    clock_skew_s:              1
+  critical:
+    extended_ws_disconnect:            5m
+    rest_rate_limit_persistence_hours: 2
+    disk_data_pct:                     95
+    clock_skew_s:                      5
+
+alerting:
+  telegram:
+    webhook_url: ""                                                  # populate via CRYPTOPANNER_MONITOR_ALERTING_TELEGRAM_WEBHOOK_URL
+  whatsapp:
+    webhook_url: ""                                                  # optional secondary (§13.a)
+  healthchecks_url: "http://mock-healthchecks:9003/ping/dev"         # §13.c (dev: mock-healthchecks)
+
+dead_man:                                                           # §13.c
+  healthchecks_push_interval: 60s
+  self_test_time_utc:         "02:00"
