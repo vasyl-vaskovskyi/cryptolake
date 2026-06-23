@@ -46,6 +46,8 @@ public final class Main {
     SlotManager slots = new SlotManager(cfg.paths().deploy().resolve("active-slot"));
     StatusBuilder statusBuilder = new StatusBuilder(mapper, cfg.nodeId(), degraded, stuck);
     Path rotationTriggerFile = cfg.paths().deploy().resolve("rotation-trigger");
+    // §14.j test mode: no systemd in dev/docker → derive liveness from heartbeats (finding #3).
+    boolean noSystemd = truthy(System.getenv("CRYPTOPANNER_AGENT_NO_SYSTEMD"));
 
     Path agentHeartbeat = Path.of("/tmp/cryptopanner-agent.heartbeat");
 
@@ -53,7 +55,7 @@ public final class Main {
         new AgentServer(
             port,
             new BearerAuth(token),
-            () -> status(statusBuilder, slots, mapper),
+            () -> status(statusBuilder, slots, mapper, stuck, noSystemd),
             () -> metrics(agentHeartbeat),
             component -> Systemctl.restart(Systemctl.unit(component)),
             () -> {
@@ -92,37 +94,62 @@ public final class Main {
                 "agent-shutdown"));
   }
 
-  private static String status(StatusBuilder builder, SlotManager slots, ObjectMapper mapper) {
+  private static String status(
+      StatusBuilder builder,
+      SlotManager slots,
+      ObjectMapper mapper,
+      Duration stuck,
+      boolean noSystemd) {
     try {
+      Instant now = Instant.now();
       SlotManager.Slot active = slots.active();
       List<StatusBuilder.Component> components =
           List.of(
-              collector(slots, "a"),
-              collector(slots, "b"),
-              component("cryptopanner-sealer"),
-              component("cryptopanner-uploader"),
-              component("cryptopanner-agent"));
+              collector(slots, "a", now, stuck, noSystemd),
+              collector(slots, "b", now, stuck, noSystemd),
+              component("cryptopanner-sealer", now, stuck, noSystemd),
+              component("cryptopanner-uploader", now, stuck, noSystemd),
+              component("cryptopanner-agent", now, stuck, noSystemd));
       // Rotation state comes from the active Collector slot's published status file (§11.c).
       var rotation =
           com.cryptopanner.common.RotationStatus.read(
               Path.of("/tmp/cryptopanner-collector@" + active.token() + ".rotation.json"), mapper);
-      return builder.build(components, active, Instant.now(), rotation);
+      return builder.build(components, active, now, rotation);
     } catch (Exception e) {
       return "{\"error\":\"" + e.getMessage() + "\"}";
     }
   }
 
-  private static StatusBuilder.Component collector(SlotManager slots, String slot) {
+  private static StatusBuilder.Component collector(
+      SlotManager slots, String slot, Instant now, Duration stuck, boolean noSystemd) {
     String unit = "cryptopanner-collector@" + slot;
+    Path heartbeat = Path.of("/tmp/cryptopanner-collector@" + slot + ".heartbeat");
     return new StatusBuilder.Component(
-        unit,
-        Path.of("/tmp/cryptopanner-collector@" + slot + ".heartbeat"),
-        Systemctl.isActive(unit + ".service"));
+        unit, heartbeat, active(unit + ".service", heartbeat, now, stuck, noSystemd));
   }
 
-  private static StatusBuilder.Component component(String name) {
+  private static StatusBuilder.Component component(
+      String name, Instant now, Duration stuck, boolean noSystemd) {
+    Path heartbeat = Path.of("/tmp/" + name + ".heartbeat");
     return new StatusBuilder.Component(
-        name, Path.of("/tmp/" + name + ".heartbeat"), Systemctl.isActive(name + ".service"));
+        name, heartbeat, active(name + ".service", heartbeat, now, stuck, noSystemd));
+  }
+
+  /** systemd active flag, or the heartbeat-derived flag when running without systemd (§14.j). */
+  private static boolean active(
+      String unit, Path heartbeat, Instant now, Duration stuck, boolean noSystemd) {
+    if (noSystemd) {
+      try {
+        return AgentLiveness.heartbeatActive(Heartbeat.age(heartbeat, now), stuck);
+      } catch (Exception e) {
+        return false;
+      }
+    }
+    return Systemctl.isActive(unit);
+  }
+
+  private static boolean truthy(String v) {
+    return v != null && (v.equals("1") || v.equalsIgnoreCase("true") || v.equalsIgnoreCase("yes"));
   }
 
   /** Minimal OpenMetrics: agent liveness gauge. Richer metrics (§11.c) layer on per-component. */
