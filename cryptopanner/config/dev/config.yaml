@@ -1,0 +1,92 @@
+# config/dev/config.yaml — the §15.b node config every dev service mounts
+# (collector, sealer, uploader, agent). Points at the local dev stack: MinIO on :9000 and the
+# mock-binance-ws process (WS :9001, REST :9002). The Node Agent runs in test_mode (§14.j) so it
+# derives liveness from heartbeats without systemd. Production config is generated per node and
+# omits the `dev:` overlay.
+node_id: dev-node
+
+symbols:
+  - btcusdt
+
+streams:                 # §7.a
+  per_symbol:
+    - trade
+    - aggTrade
+    - depth@100ms
+    - kline_1m
+    - ticker
+    - bookTicker
+    - markPrice@1s
+  all_symbol:
+    - "!forceOrder@arr"
+
+paths:
+  segments:      /tmp/cryptopanner-soak/segments
+  sealed:        /tmp/cryptopanner-soak/sealed
+  staging:       /tmp/cryptopanner-soak/staging
+  deploy:        /tmp/cryptopanner-soak/deploy
+  logs:          /tmp/cryptopanner-soak/logs
+  fs_heavy_lock: /tmp/cryptopanner-soak/.fs-heavy.lock
+
+storage:                 # S3 (MinIO in dev)
+  endpoint:          http://localhost:9000
+  bucket:            cryptopanner-dev
+  access_key:        cryptopanner
+  secret_key:        changeme-dev
+  region:            us-east-1
+  path_style_access: true
+
+collector:
+  ws_public_endpoint_url: ws://localhost:9001/public/stream
+  ws_market_endpoint_url: ws://localhost:9001/market/stream
+  rest_base_url:          http://localhost:9002
+  rest_connect_timeout_s: 5
+  rest_request_timeout_s: 30
+  unplanned_reconnect_backoff_max_s: 60
+  unplanned_reconnect_jitter_pct:    20
+  subscribe_ack_timeout_s: 10
+  seal_grace_window:       10s
+  connection_max_age:      23h          # scheduled rotation won't fire in a short soak; soak triggers it explicitly
+  rotation_window:         "HH:10-HH:50"
+  frame_buffer_window:     5s
+  rest:                    # §7.b
+    depth:
+      url_template:           "/fapi/v1/depth?symbol={symbol}&limit=1000"
+      baseline_poll_interval: 5m
+      on_demand_resync:       true
+    open_interest:
+      url_template:  "/fapi/v1/openInterest?symbol={symbol}"
+      poll_interval: 60s
+    exchange_info:
+      url_template:  "/fapi/v1/exchangeInfo"
+      poll_time_utc: "00:05"
+
+sealer:
+  hour_grace_window: 2m
+  backfill:
+    attempts_per_gap:  3
+    backoff:           [5s, 15s, 60s]
+    cross_merge_retry: true
+
+uploader:
+  retry_backoff_max_s: 60
+
+deploy:
+  forbidden_window:          "HH:00-HH:05"
+  recommended_window:        "HH:10-HH:50"
+  superseded_retention_days: 7
+  versions_kept:             3
+
+agent:
+  listen_address: 0.0.0.0:9100
+  token_file:     /tmp/cryptopanner-soak/agent.token
+  test_mode:      true                  # §14.j — heartbeat-derived liveness, no systemd
+  metrics_enabled: true
+  disk_mounts:    ["/"]
+  heartbeat:
+    degraded_threshold_s: 15
+    stuck_threshold_s:    60
+
+dev:                      # non-§15 overlay: standalone-runner knobs (omitted in production)
+  health_port:             8088
+  collector_max_runtime_s: 0            # 0 = run until SIGTERM (soak controls lifetime)

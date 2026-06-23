@@ -47,7 +47,10 @@ public final class Main {
     StatusBuilder statusBuilder = new StatusBuilder(mapper, cfg.nodeId(), degraded, stuck);
     Path rotationTriggerFile = cfg.paths().deploy().resolve("rotation-trigger");
     // §14.j test mode: no systemd in dev/docker → derive liveness from heartbeats (finding #3).
-    boolean noSystemd = truthy(System.getenv("CRYPTOPANNER_AGENT_NO_SYSTEMD"));
+    // Honors the config's agent.test_mode (the spec-intended knob) and an env override for compose.
+    boolean noSystemd =
+        (agentCfg != null && agentCfg.testMode())
+            || truthy(System.getenv("CRYPTOPANNER_AGENT_NO_SYSTEMD"));
 
     Path agentHeartbeat = Path.of("/tmp/cryptopanner-agent.heartbeat");
 
