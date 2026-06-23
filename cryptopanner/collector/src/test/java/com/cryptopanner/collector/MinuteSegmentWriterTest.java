@@ -139,6 +139,29 @@ class MinuteSegmentWriterTest {
   }
 
   @Test
+  void emitsStructuredMinuteSealedAndLateFrameEvents(@TempDir Path base) throws IOException {
+    java.nio.file.Path logFile = base.resolve("logs/cryptopanner-collector@a.jsonl");
+    com.cryptopanner.common.StructuredLog log =
+        new com.cryptopanner.common.StructuredLog(logFile, "cryptopanner-collector", "a");
+    long graceNanos = GRACE.toNanos();
+    try (MinuteSegmentWriter w =
+        new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE).withLog(log)) {
+      w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));
+      w.accept("b\n".getBytes(), Instant.parse("2026-06-14T14:24:01Z"));
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), 0L);
+      w.sealElapsed(Instant.parse("2026-06-14T14:24:01Z"), graceNanos); // seals minute 23
+      w.accept("late\n".getBytes(), Instant.parse("2026-06-14T14:23:30Z")); // already sealed → late
+    }
+    var lines = Files.readAllLines(logFile);
+    assertTrue(
+        lines.stream().anyMatch(l -> l.contains("\"event\":\"minute_sealed\"")),
+        "minute_sealed (§11.e) emitted on seal");
+    assertTrue(
+        lines.stream().anyMatch(l -> l.contains("\"event\":\"late_frame_after_seal\"")),
+        "late_frame_after_seal (§11.e) emitted for a post-seal straggler");
+  }
+
+  @Test
   void acceptAfterCloseIsANoOpNotAnError(@TempDir Path base) throws IOException {
     MinuteSegmentWriter w = new MinuteSegmentWriter(base, "btcusdt", "trade", GRACE);
     w.accept("a\n".getBytes(), Instant.parse("2026-06-14T14:23:10Z"));

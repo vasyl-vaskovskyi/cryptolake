@@ -70,6 +70,8 @@ public final class WsConnectionManager {
   private final Supplier<Instant> clock;
   private final Config config;
   private final AtomicBoolean inProgress = new AtomicBoolean(false);
+  // Optional structured logger for §11.e rotation events. Null in unit tests that don't observe it.
+  private com.cryptopanner.common.StructuredLog log;
 
   public WsConnectionManager(
       Supplier<ShadowSession> shadowOpener,
@@ -90,6 +92,22 @@ public final class WsConnectionManager {
     this.rotationIdGen = rotationIdGen;
     this.clock = clock;
     this.config = config;
+  }
+
+  /** Attaches a structured logger for §11.e rotation events. */
+  public WsConnectionManager withLog(com.cryptopanner.common.StructuredLog log) {
+    this.log = log;
+    return this;
+  }
+
+  private void event(String level, String evt, java.util.Map<String, ?> fields) {
+    if (log != null) {
+      if ("ERROR".equals(level)) {
+        log.error(evt, fields);
+      } else {
+        log.info(evt, fields);
+      }
+    }
   }
 
   /** Runs one rotation attempt for {@code reason} (SCHEDULED / EMERGENCY / OPERATOR_TRIGGERED). */
@@ -115,6 +133,7 @@ public final class WsConnectionManager {
   }
 
   private RotateOutcome runOverlap(String reason, ShadowSession session) throws IOException {
+    event("INFO", "rotation_started", java.util.Map.of("reason", reason));
     int fails = 0;
     while (true) {
       Optional<OverlapMinute> next = session.awaitSealedMinute();
@@ -124,6 +143,10 @@ public final class WsConnectionManager {
       }
       OverlapMinute minute = next.get();
       boolean pass = aggregateEquivalencePass(minute);
+      event(
+          pass ? "INFO" : "ERROR",
+          pass ? "rotation_verify_passed" : "rotation_verify_failed",
+          java.util.Map.of("minute", minute.minuteOfHour()));
       RotationDecider.Action action =
           RotationDecider.decideCutover(
               pass, fails, config.maxFails(), session.primaryDropped(), session.bothDropped());
@@ -173,6 +196,16 @@ public final class WsConnectionManager {
               clock.get(),
               List.of(minute.minuteOfHour()),
               verifyResult));
+      if ("FORCED".equals(verifyResult)) {
+        event(
+            "ERROR",
+            "rotation_forced_cutover",
+            java.util.Map.of("rotation_id", rotationId, "minute", minute.minuteOfHour()));
+      }
+      event(
+          "INFO",
+          "rotation_promoted",
+          java.util.Map.of("rotation_id", rotationId, "verify_result", verifyResult));
       return new RotateOutcome(Status.COMPLETED, rotationId, verifyResult, 1);
     } catch (TimeoutException lockBusy) {
       session.close();

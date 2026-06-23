@@ -161,6 +161,33 @@ class WsConnectionManagerTest {
   }
 
   @Test
+  void emitsRotationStartedAndPromotedStructuredEvents(@TempDir Path dir) throws Exception {
+    OverlapMinute minute = minuteWith(dir, "23", List.of(1L, 2L), List.of(2L, 3L));
+    FakeSession session = new FakeSession(true, List.of(Optional.of(minute)));
+    Path logFile = dir.resolve("logs/cryptopanner-collector@a.jsonl");
+    WsConnectionManager mgr =
+        manager(
+                session,
+                dir.resolve(".fs-heavy.lock"),
+                dir.resolve("rotations.jsonl"),
+                Duration.ofHours(23),
+                Instant.parse("2026-06-14T14:24:00Z"),
+                WsConnectionManager.Config.defaults("collector-a"))
+            .withLog(
+                new com.cryptopanner.common.StructuredLog(logFile, "cryptopanner-collector", "a"));
+
+    mgr.rotate("SCHEDULED");
+
+    var lines = Files.readAllLines(logFile);
+    assertTrue(
+        lines.stream().anyMatch(l -> l.contains("\"event\":\"rotation_started\"")),
+        "rotation_started (§11.e)");
+    assertTrue(
+        lines.stream().anyMatch(l -> l.contains("\"event\":\"rotation_promoted\"")),
+        "rotation_promoted (§11.e)");
+  }
+
+  @Test
   void halfOpenShadowRetriesWithoutCuttingOver(@TempDir Path dir) throws Exception {
     OverlapMinute minute = minuteWith(dir, "23", List.of(1L, 2L), List.of(2L, 3L));
     FakeSession session = new FakeSession(/* live= */ false, List.of(Optional.of(minute)));

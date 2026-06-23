@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class BinanceWsClientTest {
 
@@ -135,6 +136,24 @@ class BinanceWsClientTest {
     assertTrue(
         request.toLowerCase().contains("user-agent: cryptopanner/test+shadow"),
         "handshake should carry the shadow User-Agent, was:\n" + request);
+  }
+
+  @Test
+  void emitsStructuredWsConnectEventOnAck(@TempDir java.nio.file.Path dir) throws Exception {
+    java.nio.file.Path logFile = dir.resolve("logs/cryptopanner-collector@a.jsonl");
+    com.cryptopanner.common.StructuredLog log =
+        new com.cryptopanner.common.StructuredLog(logFile, "cryptopanner-collector", "a");
+    URI uri = URI.create("ws://127.0.0.1:" + server.port() + "/ws");
+    BinanceWsClient client =
+        new BinanceWsClient(uri, List.of("btcusdt@trade"), (raw, receivedAt) -> {}).withLog(log);
+
+    client.start(); // blocks until ACK → ws_connect
+    client.stop();
+
+    var lines = java.nio.file.Files.readAllLines(logFile);
+    assertTrue(
+        lines.stream().anyMatch(l -> l.contains("\"event\":\"ws_connect\"")),
+        "ws_connect (§11.e) emitted on SUBSCRIBE ACK, was:\n" + lines);
   }
 
   @Test

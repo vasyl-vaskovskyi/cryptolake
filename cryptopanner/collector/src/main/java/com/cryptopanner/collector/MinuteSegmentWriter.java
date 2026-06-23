@@ -46,6 +46,9 @@ public final class MinuteSegmentWriter implements AutoCloseable {
   // segment written by a rotation/deploy shadow connection, kept separate from the primary until
   // the cutover merge. Flipped to false by {@link #promote()} once the shadow becomes the primary.
   private boolean shadow;
+  // Optional structured logger for §11.e events (minute_sealed, late_frame_after_seal). Null in
+  // tests and tooling that don't observe events.
+  private com.cryptopanner.common.StructuredLog log;
 
   // Open minute buckets keyed by minute key (sorted), so the latest minute is always lastKey().
   private final TreeMap<String, Bucket> open = new TreeMap<>();
@@ -90,6 +93,17 @@ public final class MinuteSegmentWriter implements AutoCloseable {
       } else {
         // Its minute is already sealed: keep the straggler in the latest open minute, count it.
         lateFrames++;
+        if (log != null) {
+          log.warn(
+              "late_frame_after_seal",
+              Map.of(
+                  "symbol",
+                  symbol,
+                  "stream",
+                  stream,
+                  "server_event_time",
+                  bucketInstant.toString()));
+        }
         bucket = open.lastEntry().getValue();
       }
     }
@@ -149,6 +163,14 @@ public final class MinuteSegmentWriter implements AutoCloseable {
     shadow = false;
   }
 
+  /**
+   * Attaches a structured logger for {@code minute_sealed} / {@code late_frame_after_seal} (§11.e).
+   */
+  public MinuteSegmentWriter withLog(com.cryptopanner.common.StructuredLog log) {
+    this.log = log;
+    return this;
+  }
+
   /** Count of frames whose event-minute was already sealed on arrival (kept, never discarded). */
   public synchronized long lateFrames() {
     return lateFrames;
@@ -178,6 +200,19 @@ public final class MinuteSegmentWriter implements AutoCloseable {
 
     Path sidecar = dataPath.resolveSibling(dataPath.getFileName() + ".sha256");
     Sha256Sidecar.computeAndWrite(dataPath, sidecar);
+
+    if (log != null) {
+      log.info(
+          "minute_sealed",
+          Map.of(
+              "symbol", symbol,
+              "stream", stream,
+              "minute",
+                  DateTimeFormatter.ofPattern("HH-mm")
+                      .withZone(ZoneOffset.UTC)
+                      .format(minuteInstant),
+              "shadow", shadow));
+    }
   }
 
   private void advanceLastSealed(String key) {

@@ -108,6 +108,17 @@ public final class LiveShadowSession implements ShadowSession {
     ticker.scheduleAtFixedRate(this::sealTick, 1, 1, TimeUnit.SECONDS);
   }
 
+  /** Attaches a structured logger to the shadow's writers + clients for §11.e events. */
+  public LiveShadowSession withLog(com.cryptopanner.common.StructuredLog log) {
+    for (MinuteSegmentWriter w : shadowWriters.values()) {
+      w.withLog(log);
+    }
+    for (BinanceWsClient c : shadowClients) {
+      c.withLog(log);
+    }
+    return this;
+  }
+
   private void sealTick() {
     Instant now = Instant.now();
     long mono = System.nanoTime();

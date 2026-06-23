@@ -46,6 +46,9 @@ public final class BinanceWsClient {
   // AtomicInteger keeps the field JMM-safe under those three accessors.
   private final AtomicInteger attempt = new AtomicInteger(0);
 
+  // Optional structured logger for §11.e ws lifecycle events (ws_connect, ws_disconnect).
+  private volatile com.cryptopanner.common.StructuredLog log;
+
   private volatile WebSocket ws;
   private volatile boolean stopped = false;
   // Monotonic timestamp of the last inbound text message (ACK or data). Feeds the half-open
@@ -88,6 +91,12 @@ public final class BinanceWsClient {
   public void start() throws Exception {
     attempt.set(0);
     connectAndSubscribe();
+  }
+
+  /** Attaches a structured logger for {@code ws_connect} / {@code ws_disconnect} (§11.e). */
+  public BinanceWsClient withLog(com.cryptopanner.common.StructuredLog log) {
+    this.log = log;
+    return this;
   }
 
   /** Nanos since the last inbound message — the half-open watchdog's liveness signal. */
@@ -170,6 +179,12 @@ public final class BinanceWsClient {
               if (!ackSeen.isDone() && full.contains("\"result\"")) {
                 attempt.set(0); // reset backoff after successful handshake
                 connectionAckedNanos = System.nanoTime(); // connection age starts at ACK
+                if (log != null) {
+                  log.info(
+                      "ws_connect",
+                      java.util.Map.of(
+                          "endpoint", endpoint.toString(), "stream_count", streams.size()));
+                }
                 ackSeen.complete(null);
               } else if (ackSeen.isDone()) {
                 onFrame.accept(full, Instant.now());
@@ -196,6 +211,12 @@ public final class BinanceWsClient {
 
           @Override
           public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            if (log != null && !stopped) {
+              log.warn(
+                  "ws_disconnect",
+                  java.util.Map.of(
+                      "endpoint", endpoint.toString(), "status", statusCode, "reason", reason));
+            }
             // Complete the ack future exceptionally so start() doesn't hang if ACK never arrived.
             ackSeen.completeExceptionally(
                 new Exception("ws closed before ACK: " + statusCode + " " + reason));

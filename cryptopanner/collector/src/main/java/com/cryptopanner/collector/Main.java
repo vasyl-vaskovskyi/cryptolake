@@ -5,6 +5,7 @@ import com.cryptopanner.common.HealthServer;
 import com.cryptopanner.common.RestPoller;
 import com.cryptopanner.common.RotationTrigger;
 import com.cryptopanner.common.StreamRouting;
+import com.cryptopanner.common.StructuredLog;
 import com.cryptopanner.common.config.NodeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -127,6 +128,18 @@ public final class Main {
     // Seal-grace window before a closed minute is finalized (master spec §8.e; config-overridable).
     Duration sealGrace = Duration.ofSeconds(cfg.sealGraceSeconds());
 
+    // Structured JSON-Lines log for §11.e events (ws/minute/rotation lifecycle), per slot (§11.a).
+    String slot = resolveSlot(System.getenv("CRYPTOPANNER_SLOT"));
+    Path logsDir =
+        cfg.paths().logs() != null
+            ? cfg.paths().logs()
+            : cfg.paths().segments().resolveSibling("logs");
+    StructuredLog collectorLog =
+        new StructuredLog(
+            logsDir.resolve("cryptopanner-collector@" + slot + ".jsonl"),
+            "cryptopanner-collector",
+            slot);
+
     // Per-(symbol,stream) writers. Keyed by "<symbol>@<stream>" for direct lookup from
     // wrapper.stream
     // and from broadcast-fanout writers (e.g. "btcusdt@forceOrder").
@@ -134,7 +147,9 @@ public final class Main {
     for (NodeConfig.Subscription s : cfg.subscriptions()) {
       String key = s.symbol() + "@" + s.stream();
       writers.put(
-          key, new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream(), sealGrace));
+          key,
+          new MinuteSegmentWriter(cfg.paths().segments(), s.symbol(), s.stream(), sealGrace)
+              .withLog(collectorLog));
     }
     // Broadcast fan-out writers: one (symbol, forceOrder) writer per configured symbol.
     if (cfg.broadcasts().contains(FrameRouter.FORCE_ORDER_BROADCAST)) {
@@ -144,7 +159,8 @@ public final class Main {
             key,
             k ->
                 new MinuteSegmentWriter(
-                    cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM, sealGrace));
+                        cfg.paths().segments(), symbol, FrameRouter.FORCE_ORDER_STREAM, sealGrace)
+                    .withLog(collectorLog));
       }
     }
     // REST-poll fan-out writers: per-symbol polls → one per configured symbol; non-per-symbol
@@ -153,7 +169,9 @@ public final class Main {
       for (String sym : restSymbolScope(cfg, p)) {
         writers.computeIfAbsent(
             sym + "@" + p.stream(),
-            k -> new MinuteSegmentWriter(cfg.paths().segments(), sym, p.stream(), sealGrace));
+            k ->
+                new MinuteSegmentWriter(cfg.paths().segments(), sym, p.stream(), sealGrace)
+                    .withLog(collectorLog));
       }
     }
 
@@ -201,7 +219,8 @@ public final class Main {
     List<String> publicSubs = bySocket.get(StreamRouting.Socket.PUBLIC);
     if (publicSubs != null) {
       BinanceWsClient c =
-          new BinanceWsClient(URI.create(cfg.wsPublicEndpointUrl()), publicSubs, onFrame);
+          new BinanceWsClient(URI.create(cfg.wsPublicEndpointUrl()), publicSubs, onFrame)
+              .withLog(collectorLog);
       c.start();
       clients.add(c);
       System.out.println("[collector] /public connected with " + publicSubs);
@@ -210,7 +229,8 @@ public final class Main {
     List<String> marketSubs = bySocket.get(StreamRouting.Socket.MARKET);
     if (marketSubs != null) {
       BinanceWsClient c =
-          new BinanceWsClient(URI.create(cfg.wsMarketEndpointUrl()), marketSubs, onFrame);
+          new BinanceWsClient(URI.create(cfg.wsMarketEndpointUrl()), marketSubs, onFrame)
+              .withLog(collectorLog);
       c.start();
       clients.add(c);
       System.out.println("[collector] /market connected with " + marketSubs);
@@ -335,17 +355,18 @@ public final class Main {
         () -> {
           try {
             return new LiveShadowSession(
-                shadowSockets,
-                shadowSpecs,
-                cfg.paths().segments(),
-                sealGrace,
-                mapper,
-                SHADOW_USER_AGENT,
-                Duration.ofSeconds(30),
-                primaryDropped,
-                bothDropped,
-                retireActivePrimary,
-                onPromoted);
+                    shadowSockets,
+                    shadowSpecs,
+                    cfg.paths().segments(),
+                    sealGrace,
+                    mapper,
+                    SHADOW_USER_AGENT,
+                    Duration.ofSeconds(30),
+                    primaryDropped,
+                    bothDropped,
+                    retireActivePrimary,
+                    onPromoted)
+                .withLog(collectorLog);
           } catch (Exception e) {
             System.err.println("[collector] shadow open failed: " + e.getMessage());
             return null;
@@ -370,14 +391,15 @@ public final class Main {
                 .max(java.util.Comparator.naturalOrder());
     WsConnectionManager rotationManager =
         new WsConnectionManager(
-            shadowOpener,
-            mapper,
-            fsHeavyLock,
-            rotationsLog,
-            connectionAge,
-            () -> "rot-" + java.util.UUID.randomUUID(),
-            Instant::now,
-            WsConnectionManager.Config.defaults("collector:" + cfg.nodeId()));
+                shadowOpener,
+                mapper,
+                fsHeavyLock,
+                rotationsLog,
+                connectionAge,
+                () -> "rot-" + java.util.UUID.randomUUID(),
+                Instant::now,
+                WsConnectionManager.Config.defaults("collector:" + cfg.nodeId()))
+            .withLog(collectorLog);
     java.util.concurrent.atomic.AtomicLong rotationEventsTotal =
         new java.util.concurrent.atomic.AtomicLong();
     ExecutorService rotationExec =
@@ -416,10 +438,11 @@ public final class Main {
           }
           for (BinanceWsClient c : activeClients.get()) {
             if (c.idleNanos() > halfOpenIdleNanos) {
+              long idleS = c.idleNanos() / 1_000_000_000L;
+              collectorLog.warn(
+                  "ws_ping_missed", Map.of("idle_seconds", idleS)); // §11.e half-open watchdog
               System.err.println(
-                  "[collector] half-open suspected (idle "
-                      + (c.idleNanos() / 1_000_000_000L)
-                      + "s); forcing reconnect");
+                  "[collector] half-open suspected (idle " + idleS + "s); forcing reconnect");
               c.forceReconnect();
             }
           }
