@@ -16,7 +16,14 @@ public record DispatchedMessage(
   public enum Kind {
     ALERT,
     CORRELATED,
-    RECOVERED
+    RECOVERED,
+    SELF_TEST
+  }
+
+  /** The §13.c daily "alert path healthy" self-test sent on every channel. */
+  public static DispatchedMessage selfTest(String text) {
+    return new DispatchedMessage(
+        Kind.SELF_TEST, Severity.WARNING, null, "alert path healthy", text, List.of());
   }
 
   static DispatchedMessage single(Alert a) {
