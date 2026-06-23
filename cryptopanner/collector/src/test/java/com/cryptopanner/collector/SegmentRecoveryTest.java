@@ -107,6 +107,39 @@ class SegmentRecoveryTest {
   }
 
   @Test
+  void writesRecoveredAtStartupRotationEventWhenShadowsRecovered(@TempDir Path root)
+      throws Exception {
+    Path primary = tradeDir(root).resolve("minute-14-23.jsonl.zst");
+    Path shadow = tradeDir(root).resolve("minute-14-23.shadow.jsonl.zst");
+    DurableSegment.writeLines(primary, List.of(tradeLine(1), tradeLine(2)));
+    DurableSegment.writeLines(shadow, List.of(tradeLine(2), tradeLine(3)));
+    Path rotations = root.resolve("deploy/rotations.jsonl");
+
+    SegmentRecovery.Result r =
+        SegmentRecovery.recover(
+            root, mapper, rotations, "recovery-1", Instant.parse("2026-06-21T15:00:00Z"));
+
+    assertEquals(1, r.shadowsMerged());
+    JsonNode ev = mapper.readTree(Files.readAllLines(rotations).get(0));
+    assertEquals(
+        "RECOVERED_AT_STARTUP", ev.get("verify_result").asText(), "§10.d recovery verify_result");
+    assertEquals("recovery-1", ev.get("rotation_id").asText());
+    assertTrue(ev.get("minutes_merged").toString().contains("23"), "records the recovered minute");
+  }
+
+  @Test
+  void writesNoRecoveryEventWhenNothingRecovered(@TempDir Path root) throws Exception {
+    DurableSegment.writeLines(
+        tradeDir(root).resolve("minute-14-23.jsonl.zst"), List.of(tradeLine(1)));
+    Path rotations = root.resolve("deploy/rotations.jsonl");
+
+    SegmentRecovery.recover(
+        root, mapper, rotations, "recovery-2", Instant.parse("2026-06-21T15:00:00Z"));
+
+    assertFalse(Files.exists(rotations), "no rotation event when no shadows were recovered");
+  }
+
+  @Test
   void promotesOrphanShadowWhenNoPrimary(@TempDir Path root) throws Exception {
     Path primary = tradeDir(root).resolve("minute-14-23.jsonl.zst");
     Path shadow = tradeDir(root).resolve("minute-14-23.shadow.jsonl.zst");

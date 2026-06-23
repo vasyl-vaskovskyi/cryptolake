@@ -94,9 +94,20 @@ public final class Main {
     NodeConfig cfg = NodeConfig.load(configPath);
     ObjectMapper mapper = EnvelopeCodec.newMapper();
 
-    // Startup crash-recovery over segments/ (design doc §3.2/§5.6): drop incomplete .tmp writes and
-    // repair missing/mismatched sidecars before we resume writing.
-    SegmentRecovery.Result recovery = SegmentRecovery.recover(cfg.paths().segments(), mapper);
+    // Startup crash-recovery over segments/ (design doc §3.2/§5.6): drop incomplete .tmp writes,
+    // merge/promote any leftover .shadow overlap segments, and repair sidecars before we resume
+    // writing. A completed shadow overlap records a RECOVERED_AT_STARTUP rotation event (§10.d).
+    Path recoveryDeployDir =
+        cfg.paths().deploy() != null
+            ? cfg.paths().deploy()
+            : cfg.paths().segments().resolveSibling("deploy");
+    SegmentRecovery.Result recovery =
+        SegmentRecovery.recover(
+            cfg.paths().segments(),
+            mapper,
+            recoveryDeployDir.resolve("rotations.jsonl"),
+            "recovery-" + java.util.UUID.randomUUID(),
+            Instant.now());
     if (recovery.tmpDeleted() > 0
         || recovery.sidecarsWritten() > 0
         || recovery.shadowsMerged() > 0

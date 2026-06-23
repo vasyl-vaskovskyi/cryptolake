@@ -8,8 +8,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -46,21 +48,51 @@ public final class SegmentRecovery {
 
   /**
    * Full recovery. When {@code mapper} is non-null, leftover {@code .shadow} segments are merged or
-   * promoted (§5.6 step 3); otherwise they are left in place.
+   * promoted (§5.6 step 3); otherwise they are left in place. No rotation event is recorded.
    */
   public static Result recover(Path segmentsRoot, ObjectMapper mapper) throws IOException {
+    return recover(segmentsRoot, mapper, null, null, null);
+  }
+
+  /**
+   * Full recovery that also records a {@code verify_result: RECOVERED_AT_STARTUP} rotation event
+   * (master spec §10.d, design doc §5.6) when any leftover {@code .shadow} segment is merged or
+   * promoted — so the Sealer's manifest reflects that the overlap was completed at startup rather
+   * than by a live cutover. The event is written only when {@code rotationsLog} is non-null and at
+   * least one shadow was recovered.
+   */
+  public static Result recover(
+      Path segmentsRoot,
+      ObjectMapper mapper,
+      Path rotationsLog,
+      String rotationId,
+      Instant promotedAt)
+      throws IOException {
     if (!Files.isDirectory(segmentsRoot)) {
       return new Result(0, 0, 0, 0);
     }
     int tmpDeleted = sweepTmp(segmentsRoot);
     int shadowsMerged = 0;
     int shadowsPromoted = 0;
+    List<Integer> minutesRecovered = new ArrayList<>();
     if (mapper != null) {
-      int[] shadowCounts = handleShadows(segmentsRoot, mapper);
+      int[] shadowCounts = handleShadows(segmentsRoot, mapper, minutesRecovered);
       shadowsMerged = shadowCounts[0];
       shadowsPromoted = shadowCounts[1];
     }
     int sidecarsWritten = validateSidecars(segmentsRoot);
+    if (rotationsLog != null && (shadowsMerged + shadowsPromoted) > 0) {
+      RotationsLog.append(
+          rotationsLog,
+          mapper,
+          new RotationsLog.RotationEvent(
+              rotationId,
+              "RECOVERY",
+              0.0,
+              promotedAt,
+              minutesRecovered.stream().sorted().distinct().toList(),
+              "RECOVERED_AT_STARTUP"));
+    }
     return new Result(tmpDeleted, sidecarsWritten, shadowsMerged, shadowsPromoted);
   }
 
@@ -75,7 +107,8 @@ public final class SegmentRecovery {
     return deleted;
   }
 
-  private static int[] handleShadows(Path root, ObjectMapper mapper) throws IOException {
+  private static int[] handleShadows(Path root, ObjectMapper mapper, List<Integer> minutesRecovered)
+      throws IOException {
     int merged = 0;
     int promoted = 0;
     OverlapMerger merger = new OverlapMerger(mapper);
@@ -84,6 +117,7 @@ public final class SegmentRecovery {
       if (!name.endsWith(SHADOW_SUFFIX)) {
         continue;
       }
+      minuteOfHour(name).ifPresent(minutesRecovered::add);
       Path primary =
           shadow.resolveSibling(
               name.substring(0, name.length() - SHADOW_SUFFIX.length()) + ".jsonl.zst");
@@ -118,6 +152,16 @@ public final class SegmentRecovery {
       }
     }
     return written;
+  }
+
+  /** {@code minute-HH-MM.shadow.jsonl.zst} → the minute-of-hour MM, or empty if unparseable. */
+  private static Optional<Integer> minuteOfHour(String shadowName) {
+    try {
+      String hhmm = shadowName.substring("minute-".length(), shadowName.indexOf(SHADOW_SUFFIX));
+      return Optional.of(Integer.parseInt(hhmm.substring(hhmm.indexOf('-') + 1)));
+    } catch (RuntimeException e) {
+      return Optional.empty();
+    }
   }
 
   /** Derives the stream from {@code segments/<symbol>/<stream>/<date>/file}. */
