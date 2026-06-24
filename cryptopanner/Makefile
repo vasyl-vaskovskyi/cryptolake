@@ -1,4 +1,4 @@
-.PHONY: help build test format dev-up dev-down dev-logs chaos-all clean
+.PHONY: help build test format dev-up dev-down dev-logs chaos-all soak clean
 
 help:
 	@echo "Targets:"
@@ -9,6 +9,7 @@ help:
 	@echo "  dev-down   — docker compose down -v"
 	@echo "  dev-logs   — docker compose logs -f"
 	@echo "  chaos-all  — run every tests/chaos/NN_*.sh scenario"
+	@echo "  soak       — run the §14.e real-environment soak (tests/soak/run.sh)"
 	@echo "  clean      — mvn clean"
 
 build:
@@ -31,6 +32,9 @@ dev-logs:
 
 chaos-all:
 	bash scripts/run-chaos-tests.sh
+
+soak:
+	bash tests/soak/run.sh
 
 clean:
 	mvn clean
