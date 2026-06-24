@@ -200,10 +200,10 @@ soak::seal_upload_verify() {
   # files once the S3 upload succeeds (durability handoff), so this list must be taken now.
   local manifests
   manifests=$(find "$SOAK_DIR/sealed" -path "*/$SOAK_DATE/hour-$SOAK_HOUR.manifest.json" | sort)
-  # rotation evidence (best-effort: each WS connection gets an independent replay, so the shadow's
-  # overlap minute diverges from the primary's and equivalence rarely passes cleanly — reliable
-  # rotation needs synchronized dual-connection fan-out, §14.c) — read now, before upload deletes
-  # the local manifests.
+  # rotation evidence (best-effort). The mock now serves synchronized identical fan-out (§14.c), so
+  # equivalence would pass — but the operator trigger is refused until the connection is older than
+  # minOperatorAge (5min default), so a short soak never reaches cutover. Recording a rotation needs
+  # a >6min run (or a lower, configurable minOperatorAge). Read now, before upload deletes manifests.
   if [[ -n "$manifests" ]] && grep -lqs 'connection_rotation_events' $manifests 2>/dev/null \
     && ! grep -hs 'connection_rotation_events' $manifests | grep -q '"connection_rotation_events" : \[ \]'; then
     ROTATION_RECORDED="yes"
@@ -245,7 +245,7 @@ soak::summary() {
   soak::log "streams verified:   $SEALED_STREAMS"
   soak::log "verify ERRORS:      $VERIFY_ERRORS"
   soak::log "monitor saw node:   reachable"
-  soak::log "rotation recorded:  $ROTATION_RECORDED (best-effort; needs synced dual-fanout, §14.c)"
+  soak::log "rotation recorded:  $ROTATION_RECORDED (operator trigger refused < minOperatorAge 5min)"
   soak::log "logs:               $SOAK_DIR/*.log"
   soak::log "==============================================="
   [[ "$VERIFY_ERRORS" == "0" ]] || soak::die "verify reported ERRORS=$VERIFY_ERRORS across sealed streams"
