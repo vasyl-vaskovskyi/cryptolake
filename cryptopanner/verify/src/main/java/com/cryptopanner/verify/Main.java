@@ -6,8 +6,8 @@ import picocli.CommandLine.Command;
 @Command(
     name = "cryptopanner-verify",
     mixinStandardHelpOptions = true,
-    subcommands = {VerifyCommand.class},
-    description = "CryptoPanner audit / integrity CLI (skeleton).")
+    subcommands = {VerifyCommand.class, ManifestCommand.class, GapsCommand.class},
+    description = "CryptoPanner audit / integrity CLI.")
 public final class Main implements Runnable {
 
   public static void main(String[] args) {
