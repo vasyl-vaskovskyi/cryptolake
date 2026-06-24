@@ -61,6 +61,31 @@ exercising the Monitor against a live agent (the prior "test monitor during a re
    event is in the manifest; the Monitor's `/api/nodes` shows the node reachable with components
    `running`. Bring-up isolated in a function for the later compose swap.
 
+## Results (2026-06-24 run)
+
+Plan items 1–4 delivered and the soak runs green:
+
+```
+[soak] verified 8 streams; total ERRORS=0
+[soak] monitor saw node:   reachable
+[soak] SOAK PASSED — 8 streams captured→sealed→uploaded→verified clean; monitor live
+```
+
+- The agent no-systemd mode works in a real run ("agent + monitor healthy") — the Monitor's live
+  `/api/nodes` scrape sees the node reachable.
+- 8 WS streams (trade, aggTrade, depth@100ms, kline_1m, ticker, bookTicker, markPrice@1s,
+  forceOrder) capture → seal → upload → `verify ERRORS=0` from S3.
+
+Findings that became next-increment work:
+- **Empty REST streams.** `openInterest`/`depthSnapshot`/`exchangeInfo` produce no data in a short
+  mock window, and **both the sealer and uploader exit non-zero on an empty stream** rather than
+  recording a fully-missing hour as a gap. The soak tolerates this; arguably the sealer should
+  surface an empty hour as a gap-manifest (spec "explicit gap surfacing") — a candidate bugfix.
+- **Uploader deletes local sealed files on successful upload** (durability handoff) — the soak
+  snapshots the sealed (symbol,stream) pairs before upload.
+- **Rotation didn't record an event.** The fixed-event-time fixture rarely seals an overlap minute,
+  so `rotation recorded: no`. Needs the mock enhancement below.
+
 ## Deferred (next increment — the docker/two-node variant)
 
 - `Dockerfile` (multi-stage: maven build → runtime image; entrypoint dispatches on the service
@@ -70,4 +95,11 @@ exercising the Monitor against a live agent (the prior "test monitor during a re
 - Extend compose to **two independent nodes** (distinct `node_id`, data volumes, agent ports) and
   re-point `run.sh` bring-up at `docker compose`; assert the §3.d independence + per-node S3 prefix
   criteria the single-host process soak can't cover.
+- **Mock enhancement (the key soak enabler):** wall-clock event-time rewriting in
+  `mock-binance-ws` (set `E`/`T` to now on each replayed frame) + unique sequence IDs, so frames
+  fill consecutive real-time minutes monotonically. This unlocks the sustained-load criterion
+  (`late_frames` < 0.1%, full-hour completeness) and reliable rotation-overlap sealing — neither of
+  which the current fixed-event-time fixture supports. TDD-able.
+- **Sealer/uploader empty-stream handling:** record a fully-missing hour as a gap-manifest instead
+  of a hard non-zero exit (spec "explicit gap surfacing"). TDD bugfix.
 - The §14.g 2h/24h pre-release variant.
