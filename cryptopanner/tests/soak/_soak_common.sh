@@ -4,7 +4,7 @@
 soak::config() {
   CFG="${SOAK_CONFIG:-${REPO_ROOT}/config/dev/config.yaml}"
   SOAK_DIR="${SOAK_DIR:-/tmp/cryptopanner-soak}"
-  RUN_SECONDS="${SOAK_RUN_SECONDS:-120}"
+  RUN_SECONDS="${SOAK_RUN_SECONDS:-180}"
   REPLAY_HZ="${SOAK_REPLAY_HZ:-50}"
   BUCKET="${SOAK_BUCKET:-cryptopanner-dev}"
   NET="cryptopanner-soak-net"
@@ -127,9 +127,14 @@ soak::wait_healthy() {
 }
 
 soak::run_window_with_rotation() {
-  local half=$((RUN_SECONDS / 2))
-  soak::log "capturing for ${RUN_SECONDS}s; rotation at ~${half}s..."
-  sleep "$half"
+  # Trigger early — just past the dev minOperatorAge (20s) — so the rest of the run gives the
+  # make-before-break overlap minute time to fully seal (~one minute boundary + grace) and cut over.
+  local at="${ROTATION_TRIGGER_AT:-30}"
+  if [[ "$at" -ge "$RUN_SECONDS" ]]; then
+    at=$((RUN_SECONDS / 3))
+  fi
+  soak::log "capturing for ${RUN_SECONDS}s; rotation at ~${at}s (overlap has $((RUN_SECONDS - at))s to seal)..."
+  sleep "$at"
   soak::log "triggering one WS rotation via agent /rotation/trigger..."
   curl -sf -X POST \
     -H "Authorization: Bearer $TOKEN" \
@@ -137,7 +142,7 @@ soak::run_window_with_rotation() {
     http://localhost:9100/rotation/trigger >/dev/null 2>&1 \
     && soak::log "rotation trigger accepted" \
     || soak::log "rotation trigger POST failed (continuing)"
-  sleep "$half"
+  sleep "$((RUN_SECONDS - at))"
 }
 
 soak::assert_monitor_sees_node() {
@@ -245,9 +250,14 @@ soak::summary() {
   soak::log "streams verified:   $SEALED_STREAMS"
   soak::log "verify ERRORS:      $VERIFY_ERRORS"
   soak::log "monitor saw node:   reachable"
-  soak::log "rotation recorded:  $ROTATION_RECORDED (operator trigger refused < minOperatorAge 5min)"
+  soak::log "rotation recorded:  $ROTATION_RECORDED"
   soak::log "logs:               $SOAK_DIR/*.log"
   soak::log "==============================================="
   [[ "$VERIFY_ERRORS" == "0" ]] || soak::die "verify reported ERRORS=$VERIFY_ERRORS across sealed streams"
-  soak::log "SOAK PASSED — $SEALED_STREAMS streams captured→sealed→uploaded→verified clean; monitor live"
+  # Rotation is a hard gate unless explicitly relaxed (SOAK_REQUIRE_ROTATION=0 for very short runs
+  # that can't fit an overlap minute). The make-before-break rotation must record a manifest event.
+  if [[ "${SOAK_REQUIRE_ROTATION:-1}" == "1" && "$ROTATION_RECORDED" != "yes" ]]; then
+    soak::die "no rotation recorded — make-before-break rotation did not complete (§8.b.2/§14.e)"
+  fi
+  soak::log "SOAK PASSED — $SEALED_STREAMS streams verified clean; rotation=$ROTATION_RECORDED; monitor live"
 }

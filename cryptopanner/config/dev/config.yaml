@@ -49,6 +49,7 @@ collector:
   connection_max_age:      23h          # scheduled rotation won't fire in a short soak; soak triggers it explicitly
   rotation_window:         "HH:10-HH:50"
   frame_buffer_window:     5s
+  min_operator_rotation_age: 20s        # §5.4 — dev: let the soak's operator trigger fire quickly (prod default 5m)
   rest:                    # §7.b
     depth:
       url_template:           "/fapi/v1/depth?symbol={symbol}&limit=1000"
