@@ -34,6 +34,12 @@ public final class WsConnectionManager {
     public static Config defaults(String lockHolder) {
       return new Config(lockHolder, Duration.ofSeconds(60), 3, Duration.ofMinutes(5));
     }
+
+    /** The §5.1/§5.2 defaults but with a config-supplied operator-trigger minimum age (§5.4). */
+    public static Config withMinOperatorAge(String lockHolder, Duration minOperatorAge) {
+      Config d = defaults(lockHolder);
+      return new Config(d.lockHolder(), d.lockTimeout(), d.maxFails(), minOperatorAge);
+    }
   }
 
   /** Terminal status of a rotation attempt. */

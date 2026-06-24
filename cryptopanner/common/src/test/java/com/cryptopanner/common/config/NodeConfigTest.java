@@ -57,6 +57,7 @@ class NodeConfigTest {
         seal_grace_window:  10s
         connection_max_age: 23h
         rotation_window:    "HH:10-HH:50"
+        min_operator_rotation_age: 20s
         rest:
           depth:
             url_template:           "/fapi/v1/depth?symbol={symbol}&limit=1000"
@@ -183,9 +184,21 @@ class NodeConfigTest {
     assertEquals("wss://fstream.binance.com/public/stream", cfg.wsPublicEndpointUrl());
     assertEquals("wss://fstream.binance.com/market/stream", cfg.wsMarketEndpointUrl());
     assertEquals("https://fapi.binance.com", cfg.restBaseUrl());
+    // min_operator_rotation_age "20s" → parsed; absent → 5min default (§5.4).
+    assertEquals(
+        java.time.Duration.ofSeconds(20), cfg.collector().minOperatorRotationAgeDuration());
+
     // seal_grace_window "10s" → 10 seconds.
     assertEquals(10, cfg.sealGraceSeconds());
     assertEquals(java.time.Duration.ofHours(23), cfg.collector().connectionMaxAgeDuration());
+  }
+
+  @Test
+  void minOperatorRotationAgeDefaultsToFiveMinutesWhenAbsent(@TempDir Path dir) throws Exception {
+    Path f = dir.resolve("no-min-op-age.yaml");
+    Files.writeString(f, YAML.replace("min_operator_rotation_age: 20s", ""));
+    NodeConfig cfg = NodeConfig.load(f);
+    assertEquals(java.time.Duration.ofMinutes(5), cfg.collector().minOperatorRotationAgeDuration());
   }
 
   @Test

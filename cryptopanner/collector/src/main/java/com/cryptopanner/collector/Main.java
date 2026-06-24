@@ -459,7 +459,8 @@ public final class Main {
                 connectionAge,
                 () -> "rot-" + java.util.UUID.randomUUID(),
                 Instant::now,
-                WsConnectionManager.Config.defaults("collector:" + cfg.nodeId()))
+                WsConnectionManager.Config.withMinOperatorAge(
+                    "collector:" + cfg.nodeId(), cfg.collector().minOperatorRotationAgeDuration()))
             .withLog(collectorLog);
     java.util.concurrent.atomic.AtomicLong rotationEventsTotal =
         new java.util.concurrent.atomic.AtomicLong();

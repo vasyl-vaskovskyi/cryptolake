@@ -103,6 +103,7 @@ public record NodeConfig(
       String connectionMaxAge,
       String rotationWindow,
       String frameBufferWindow,
+      String minOperatorRotationAge,
       Rest rest) {
 
     public Duration sealGraceWindowDuration() {
@@ -111,6 +112,16 @@ public record NodeConfig(
 
     public Duration connectionMaxAgeDuration() {
       return ConfigParse.duration(connectionMaxAge);
+    }
+
+    /**
+     * Minimum connection age before an operator-forced WS rotation is honored (§5.4). Defaults to 5
+     * minutes when unset, matching {@code WsConnectionManager.Config.defaults}.
+     */
+    public Duration minOperatorRotationAgeDuration() {
+      return minOperatorRotationAge == null
+          ? Duration.ofMinutes(5)
+          : ConfigParse.duration(minOperatorRotationAge);
     }
 
     public ConfigParse.HourWindow rotationWindowParsed() {
