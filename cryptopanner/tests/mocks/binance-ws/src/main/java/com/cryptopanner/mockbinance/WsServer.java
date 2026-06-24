@@ -16,10 +16,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Single-connection-at-a-time WebSocket server backed by raw sockets (no Jetty / Undertow). RFC
- * 6455 handshake → consume the client's first text frame as a SUBSCRIBE → reply with {@code
- * {"result":null,"id":<id>}} → replay fixture lines at {@code replayRateHz}. Loops the fixture
- * until the client disconnects.
+ * Multi-connection WebSocket server backed by raw sockets (no Jetty / Undertow). RFC 6455 handshake
+ * → consume the client's first text frame as a SUBSCRIBE → reply with {@code
+ * {"result":null,"id":<id>}} → register the client with a shared {@link FanoutBroadcaster}. A
+ * single replay loop loops the fixture at {@code replayRateHz}, restamps event time once per frame,
+ * and fans the byte-identical frame to every connected client — so a rotation primary and shadow
+ * see the same overlap minute and the equivalence check passes (§14.c).
  */
 public final class WsServer implements AutoCloseable {
 
@@ -31,6 +33,7 @@ public final class WsServer implements AutoCloseable {
   private final boolean rewriteEventTime;
   private final ServerSocket server;
   private final ExecutorService exec = Executors.newCachedThreadPool();
+  private final FanoutBroadcaster broadcaster = new FanoutBroadcaster();
   private volatile boolean closed;
 
   public WsServer(int port, List<String> fixtureLines, double replayRateHz) throws IOException {
@@ -51,6 +54,7 @@ public final class WsServer implements AutoCloseable {
     this.rewriteEventTime = rewriteEventTime;
     this.server = new ServerSocket(port);
     exec.submit(this::acceptLoop);
+    exec.submit(this::replayLoop);
   }
 
   public int port() {
@@ -78,11 +82,17 @@ public final class WsServer implements AutoCloseable {
     }
   }
 
+  /**
+   * Per-connection handler: handshake → consume the SUBSCRIBE → ack → register the client's output
+   * with the shared {@link FanoutBroadcaster}. The single {@link #replayLoop()} thread does all
+   * sending, so every connected client (e.g. a rotation primary + shadow) receives byte-identical
+   * frames. This thread then just drains the client's inbound bytes to detect disconnect.
+   */
   private void handle(Socket sock) {
     System.out.println("[mock-ws] client connected: " + sock.getRemoteSocketAddress());
     try (sock;
-        InputStream in = sock.getInputStream();
-        OutputStream out = sock.getOutputStream()) {
+        InputStream in = sock.getInputStream()) {
+      OutputStream out = sock.getOutputStream();
       handshake(in, out);
       String subscribe = readTextFrame(in);
       if (subscribe == null) {
@@ -92,20 +102,16 @@ public final class WsServer implements AutoCloseable {
       Integer subId = extractIntField(subscribe, "id");
       String ack = "{\"result\":null,\"id\":" + (subId == null ? "null" : subId) + "}";
       sendText(out, ack);
-      System.out.println(
-          "[mock-ws] subscribed; replaying "
-              + fixtureLines.size()
-              + " lines at "
-              + replayRateHz
-              + " Hz");
-      long delayMicros = (long) (1_000_000.0 / replayRateHz);
-      while (!closed) {
-        for (String line : fixtureLines) {
-          String frame =
-              rewriteEventTime ? EventTimeRewriter.rewrite(line, System.currentTimeMillis()) : line;
-          sendText(out, frame);
-          TimeUnit.MICROSECONDS.sleep(delayMicros);
+      broadcaster.register(out);
+      System.out.println("[mock-ws] client subscribed; clients=" + broadcaster.size());
+      try {
+        // Drain inbound bytes (pings/etc.) until the client disconnects (read returns -1).
+        byte[] discard = new byte[1024];
+        while (!closed && in.read(discard) != -1) {
+          // ignore — the replay loop is the sender
         }
+      } finally {
+        broadcaster.unregister(out);
       }
     } catch (Exception e) {
       System.out.println(
@@ -113,6 +119,34 @@ public final class WsServer implements AutoCloseable {
               + e.getClass().getSimpleName()
               + " "
               + (e.getMessage() == null ? "" : e.getMessage()));
+    }
+  }
+
+  /**
+   * The single sender: builds each (optionally restamped) frame once and fans it to all clients.
+   */
+  private void replayLoop() {
+    long delayMicros = (long) (1_000_000.0 / replayRateHz);
+    System.out.println(
+        "[mock-ws] replaying "
+            + fixtureLines.size()
+            + " lines at "
+            + replayRateHz
+            + " Hz to all clients");
+    try {
+      while (!closed) {
+        for (String line : fixtureLines) {
+          if (closed) {
+            return;
+          }
+          String frame =
+              rewriteEventTime ? EventTimeRewriter.rewrite(line, System.currentTimeMillis()) : line;
+          broadcaster.broadcast(frameBytes(frame));
+          TimeUnit.MICROSECONDS.sleep(delayMicros);
+        }
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
     }
   }
 
@@ -167,22 +201,29 @@ public final class WsServer implements AutoCloseable {
   // ---- WS framing (text only, client→server is masked, server→client unmasked) ----
 
   private static void sendText(OutputStream out, String s) throws IOException {
+    out.write(frameBytes(s));
+    out.flush();
+  }
+
+  /** Builds a complete unmasked text WS frame (header + payload) as bytes for identical fan-out. */
+  static byte[] frameBytes(String s) {
     byte[] payload = s.getBytes(StandardCharsets.UTF_8);
-    out.write(0x81); // FIN + opcode text
+    ByteArrayOutputStream b = new ByteArrayOutputStream(payload.length + 10);
+    b.write(0x81); // FIN + opcode text
     if (payload.length < 126) {
-      out.write(payload.length);
+      b.write(payload.length);
     } else if (payload.length < 65536) {
-      out.write(126);
-      out.write((payload.length >>> 8) & 0xff);
-      out.write(payload.length & 0xff);
+      b.write(126);
+      b.write((payload.length >>> 8) & 0xff);
+      b.write(payload.length & 0xff);
     } else {
-      out.write(127);
+      b.write(127);
       for (int i = 7; i >= 0; i--) {
-        out.write((int) ((payload.length >>> (i * 8L)) & 0xff));
+        b.write((int) ((payload.length >>> (i * 8L)) & 0xff));
       }
     }
-    out.write(payload);
-    out.flush();
+    b.writeBytes(payload);
+    return b.toByteArray();
   }
 
   /** Reads a single text frame from the client (handles masking). Returns null on close/EOF. */
