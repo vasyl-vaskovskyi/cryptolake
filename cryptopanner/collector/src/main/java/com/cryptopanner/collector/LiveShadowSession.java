@@ -243,14 +243,19 @@ public final class LiveShadowSession implements ShadowSession {
     } catch (Exception e) {
       return Optional.empty();
     }
-    if (byMinute.isEmpty()) {
-      return Optional.empty();
+    // Oldest-first, return the first minute whose shadow segments ALL have a sealed primary
+    // sibling. A shadow minute can seal before its primary sibling (independent seal timing); such
+    // a minute is not overlap-ready, and returning it would make the conductor read a non-existent
+    // primary and abort the rotation. Leave not-ready minutes unmarked so a later scan retries.
+    for (Map.Entry<String, List<SegmentPair>> e : byMinute.entrySet()) {
+      List<SegmentPair> pairs = e.getValue();
+      if (pairs.stream().allMatch(p -> Files.isRegularFile(p.primaryFile()))) {
+        seen.add(e.getKey());
+        return Optional.of(
+            new OverlapMinute(minuteMeta.get(e.getKey())[0], minuteStart.get(e.getKey()), pairs));
+      }
     }
-    String oldest = byMinute.firstKey();
-    seen.add(oldest);
-    return Optional.of(
-        new OverlapMinute(
-            minuteMeta.get(oldest)[0], minuteStart.get(oldest), byMinute.get(oldest)));
+    return Optional.empty();
   }
 
   /** "minute-14-23.shadow.jsonl.zst" → "minute-14-23" (the primary file's stem). */

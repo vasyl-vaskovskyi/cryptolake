@@ -21,7 +21,21 @@ import org.junit.jupiter.api.io.TempDir;
 
 class LiveShadowSessionTest {
 
+  /** Writes a fully-sealed overlap minute: the {@code .shadow} segment AND its primary sibling. */
   private void writeShadow(Path segments, String symbol, String stream, String mm)
+      throws Exception {
+    writeShadowOnly(segments, symbol, stream, mm);
+    Path primary =
+        segments
+            .resolve(symbol)
+            .resolve(stream)
+            .resolve("2026-06-14")
+            .resolve("minute-14-" + mm + ".jsonl.zst");
+    DurableSegment.writeLines(primary, List.of("x\n"));
+  }
+
+  /** Writes only the {@code .shadow} segment — the primary sibling has not sealed yet (race). */
+  private void writeShadowOnly(Path segments, String symbol, String stream, String mm)
       throws Exception {
     Path shadow =
         segments
@@ -30,6 +44,22 @@ class LiveShadowSessionTest {
             .resolve("2026-06-14")
             .resolve("minute-14-" + mm + ".shadow.jsonl.zst");
     DurableSegment.writeLines(shadow, List.of("x\n"));
+  }
+
+  @Test
+  void scanSkipsMinuteWhosePrimarySiblingHasNotSealedYet(@TempDir Path segments) throws Exception {
+    // Regression: the shadow minute sealed but the primary sibling hasn't yet (independent seal
+    // timing). The conductor would otherwise read a non-existent primary and abort the rotation.
+    writeShadowOnly(segments, "btcusdt", "trade", "23");
+
+    assertTrue(
+        LiveShadowSession.scanSealedShadowMinute(segments, new HashSet<>()).isEmpty(),
+        "a shadow minute without a sealed primary sibling is not overlap-ready");
+
+    // Once the primary sibling seals too, the minute becomes overlap-ready.
+    DurableSegment.writeLines(
+        segments.resolve("btcusdt/trade/2026-06-14/minute-14-23.jsonl.zst"), List.of("x\n"));
+    assertTrue(LiveShadowSession.scanSealedShadowMinute(segments, new HashSet<>()).isPresent());
   }
 
   @Test
