@@ -9,6 +9,7 @@ soak::config() {
   BUCKET="${SOAK_BUCKET:-cryptopanner-dev}"
   NET="cryptopanner-soak-net"
   MINIO="cryptopanner-soak-minio"
+  MC="cryptopanner-soak-mc"
   TOKEN="soak-token"
   PIDS=()
 }
@@ -21,7 +22,8 @@ soak::die() {
 
 soak::cleanup() {
   for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
-  docker rm -f "$MINIO" >/dev/null 2>&1 || true
+  docker rm -f "$MINIO" "$MC" >/dev/null 2>&1 || true
+  docker network rm "$NET" >/dev/null 2>&1 || true
 }
 
 soak::build() {
@@ -55,8 +57,10 @@ soak::stack_up() {
     curl -sf http://localhost:9000/minio/health/ready >/dev/null 2>&1 && break
     sleep 1
   done
-  docker run --rm --network "$NET" --entrypoint sh minio/mc -c \
-    "until mc alias set m http://$MINIO:9000 cryptopanner changeme-dev >/dev/null 2>&1; do sleep 1; done; mc mb -p m/$BUCKET" \
+  # Named + bounded so it can never orphan if MinIO is torn down before mc connects.
+  docker rm -f "$MC" >/dev/null 2>&1 || true
+  docker run --rm --name "$MC" --network "$NET" --entrypoint sh minio/mc -c \
+    "for i in \$(seq 1 30); do mc alias set m http://$MINIO:9000 cryptopanner changeme-dev >/dev/null 2>&1 && break; sleep 1; done; mc mb -p m/$BUCKET" \
     >/dev/null 2>&1 || true
 
   soak::log "starting mock-binance-ws (replay ${REPLAY_HZ}Hz)..."
