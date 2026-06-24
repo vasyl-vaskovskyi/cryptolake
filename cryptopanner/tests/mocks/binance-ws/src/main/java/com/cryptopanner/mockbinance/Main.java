@@ -14,12 +14,18 @@ public final class Main {
     int wsPort = Integer.parseInt(System.getenv().getOrDefault("MOCK_WS_PORT", "9001"));
     int restPort = Integer.parseInt(System.getenv().getOrDefault("MOCK_REST_PORT", "9002"));
     double rate = Double.parseDouble(System.getenv().getOrDefault("REPLAY_RATE_HZ", "10"));
+    boolean rewriteEventTime = truthy(System.getenv("MOCK_REWRITE_EVENT_TIME"));
 
     List<String> lines = loadFixture("/fixture.jsonl");
     System.out.println("[mock-ws] loaded " + lines.size() + " lines from classpath:/fixture.jsonl");
-    System.out.println("[mock-ws] listening on 0.0.0.0:" + wsPort);
+    System.out.println(
+        "[mock-ws] listening on 0.0.0.0:"
+            + wsPort
+            + " (rewriteEventTime="
+            + rewriteEventTime
+            + ")");
 
-    try (WsServer wsServer = new WsServer(wsPort, lines, rate);
+    try (WsServer wsServer = new WsServer(wsPort, lines, rate, rewriteEventTime);
         MockRestServer restServer = new MockRestServer(restPort)) {
       Runtime.getRuntime()
           .addShutdownHook(
@@ -33,6 +39,10 @@ public final class Main {
                   }));
       Thread.currentThread().join();
     }
+  }
+
+  private static boolean truthy(String v) {
+    return v != null && (v.equals("1") || v.equalsIgnoreCase("true") || v.equalsIgnoreCase("yes"));
   }
 
   private static List<String> loadFixture(String resourcePath) throws IOException {

@@ -28,14 +28,27 @@ public final class WsServer implements AutoCloseable {
   private final int port;
   private final List<String> fixtureLines;
   private final double replayRateHz;
+  private final boolean rewriteEventTime;
   private final ServerSocket server;
   private final ExecutorService exec = Executors.newCachedThreadPool();
   private volatile boolean closed;
 
   public WsServer(int port, List<String> fixtureLines, double replayRateHz) throws IOException {
+    this(port, fixtureLines, replayRateHz, false);
+  }
+
+  /**
+   * @param rewriteEventTime when true, each replayed frame's {@code E}/{@code T} timestamps are
+   *     restamped to the send instant (see {@link EventTimeRewriter}) so frames fill consecutive
+   *     real-time minutes; when false, frames replay verbatim with their fixture timestamps.
+   */
+  public WsServer(
+      int port, List<String> fixtureLines, double replayRateHz, boolean rewriteEventTime)
+      throws IOException {
     this.port = port;
     this.fixtureLines = fixtureLines;
     this.replayRateHz = replayRateHz;
+    this.rewriteEventTime = rewriteEventTime;
     this.server = new ServerSocket(port);
     exec.submit(this::acceptLoop);
   }
@@ -88,7 +101,9 @@ public final class WsServer implements AutoCloseable {
       long delayMicros = (long) (1_000_000.0 / replayRateHz);
       while (!closed) {
         for (String line : fixtureLines) {
-          sendText(out, line);
+          String frame =
+              rewriteEventTime ? EventTimeRewriter.rewrite(line, System.currentTimeMillis()) : line;
+          sendText(out, frame);
           TimeUnit.MICROSECONDS.sleep(delayMicros);
         }
       }
