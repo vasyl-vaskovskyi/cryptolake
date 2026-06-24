@@ -4,7 +4,7 @@
 soak::config() {
   CFG="${SOAK_CONFIG:-${REPO_ROOT}/config/dev/config.yaml}"
   SOAK_DIR="${SOAK_DIR:-/tmp/cryptopanner-soak}"
-  RUN_SECONDS="${SOAK_RUN_SECONDS:-90}"
+  RUN_SECONDS="${SOAK_RUN_SECONDS:-120}"
   REPLAY_HZ="${SOAK_REPLAY_HZ:-50}"
   BUCKET="${SOAK_BUCKET:-cryptopanner-dev}"
   NET="cryptopanner-soak-net"
@@ -63,8 +63,8 @@ soak::stack_up() {
     "for i in \$(seq 1 30); do mc alias set m http://$MINIO:9000 cryptopanner changeme-dev >/dev/null 2>&1 && break; sleep 1; done; mc mb -p m/$BUCKET" \
     >/dev/null 2>&1 || true
 
-  soak::log "starting mock-binance-ws (replay ${REPLAY_HZ}Hz)..."
-  MOCK_WS_PORT=9001 MOCK_REST_PORT=9002 REPLAY_RATE_HZ="$REPLAY_HZ" \
+  soak::log "starting mock-binance-ws (replay ${REPLAY_HZ}Hz, wall-clock event-time)..."
+  MOCK_WS_PORT=9001 MOCK_REST_PORT=9002 REPLAY_RATE_HZ="$REPLAY_HZ" MOCK_REWRITE_EVENT_TIME=1 \
     "$(soak::bin tests/mocks/binance-ws mock-binance-ws)" >"$SOAK_DIR/mock.log" 2>&1 &
   PIDS+=($!)
   sleep 2
@@ -171,8 +171,24 @@ soak::discover_date_hour() {
   soak::log "captured date=$SOAK_DATE hour=$SOAK_HOUR"
 }
 
+soak::assert_event_time_progression() {
+  # With the wall-clock event-time rewrite, frames carry "now" — so the captured date is today and
+  # the run fills consecutive real-time minutes (vs. the fixture's fixed historical minute).
+  local today minutes
+  today="$(date -u +%Y-%m-%d)"
+  [[ "$SOAK_DATE" == "$today" ]] \
+    || soak::die "event-time rewrite not active: captured date $SOAK_DATE != today $today"
+  minutes="$(ls "$SOAK_DIR/segments/btcusdt/trade/$SOAK_DATE/" 2>/dev/null \
+    | grep -oE 'minute-[0-9]{2}-[0-9]{2}' | sort -u | wc -l | tr -d ' ')"
+  CAPTURED_MINUTES="$minutes"
+  [[ "${minutes:-0}" -ge 2 ]] \
+    || soak::die "expected >=2 distinct captured minutes (sustained progression), got $minutes"
+  soak::log "event-time rewrite active: $minutes distinct real-time minutes captured on $SOAK_DATE"
+}
+
 soak::seal_upload_verify() {
   soak::discover_date_hour
+  soak::assert_event_time_progression
   # Seal + upload tolerate per-stream "no data" failures: the REST-derived streams
   # (openInterest, depthSnapshot, exchangeInfo) produce nothing in a short mock window, and both
   # tools exit non-zero on an empty stream. The hard gate below is over the streams that DID seal.
@@ -184,8 +200,10 @@ soak::seal_upload_verify() {
   # files once the S3 upload succeeds (durability handoff), so this list must be taken now.
   local manifests
   manifests=$(find "$SOAK_DIR/sealed" -path "*/$SOAK_DATE/hour-$SOAK_HOUR.manifest.json" | sort)
-  # rotation evidence (best-effort; fixed-event-time fixture rarely seals an overlap minute) —
-  # read now, before upload deletes the local manifests.
+  # rotation evidence (best-effort: each WS connection gets an independent replay, so the shadow's
+  # overlap minute diverges from the primary's and equivalence rarely passes cleanly — reliable
+  # rotation needs synchronized dual-connection fan-out, §14.c) — read now, before upload deletes
+  # the local manifests.
   if [[ -n "$manifests" ]] && grep -lqs 'connection_rotation_events' $manifests 2>/dev/null \
     && ! grep -hs 'connection_rotation_events' $manifests | grep -q '"connection_rotation_events" : \[ \]'; then
     ROTATION_RECORDED="yes"
@@ -222,11 +240,11 @@ soak::seal_upload_verify() {
 soak::summary() {
   echo
   soak::log "================= SOAK SUMMARY ================="
-  soak::log "captured:           $SOAK_DATE hour $SOAK_HOUR"
+  soak::log "captured:           $SOAK_DATE hour $SOAK_HOUR (${CAPTURED_MINUTES:-?} distinct minutes)"
   soak::log "streams verified:   $SEALED_STREAMS"
   soak::log "verify ERRORS:      $VERIFY_ERRORS"
   soak::log "monitor saw node:   reachable"
-  soak::log "rotation recorded:  $ROTATION_RECORDED (best-effort; fixed-E fixture)"
+  soak::log "rotation recorded:  $ROTATION_RECORDED (best-effort; needs synced dual-fanout, §14.c)"
   soak::log "logs:               $SOAK_DIR/*.log"
   soak::log "==============================================="
   [[ "$VERIFY_ERRORS" == "0" ]] || soak::die "verify reported ERRORS=$VERIFY_ERRORS across sealed streams"

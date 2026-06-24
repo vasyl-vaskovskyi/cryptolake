@@ -95,11 +95,14 @@ Findings that became next-increment work:
 - Extend compose to **two independent nodes** (distinct `node_id`, data volumes, agent ports) and
   re-point `run.sh` bring-up at `docker compose`; assert the §3.d independence + per-node S3 prefix
   criteria the single-host process soak can't cover.
-- **Mock enhancement (the key soak enabler):** wall-clock event-time rewriting in
-  `mock-binance-ws` (set `E`/`T` to now on each replayed frame) + unique sequence IDs, so frames
-  fill consecutive real-time minutes monotonically. This unlocks the sustained-load criterion
-  (`late_frames` < 0.1%, full-hour completeness) and reliable rotation-overlap sealing — neither of
-  which the current fixed-event-time fixture supports. TDD-able.
+- ~~**Mock wall-clock event-time rewriting**~~ — **DONE 2026-06-24** (`EventTimeRewriter`, opt-in via
+  `MOCK_REWRITE_EVENT_TIME`). The soak now captures *today's* date across multiple consecutive
+  real-time minutes (verified: "3 distinct real-time minutes"), and **11 streams** verify clean (the
+  REST streams now share the WS date). Remaining mock work for the rotation/sustained criteria:
+  **synchronized dual-connection fan-out** (§14.c) so a shadow connection's overlap minute matches
+  the primary's (today each connection gets an independent replay, so equivalence rarely passes —
+  this is why `rotation recorded: no`), plus unique per-loop sequence IDs for strict full-hour
+  continuity.
 - **Sealer/uploader empty-stream handling:** record a fully-missing hour as a gap-manifest instead
   of a hard non-zero exit (spec "explicit gap surfacing"). TDD bugfix.
 - The §14.g 2h/24h pre-release variant.
