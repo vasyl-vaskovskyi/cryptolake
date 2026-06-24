@@ -45,6 +45,28 @@ class HourMergerTest {
     assertNull(result.sequence(), "ticker is not ID-bearing — sequence analysis must be null");
   }
 
+  /**
+   * §12.k / "explicit gap surfacing": a stream that captured nothing for the hour (no segments
+   * directory at all) must seal a zero-record hour rather than throwing — so the Sealer surfaces
+   * the empty hour as a manifest instead of hard-failing the whole run.
+   */
+  @Test
+  void emptyHourWithNoSegmentsDirectoryStillSeals(@TempDir Path tmp) throws IOException {
+    Path segments = tmp.resolve("segments");
+    Path sealed = tmp.resolve("sealed");
+    // Deliberately create no segments directory for this (symbol, stream).
+
+    HourMerger.Result result =
+        new HourMerger(segments, sealed)
+            .mergeHour("btcusdt", "openInterest", Instant.parse("2026-06-14T14:00:00Z"));
+
+    assertEquals(0, result.recordCount());
+    assertTrue(result.minutesPresent().isEmpty());
+    Path expectedFile = sealed.resolve("btcusdt/openInterest/2026-06-14/hour-14.jsonl.zst");
+    assertTrue(Files.exists(expectedFile), "empty hour must still seal a zero-record file");
+    assertTrue(Files.exists(expectedFile.resolveSibling("hour-14.jsonl.zst.sha256")));
+  }
+
   @Test
   void detectsSequenceGapForTrade(@TempDir Path tmp) throws IOException {
     Path segments = tmp.resolve("segments");

@@ -189,12 +189,12 @@ soak::assert_event_time_progression() {
 soak::seal_upload_verify() {
   soak::discover_date_hour
   soak::assert_event_time_progression
-  # Seal + upload tolerate per-stream "no data" failures: the REST-derived streams
-  # (openInterest, depthSnapshot, exchangeInfo) produce nothing in a short mock window, and both
-  # tools exit non-zero on an empty stream. The hard gate below is over the streams that DID seal.
-  soak::log "sealing hour $SOAK_HOUR (empty REST streams tolerated)..."
+  # Sealer + uploader now seal an empty hour as a zero-record manifest instead of hard-failing
+  # (§12.k gap-surfacing), so both must exit 0 even when the REST-derived streams have no data.
+  soak::log "sealing hour $SOAK_HOUR..."
   JAVA_OPTS="-Dconfig=$CFG" "$(soak::bin sealer sealer)" \
-    --date "$SOAK_DATE" --hour "$SOAK_HOUR" >"$SOAK_DIR/sealer.log" 2>&1 || true
+    --date "$SOAK_DATE" --hour "$SOAK_HOUR" >"$SOAK_DIR/sealer.log" 2>&1 \
+    || soak::die "sealer exited non-zero (see $SOAK_DIR/sealer.log)"
 
   # Snapshot the sealed (symbol,stream) pairs BEFORE upload — the uploader deletes local sealed
   # files once the S3 upload succeeds (durability handoff), so this list must be taken now.
@@ -213,7 +213,8 @@ soak::seal_upload_verify() {
 
   soak::log "uploading hour $SOAK_HOUR..."
   JAVA_OPTS="-Dconfig=$CFG" "$(soak::bin uploader uploader)" \
-    --date "$SOAK_DATE" --hour "$SOAK_HOUR" >"$SOAK_DIR/uploader.log" 2>&1 || true
+    --date "$SOAK_DATE" --hour "$SOAK_HOUR" >"$SOAK_DIR/uploader.log" 2>&1 \
+    || soak::die "uploader exited non-zero (see $SOAK_DIR/uploader.log)"
 
   # Gate: every (symbol,stream) that sealed a manifest must verify ERRORS=0 from S3.
   SEALED_STREAMS=0

@@ -77,15 +77,17 @@ public final class HourMerger {
     String date = DATE.format(hourStart);
     String hour = HOUR.format(hourStart);
     Path segDir = baseSegments.resolve(symbol).resolve(stream).resolve(date);
-    if (!Files.isDirectory(segDir)) {
-      throw new IOException("no segments directory: " + segDir);
-    }
+    // A stream that captured nothing this hour has no segments directory (or none for this hour).
+    // Seal it as a zero-record hour rather than throwing — the Sealer surfaces the empty hour as a
+    // manifest (§12.k / "explicit gap surfacing") instead of hard-failing the whole run.
     List<Path> minutesInHour = new ArrayList<>();
-    try (DirectoryStream<Path> ds = Files.newDirectoryStream(segDir, "minute-*.jsonl.zst")) {
-      for (Path p : ds) {
-        Matcher m = MINUTE_NAME.matcher(p.getFileName().toString());
-        if (m.matches() && m.group(1).equals(hour)) {
-          minutesInHour.add(p);
+    if (Files.isDirectory(segDir)) {
+      try (DirectoryStream<Path> ds = Files.newDirectoryStream(segDir, "minute-*.jsonl.zst")) {
+        for (Path p : ds) {
+          Matcher m = MINUTE_NAME.matcher(p.getFileName().toString());
+          if (m.matches() && m.group(1).equals(hour)) {
+            minutesInHour.add(p);
+          }
         }
       }
     }
